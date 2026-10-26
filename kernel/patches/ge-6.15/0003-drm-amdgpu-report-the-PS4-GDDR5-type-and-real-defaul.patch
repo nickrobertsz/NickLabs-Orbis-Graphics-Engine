@@ -1,0 +1,77 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: "NickLabs Orbis (port)" <orbis@nicklabs.invalid>
+Date: Mon, 26 Oct 2026 12:56:42 -0700
+Subject: [PATCH] drm/amdgpu: report the PS4 GDDR5 type and real default clocks
+
+- gmc_v7: report VRAM type GDDR5 for Liverpool/Gladius instead of UNKNOWN
+  (linux-psx 7.2-ps4 0099, rmux).
+- cik: default_mclk = 1375 MHz (Liverpool) / 1700 MHz (Gladius), after linux-psx
+  0100 (rmux). Orbis change: default_sclk (800 / 911 MHz) is reported only after
+  liverpool_clk has actually restored the full SPLL output; with
+  amdgpu.ps4_sclk_restore=0 the VBIOS value stays, so userspace is not told a clock
+  the GPU is not running at.
+
+These values reach userspace as max_engine_clock / max_memory_clock
+(AMDGPU_INFO_DEV_INFO), which Mesa uses for reporting and timing estimates.
+
+Status: applies; not compiled or boot-tested by NickLabs Orbis.
+---
+ drivers/gpu/drm/amd/amdgpu/cik.c           | 4 ++++
+ drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c      | 3 +++
+ drivers/gpu/drm/amd/amdgpu/liverpool_clk.c | 7 ++++++-
+ 3 files changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/cik.c b/drivers/gpu/drm/amd/amdgpu/cik.c
+index 3277093eb..4fca86cf3 100644
+--- a/drivers/gpu/drm/amd/amdgpu/cik.c
++++ b/drivers/gpu/drm/amd/amdgpu/cik.c
+@@ -2537,6 +2537,10 @@ static int cik_common_hw_init(struct amdgpu_ip_block *ip_block)
+ 
+ 	if (adev->asic_type == CHIP_LIVERPOOL ||
+ 	    adev->asic_type == CHIP_GLADIUS) {
++		/* GDDR5 at 5.5 GT/s (Liverpool) / 6.8 GT/s (Gladius), 10 kHz units; the memory
++		 * clock is not changed by Linux. The SCLK value is set by liverpool_clk only
++		 * when the full SPLL output is actually active. */
++		adev->clock.default_mclk = adev->asic_type == CHIP_LIVERPOOL ? 137500 : 170000;
+ 		liverpool_clk_force_max(adev);
+ 		liverpool_clk_sysfs_init(adev);
+ 	}
+diff --git a/drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c b/drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c
+index e779e377a..0e311f104 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c
+@@ -1007,6 +1007,9 @@ static int gmc_v7_0_sw_init(struct amdgpu_ip_block *ip_block)
+ 
+ 	if (adev->flags & AMD_IS_APU) {
+ 		adev->gmc.vram_type = AMDGPU_VRAM_TYPE_UNKNOWN;
++		if (adev->asic_type == CHIP_LIVERPOOL ||
++		    adev->asic_type == CHIP_GLADIUS)
++			adev->gmc.vram_type = AMDGPU_VRAM_TYPE_GDDR5;
+ 	} else {
+ 		u32 tmp = RREG32(mmMC_SEQ_MISC0);
+ 
+diff --git a/drivers/gpu/drm/amd/amdgpu/liverpool_clk.c b/drivers/gpu/drm/amd/amdgpu/liverpool_clk.c
+index 44b216534..17019f4fa 100644
+--- a/drivers/gpu/drm/amd/amdgpu/liverpool_clk.c
++++ b/drivers/gpu/drm/amd/amdgpu/liverpool_clk.c
+@@ -249,6 +249,7 @@ int liverpool_clk_set_did(struct amdgpu_device *adev, u32 did, const char *why)
+ int liverpool_clk_force_max(struct amdgpu_device *adev)
+ {
+ 	struct liverpool_clk_state s;
++	int r;
+ 
+ 	if (!liverpool_clk_is_ps4(adev))
+ 		return 0;
+@@ -262,7 +263,11 @@ int liverpool_clk_force_max(struct amdgpu_device *adev)
+ 		dev_info(adev->dev, "Liverpool CLK: amdgpu.ps4_sclk_restore=0, divider left as found\n");
+ 		return 0;
+ 	}
+-	return liverpool_clk_set_did(adev, LIVERPOOL_MAX_SCLK_DID, "restore full SPLL output");
++	r = liverpool_clk_set_did(adev, LIVERPOOL_MAX_SCLK_DID, "restore full SPLL output");
++	if (!r)
++		/* reported to userspace as max_engine_clock (AMDGPU_INFO_DEV_INFO), 10 kHz units */
++		adev->clock.default_sclk = adev->asic_type == CHIP_LIVERPOOL ? 80000 : 91100;
++	return r;
+ }
+ 
+ int liverpool_clk_debugfs_print(struct amdgpu_device *adev, struct seq_file *m)

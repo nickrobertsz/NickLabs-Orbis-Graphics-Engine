@@ -12,7 +12,7 @@
 #   gpu.diff       the full diff of those paths
 #   patches/       the same commits as format-patch files (for cherry-picking)
 # plus out/kernel-research/summary.json. NOTHING is applied: a commit you choose after review is
-# copied into kernel/patches/ and listed in kernel/patches/series; then build-gfx-kernel.sh.
+# copied into kernel/patches/ and listed in kernel/patches/series; then build-ge-kernel.sh.
 # --follow accepts refs that moved since candidates.json was written (default: refuse).
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -82,6 +82,6 @@ Wrote $out/summary.json and one folder per candidate.
 Review, then for each commit you accept:
   cp $out/<id>/patches/NNNN-*.patch kernel/patches/
   echo NNNN-....patch >> kernel/patches/series       # order matters; they apply after Orbis 0001
-  kernel/build-gfx-kernel.sh --orbis-src <Orbis 0.2.0 checkout>
+  kernel/build-ge-kernel.sh --orbis-src <Orbis 0.2.0 checkout>
 Priorities and risks per area: docs/GRAPHICS-KERNEL-MESA-COMPATIBILITY.md.
 EOF

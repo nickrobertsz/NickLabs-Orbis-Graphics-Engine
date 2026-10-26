@@ -1,3 +1,0 @@
-# NickLabs Orbis Graphics Pack — fragment merged AFTER the Orbis 0.2.0 fragments for the optional
-# graphics kernel. Only the release name changes here; reviewed GPU changes come as patches.
-CONFIG_LOCALVERSION="-orbis-ps4-gfx"

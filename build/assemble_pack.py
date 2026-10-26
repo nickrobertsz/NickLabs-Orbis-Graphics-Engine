@@ -47,7 +47,7 @@ def pkg_meta(f: Path) -> dict:
 
 
 ORBIS_BUILT = {"mesa-orbis-ps4", "opencl-mesa-orbis-ps4", "lib32-mesa-orbis-ps4", "mesa-orbis-ps4-experimental",
-               "orbis-graphics", "orbis-graphics-pack", "linux-orbis-ps4-gfx"}
+               "orbis-graphics", "orbis-graphics-pack", "linux-orbis-ps4-ge"}
 
 
 def git_source_archive(dest: Path, commit: str | None) -> Path:
@@ -108,7 +108,7 @@ def assemble(staging: Path, outdir: Path, exp_state: str, exp_reason: str | None
                  "kernel_release": sources["orbis_base"]["kernel_release"],
                  "kernel_bzimage_sha256": sources["orbis_base"]["kernel_bzimage_sha256"],
                  "profile": sources["orbis_base"]["profile"], "arch_snapshot": sources["arch_snapshot"]["date"]},
-        "kernel": {"replacement": any(p["name"] == "linux-orbis-ps4-gfx" for p in pkgs),
+        "kernel": {"replacement": any(p["name"] == "linux-orbis-ps4-ge" for p in pkgs),
                    "note": "1.0.0 ships no replacement kernel: the Orbis 0.2.0 kernel already has amdgpu, debugfs, "
                            "hwmon/k10temp and every interface the diagnostics read; forward-port candidates are in "
                            "docs/GRAPHICS-KERNEL-MESA-COMPATIBILITY.md and kernel/ (wiring for a -gfx kernel)."},

@@ -1,0 +1,1063 @@
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+index bdb19a3048..7f49040c01 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+@@ -2840,9 +2840,16 @@ static int amdgpu_device_ip_hw_init_phase2(struct amdgpu_device *adev)
+ 			continue;
+ 		r = adev->ip_blocks[i].version->funcs->hw_init(&adev->ip_blocks[i]);
+ 		if (r) {
+-			DRM_ERROR("hw_init of IP block <%s> failed %d\n",
++			if (adev->ip_blocks[i].version->type == AMD_IP_BLOCK_TYPE_UVD) {
++				DRM_ERROR("hw_init of IP block <%s> failed %d\n",
++					adev->ip_blocks[i].version->funcs->name, r); // non fatal exit for UVD testing fail
++				WREG32(/*mmUVD_MASTINT_EN*/0x3d40, 0); //hopefully works; disable interrupts
++				continue; // don't set status.hw = true;
++			} else {
++				DRM_ERROR("hw_init of IP block <%s> failed %d\n",
+ 				  adev->ip_blocks[i].version->funcs->name, r);
+-			return r;
++				return r;
++			}
+ 		}
+ 		adev->ip_blocks[i].status.hw = true;
+ 	}
+@@ -3220,7 +3227,7 @@ int amdgpu_device_set_cg_state(struct amdgpu_device *adev,
+ 		    (adev->ip_blocks[i].version->type == AMD_IP_BLOCK_TYPE_GFX ||
+ 		     adev->ip_blocks[i].version->type == AMD_IP_BLOCK_TYPE_SDMA))
+ 			continue;
+-		/* skip CG for VCE/UVD, it's handled specially */
++		/* skip CG for VCE/UVD, it's handled specially */ // TODO: maybe we could disable this check for Liverpool; will likely break though
+ 		if (adev->ip_blocks[i].version->type != AMD_IP_BLOCK_TYPE_UVD &&
+ 		    adev->ip_blocks[i].version->type != AMD_IP_BLOCK_TYPE_VCE &&
+ 		    adev->ip_blocks[i].version->type != AMD_IP_BLOCK_TYPE_VCN &&
+@@ -3257,7 +3264,7 @@ int amdgpu_device_set_pg_state(struct amdgpu_device *adev,
+ 		    (adev->ip_blocks[i].version->type == AMD_IP_BLOCK_TYPE_GFX ||
+ 		     adev->ip_blocks[i].version->type == AMD_IP_BLOCK_TYPE_SDMA))
+ 			continue;
+-		/* skip CG for VCE/UVD, it's handled specially */
++		/* skip CG for VCE/UVD, it's handled specially */ // same here as comment above
+ 		if (adev->ip_blocks[i].version->type != AMD_IP_BLOCK_TYPE_UVD &&
+ 		    adev->ip_blocks[i].version->type != AMD_IP_BLOCK_TYPE_VCE &&
+ 		    adev->ip_blocks[i].version->type != AMD_IP_BLOCK_TYPE_VCN &&
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
+index 42ab44a5f6..cb56612daf 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
+@@ -2347,7 +2347,7 @@ static int amdgpu_pci_probe(struct pci_dev *pdev,
+ #ifdef CONFIG_DRM_AMDGPU_CIK
+ 		if (!amdgpu_cik_support) {
+ 			dev_info(&pdev->dev,
+-				 "CIK support provided by radeon.\n");
++				 "CIK support provided by radeon.\n"); // Tests if radeon should be used I Guess. No need for Liverpool
+ 			dev_info(&pdev->dev,
+ 				 "Use radeon.cik_support=0 amdgpu.cik_support=1 to override.\n"
+ 				);
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_uvd.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_uvd.c
+index 74758b5ffc..1cba013268 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_uvd.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_uvd.c
+@@ -68,6 +68,7 @@
+ #define FIRMWARE_KAVERI	"amdgpu/kaveri_uvd.bin"
+ #define FIRMWARE_HAWAII	"amdgpu/hawaii_uvd.bin"
+ #define FIRMWARE_MULLINS	"amdgpu/mullins_uvd.bin"
++#define FIRMWARE_LIVERPOOL	"amdgpu/liverpool_uvd.bin"
+ #endif
+ #define FIRMWARE_TONGA		"amdgpu/tonga_uvd.bin"
+ #define FIRMWARE_CARRIZO	"amdgpu/carrizo_uvd.bin"
+@@ -120,6 +121,7 @@ MODULE_FIRMWARE(FIRMWARE_KABINI);
+ MODULE_FIRMWARE(FIRMWARE_KAVERI);
+ MODULE_FIRMWARE(FIRMWARE_HAWAII);
+ MODULE_FIRMWARE(FIRMWARE_MULLINS);
++MODULE_FIRMWARE(FIRMWARE_LIVERPOOL);
+ #endif
+ MODULE_FIRMWARE(FIRMWARE_TONGA);
+ MODULE_FIRMWARE(FIRMWARE_CARRIZO);
+@@ -222,6 +224,9 @@ int amdgpu_uvd_sw_init(struct amdgpu_device *adev)
+ 	case CHIP_MULLINS:
+ 		fw_name = FIRMWARE_MULLINS;
+ 		break;
++	case CHIP_LIVERPOOL:
++		fw_name = FIRMWARE_LIVERPOOL;
++		break;
+ #endif
+ 	case CHIP_TONGA:
+ 		fw_name = FIRMWARE_TONGA;
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_vce.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_vce.c
+index b9060bcd48..ee722e608a 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vce.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vce.c
+@@ -47,6 +47,7 @@
+ #define FIRMWARE_KAVERI	"amdgpu/kaveri_vce.bin"
+ #define FIRMWARE_HAWAII	"amdgpu/hawaii_vce.bin"
+ #define FIRMWARE_MULLINS	"amdgpu/mullins_vce.bin"
++#define FIRMWARE_LIVERPOOL	"amdgpu/liverpool_vce.bin"
+ #endif
+ #define FIRMWARE_TONGA		"amdgpu/tonga_vce.bin"
+ #define FIRMWARE_CARRIZO	"amdgpu/carrizo_vce.bin"
+@@ -67,6 +68,7 @@ MODULE_FIRMWARE(FIRMWARE_KABINI);
+ MODULE_FIRMWARE(FIRMWARE_KAVERI);
+ MODULE_FIRMWARE(FIRMWARE_HAWAII);
+ MODULE_FIRMWARE(FIRMWARE_MULLINS);
++MODULE_FIRMWARE(FIRMWARE_LIVERPOOL);
+ #endif
+ MODULE_FIRMWARE(FIRMWARE_TONGA);
+ MODULE_FIRMWARE(FIRMWARE_CARRIZO);
+@@ -119,6 +121,9 @@ int amdgpu_vce_sw_init(struct amdgpu_device *adev, unsigned long size)
+ 	case CHIP_MULLINS:
+ 		fw_name = FIRMWARE_MULLINS;
+ 		break;
++	case CHIP_LIVERPOOL:
++		fw_name = FIRMWARE_LIVERPOOL;
++		break;
+ #endif
+ 	case CHIP_TONGA:
+ 		fw_name = FIRMWARE_TONGA;
+@@ -869,6 +874,7 @@ int amdgpu_vce_ring_parse_cs(struct amdgpu_cs_parser *p,
+ #ifdef CONFIG_DRM_AMDGPU_CIK
+ 			case CHIP_KAVERI:
+ 			case CHIP_MULLINS:
++			/* case CHIP_LIVERPOOL: */ /* Maybe Liverpool and Gladius don't need this HW config */
+ #endif
+ 			case CHIP_CARRIZO:
+ 				break;
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_vkms.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_vkms.c
+index a101d0c6e6..87ab7e89fe 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vkms.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vkms.c
+@@ -576,7 +576,7 @@ static int amdgpu_vkms_hw_init(struct amdgpu_ip_block *ip_block)
+ 	case CHIP_MULLINS:
+ 	case CHIP_LIVERPOOL:
+ 	case CHIP_GLADIUS:
+-		dce_v8_0_disable_dce(adev);
++		dce_v8_0_disable_dce(adev); // reset before init
+ 		break;
+ #endif
+ 	case CHIP_FIJI:
+diff --git a/drivers/gpu/drm/amd/amdgpu/cik.c b/drivers/gpu/drm/amd/amdgpu/cik.c
+index 4867dbd478..2481875710 100644
+--- a/drivers/gpu/drm/amd/amdgpu/cik.c
++++ b/drivers/gpu/drm/amd/amdgpu/cik.c
+@@ -1796,20 +1796,35 @@ static int cik_set_uvd_clock(struct amdgpu_device *adev, u32 clock,
+ 	int r, i;
+ 	struct atom_clock_dividers dividers;
+ 	uint32_t tmp;
++	uint32_t status;
+ 
++	pr_info("called %s\n", __func__);
+ 	r = amdgpu_atombios_get_clock_dividers(adev,
+ 					       COMPUTE_GPUCLK_INPUT_FLAG_DEFAULT_GPUCLK,
+ 					       clock, false, &dividers);
+-	if (r)
++	if (r) {
++		pr_err("%s: atombios_get_clock_dividers failed; returning %d\n", __func__, r);
+ 		return r;
++	}
++	pr_info("%s: requested clock=%u post_divider=%u\n",
++		__func__, clock, dividers.post_divider);
++	pr_info("%s: status_reg before writes =%08x\n",
++		__func__, RREG32_SMC(status_reg)); // todo might break?
+ 
+ 	tmp = RREG32_SMC(cntl_reg);
++	pr_info("%s: cntl_reg after reading = %08x\n", __func__, tmp);
+ 	tmp &= ~(CG_DCLK_CNTL__DCLK_DIR_CNTL_EN_MASK |
+-		CG_DCLK_CNTL__DCLK_DIVIDER_MASK);
++		CG_DCLK_CNTL__DCLK_DIVIDER_MASK); // ~(0x100 | 0x7f) = ~0x17f
++	pr_info("%s: cntl_reg after masking = %08x\n", __func__, tmp);
+ 	tmp |= dividers.post_divider;
++	pr_info("%s: cntl_reg after adding clock divider = %08x. Writing this value to SMC\n", __func__, tmp);
+ 	WREG32_SMC(cntl_reg, tmp);
+ 
+ 	for (i = 0; i < 100; i++) {
++
++		/*status = RREG32_SMC(status_reg);
++		pr_info("%s: status poll[%d]=%08x\n",
++			__func__, i, status);*/ // I think this causes faults?
+ 		if (RREG32_SMC(status_reg) & CG_DCLK_STATUS__DCLK_STATUS_MASK)
+ 			break;
+ 		mdelay(10);
+@@ -1824,10 +1839,12 @@ static int cik_set_uvd_clocks(struct amdgpu_device *adev, u32 vclk, u32 dclk)
+ {
+ 	int r = 0;
+ 
++	pr_info("setting UVD VCLK\n");
+ 	r = cik_set_uvd_clock(adev, vclk, ixCG_VCLK_CNTL, ixCG_VCLK_STATUS);
+ 	if (r)
+ 		return r;
+ 
++	pr_info("setting UVD DCLK\n");
+ 	r = cik_set_uvd_clock(adev, dclk, ixCG_DCLK_CNTL, ixCG_DCLK_STATUS);
+ 	return r;
+ }
+@@ -2476,14 +2493,14 @@ static int cik_common_early_init(struct amdgpu_ip_block *ip_block)
+ 				AMD_CG_SUPPORT_HDP_MGCG;
+ 			adev->pg_flags =
+ 				/*AMD_PG_SUPPORT_GFX_PG |
+-				  AMD_PG_SUPPORT_GFX_SMG | */
+-				/*AMD_PG_SUPPORT_UVD | */
+-				/*AMD_PG_SUPPORT_VCE |
+-				  AMD_PG_SUPPORT_CP |
++				  AMD_PG_SUPPORT_GFX_SMG |*/
++				/*AMD_PG_SUPPORT_UVD |
++				  AMD_PG_SUPPORT_VCE;*/
++				/*AMD_PG_SUPPORT_CP |
+ 				  AMD_PG_SUPPORT_GDS |
+ 				  AMD_PG_SUPPORT_RLC_SMU_HS |
+ 				  AMD_PG_SUPPORT_SAMU |*/
+-				0;
++				  0;
+ 			adev->external_rev_id = adev->rev_id + 0x61;
+ 			break;
+ 
+@@ -2685,8 +2702,8 @@ int cik_set_ip_blocks(struct amdgpu_device *adev)
+ 			amdgpu_device_ip_block_add(adev, &dce_v8_1_ip_block);
+ 		amdgpu_device_ip_block_add(adev, &gfx_v7_1_ip_block);
+ 		amdgpu_device_ip_block_add(adev, &cik_sdma_ip_block);
+-		/*amdgpu_device_ip_block_add(adev, &uvd_v4_2_ip_block)*/;
+-		/*amdgpu_device_ip_block_add(adev, &vce_v2_0_ip_block)*/;
++		amdgpu_device_ip_block_add(adev, &uvd_v4_2_ip_block); /* These two were	*/
++		//amdgpu_device_ip_block_add(adev, &vce_v2_0_ip_block); /* disabled. Let's c */
+ 		break;
+ 	case CHIP_GLADIUS:
+ 		amdgpu_device_ip_block_add(adev, &cik_common_ip_block);
+@@ -2711,4 +2728,4 @@ int cik_set_ip_blocks(struct amdgpu_device *adev)
+ 		return -EINVAL;
+ 	}
+ 	return 0;
+-}
+\ No newline at end of file
++}
+diff --git a/drivers/gpu/drm/amd/amdgpu/cikd.h b/drivers/gpu/drm/amd/amdgpu/cikd.h
+index 2792883659..99dd4caec3 100644
+--- a/drivers/gpu/drm/amd/amdgpu/cikd.h
++++ b/drivers/gpu/drm/amd/amdgpu/cikd.h
+@@ -62,6 +62,8 @@
+ 
+ #define BONAIRE_GB_ADDR_CONFIG_GOLDEN        0x12010001
+ #define HAWAII_GB_ADDR_CONFIG_GOLDEN         0x12011003
++//#define LIVERPOOL_GB_ADDR_CONFIG_GOLDEN      0x02011002 // 0x2011002; this seems to be the correct GB_ADDR_CONFIG for Liverpool
++							  // Or not.. The dreams we see are colorful dreams of purple and yellow? DO NOT TRY THIS
+ 
+ #define		PIPEID(x)					((x) << 0)
+ #define		MEID(x)						((x) << 2)
+diff --git a/drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c b/drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c
+index fb01c61e03..aaad57872f 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gfx_v7_0.c
+@@ -4867,6 +4867,7 @@ static void gfx_v7_0_gpu_early_init(struct amdgpu_device *adev)
+ 		adev->gfx.config.sc_hiz_tile_fifo_size = 0x30;
+ 		adev->gfx.config.sc_earlyz_tile_fifo_size = 0x130;
+ 		gb_addr_config = HAWAII_GB_ADDR_CONFIG_GOLDEN;
++		//gb_addr_config = LIVERPOOL_GB_ADDR_CONFIG_GOLDEN; // DO NOT TRY THIS. YOU MIGHT DIE
+ 		break;
+ 
+ 	case CHIP_GLADIUS:
+diff --git a/drivers/gpu/drm/amd/amdgpu/gfx_v8_0.c b/drivers/gpu/drm/amd/amdgpu/gfx_v8_0.c
+index fc73be4ab0..3599eb5951 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gfx_v8_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gfx_v8_0.c
+@@ -796,7 +796,7 @@ static void gfx_v8_0_init_golden_registers(struct amdgpu_device *adev)
+ 		amdgpu_device_program_register_sequence(adev,
+ 							polaris10_golden_common_all,
+ 							ARRAY_SIZE(polaris10_golden_common_all));
+-		data = RREG32_SMC(ixCG_ACLK_CNTL);
++		data = RREG32_SMC(ixCG_ACLK_CNTL); // dream using this proves PRO is Polaris-esque
+ 		data &= ~CG_ACLK_CNTL__ACLK_DIVIDER_MASK;
+ 		data |= 0x18 << CG_ACLK_CNTL__ACLK_DIVIDER__SHIFT;
+ 		WREG32_SMC(ixCG_ACLK_CNTL, data);
+diff --git a/drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c b/drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c
+index e779e377ab..4ff6f5af79 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gmc_v7_0.c
+@@ -405,7 +405,8 @@ static int gmc_v7_0_mc_init(struct amdgpu_device *adev)
+ #ifdef CONFIG_DRM_AMDGPU_CIK
+ 		case CHIP_LIVERPOOL:
+ 		case CHIP_GLADIUS:
+-			adev->gmc.gart_size = 512ULL << 20;
++			adev->gmc.gart_size = 1024ULL << 20; // some ps4patch set this to 512 MB, but this might break UVD with bonaire firmware
++		/* orignal fail0verflow patches don't have hard set value, but it sets to 1024 MB or eq. to VRAM (whichever larger) - part of AMD code */
+ 			break;
+ 		case CHIP_BONAIRE: /* UVD, VCE do not support GPUVM */
+ 		case CHIP_HAWAII:  /* UVD, VCE do not support GPUVM */
+@@ -715,7 +716,7 @@ static int gmc_v7_0_gart_enable(struct amdgpu_device *adev)
+ 	else
+ 		gmc_v7_0_set_fault_enable_default(adev, true);
+ 
+-	if (adev->asic_type == CHIP_KAVERI) {
++	if (adev->asic_type == CHIP_KAVERI /*|| adev->asic_type == CHIP_LIVERPOOL*/) {
+ 		tmp = RREG32(mmCHUB_CONTROL);
+ 		tmp &= ~BYPASS_VM;
+ 		WREG32(mmCHUB_CONTROL, tmp);
+diff --git a/drivers/gpu/drm/amd/amdgpu/uvd_v3_1.c b/drivers/gpu/drm/amd/amdgpu/uvd_v3_1.c
+index 5dbaebb592..b27e61b278 100644
+--- a/drivers/gpu/drm/amd/amdgpu/uvd_v3_1.c
++++ b/drivers/gpu/drm/amd/amdgpu/uvd_v3_1.c
+@@ -353,7 +353,7 @@ static int uvd_v3_1_start(struct amdgpu_device *adev)
+ 
+ 	/* initialize UVD memory controller */
+ 	WREG32(mmUVD_LMI_CTRL, 0x40 | (1 << 8) | (1 << 13) |
+-		(1 << 21) | (1 << 9) | (1 << 20));
++		(1 << 21) | (1 << 9) | (1 << 20)); // = 0x302340; proves we are not 3.1
+ 
+ 	tmp = RREG32(mmUVD_MPC_CNTL);
+ 	WREG32(mmUVD_MPC_CNTL, tmp | 0x10);
+diff --git a/drivers/gpu/drm/amd/amdgpu/uvd_v4_2.c b/drivers/gpu/drm/amd/amdgpu/uvd_v4_2.c
+index 4b96fd5837..6a18d07482 100644
+--- a/drivers/gpu/drm/amd/amdgpu/uvd_v4_2.c
++++ b/drivers/gpu/drm/amd/amdgpu/uvd_v4_2.c
+@@ -57,6 +57,7 @@ static void uvd_v4_2_set_dcm(struct amdgpu_device *adev,
+  */
+ static uint64_t uvd_v4_2_ring_get_rptr(struct amdgpu_ring *ring)
+ {
++    //pr_info("uvd_v4_2: called %s\n", __func__);
+ 	struct amdgpu_device *adev = ring->adev;
+ 
+ 	return RREG32(mmUVD_RBC_RB_RPTR);
+@@ -71,6 +72,7 @@ static uint64_t uvd_v4_2_ring_get_rptr(struct amdgpu_ring *ring)
+  */
+ static uint64_t uvd_v4_2_ring_get_wptr(struct amdgpu_ring *ring)
+ {
++    //pr_info("uvd_v4_2: called %s\n", __func__);
+ 	struct amdgpu_device *adev = ring->adev;
+ 
+ 	return RREG32(mmUVD_RBC_RB_WPTR);
+@@ -85,6 +87,7 @@ static uint64_t uvd_v4_2_ring_get_wptr(struct amdgpu_ring *ring)
+  */
+ static void uvd_v4_2_ring_set_wptr(struct amdgpu_ring *ring)
+ {
++    //pr_info("uvd_v4_2: called %s\n", __func__);
+ 	struct amdgpu_device *adev = ring->adev;
+ 
+ 	WREG32(mmUVD_RBC_RB_WPTR, lower_32_bits(ring->wptr));
+@@ -92,6 +95,7 @@ static void uvd_v4_2_ring_set_wptr(struct amdgpu_ring *ring)
+ 
+ static int uvd_v4_2_early_init(struct amdgpu_ip_block *ip_block)
+ {
++    pr_info("uvd_v4_2: called %s\n", __func__);
+ 	struct amdgpu_device *adev = ip_block->adev;
+ 	adev->uvd.num_uvd_inst = 1;
+ 
+@@ -103,6 +107,7 @@ static int uvd_v4_2_early_init(struct amdgpu_ip_block *ip_block)
+ 
+ static int uvd_v4_2_sw_init(struct amdgpu_ip_block *ip_block)
+ {
++    pr_info("uvd_v4_2: called %s\n", __func__);
+ 	struct amdgpu_ring *ring;
+ 	struct amdgpu_device *adev = ip_block->adev;
+ 	int r;
+@@ -132,6 +137,7 @@ static int uvd_v4_2_sw_init(struct amdgpu_ip_block *ip_block)
+ 
+ static int uvd_v4_2_sw_fini(struct amdgpu_ip_block *ip_block)
+ {
++    pr_info("uvd_v4_2: called %s\n", __func__);
+ 	int r;
+ 	struct amdgpu_device *adev = ip_block->adev;
+ 
+@@ -153,14 +159,18 @@ static void uvd_v4_2_enable_mgcg(struct amdgpu_device *adev,
+  */
+ static int uvd_v4_2_hw_init(struct amdgpu_ip_block *ip_block)
+ {
++    pr_info("uvd_v4_2: called %s\n", __func__);
+ 	struct amdgpu_device *adev = ip_block->adev;
+ 	struct amdgpu_ring *ring = &adev->uvd.inst->ring;
+ 	uint32_t tmp;
+ 	int r;
+ 
+ 	uvd_v4_2_enable_mgcg(adev, true);
+-	amdgpu_asic_set_uvd_clocks(adev, 10000, 10000);
+-
++#ifdef CONFIG_X86_PS4
++	amdgpu_asic_set_uvd_clocks(adev, 53300, 40000); // Use the max/runtime UVD clocks at startup/bootstrap time. UVD3.1 also does this interestingly
++#else
++	amdgpu_asic_set_uvd_clocks(adev, 10000, 10000); // Default bringup vclock and dclock post UVD4.2
++#endif
+ 	r = amdgpu_ring_test_helper(ring);
+ 	if (r)
+ 		goto done;
+@@ -208,18 +218,22 @@ done:
+  */
+ static int uvd_v4_2_hw_fini(struct amdgpu_ip_block *ip_block)
+ {
++    pr_info("uvd_v4_2: called %s\n", __func__);
+ 	struct amdgpu_device *adev = ip_block->adev;
+ 
+ 	cancel_delayed_work_sync(&adev->uvd.idle_work);
+ 
+-	if (RREG32(mmUVD_STATUS) != 0)
++	if (RREG32(mmUVD_STATUS) != 0) {
++		pr_info("uvd_v4_2: STATUS != 0. Stopping uvd.\n");
+ 		uvd_v4_2_stop(adev);
++	}
+ 
+ 	return 0;
+ }
+ 
+ static int uvd_v4_2_prepare_suspend(struct amdgpu_ip_block *ip_block)
+ {
++    pr_info("uvd_v4_2: called %s\n", __func__);
+ 	struct amdgpu_device *adev = ip_block->adev;
+ 
+ 	return amdgpu_uvd_prepare_suspend(adev);
+@@ -227,6 +241,7 @@ static int uvd_v4_2_prepare_suspend(struct amdgpu_ip_block *ip_block)
+ 
+ static int uvd_v4_2_suspend(struct amdgpu_ip_block *ip_block)
+ {
++    pr_info("uvd_v4_2: called %s\n", __func__);
+ 	int r;
+ 	struct amdgpu_device *adev = ip_block->adev;
+ 
+@@ -263,6 +278,7 @@ static int uvd_v4_2_suspend(struct amdgpu_ip_block *ip_block)
+ 
+ static int uvd_v4_2_resume(struct amdgpu_ip_block *ip_block)
+ {
++    pr_info("uvd_v4_2: called %s\n", __func__);
+ 	int r;
+ 
+ 	r = amdgpu_uvd_resume(ip_block->adev);
+@@ -281,6 +297,7 @@ static int uvd_v4_2_resume(struct amdgpu_ip_block *ip_block)
+  */
+ static int uvd_v4_2_start(struct amdgpu_device *adev)
+ {
++    pr_info("uvd_v4_2: called %s\n", __func__);
+ 	struct amdgpu_ring *ring = &adev->uvd.inst->ring;
+ 	uint32_t rb_bufsz;
+ 	int i, j, r;
+@@ -290,72 +307,188 @@ static int uvd_v4_2_start(struct amdgpu_device *adev)
+ 	u32 mp_swap_cntl = 0;
+ 
+ 	/* set uvd busy */
+-	WREG32_P(mmUVD_STATUS, 1<<2, ~(1<<2));
++	tmp = RREG32(mmUVD_STATUS);
++	pr_info("%s: mmUVD_STATUS before masking all bits except busy: %08x\n", __func__, (unsigned int)tmp);
++	WREG32_P(mmUVD_STATUS, 1<<2, ~(1<<2)); // set all bits except 4d to 0 // matches dream engine;
+ 
+-	uvd_v4_2_set_dcm(adev, true);
+-	WREG32(mmUVD_CGC_GATE, 0);
++	// uvd_v4_2_set_dcm(adev, true); // dream doesn't have this // disable dynamic clock gating for now
++	// WREG32(mmUVD_CGC_GATE, 0); // dream doesn't have this
++
++	WREG32_P(mmUVD_CGC_GATE, 0, 0xfff00008); // mask it directly - eq. to dream engine ; eq to: (.., 0, ~0x000ffff7);
+ 
+ 	/* take UVD block out of reset */
+-	WREG32_P(mmSRBM_SOFT_RESET, 0, ~SRBM_SOFT_RESET__SOFT_RESET_UVD_MASK);
+-	mdelay(5);
++	WREG32_P(mmSRBM_SOFT_RESET, 0, ~SRBM_SOFT_RESET__SOFT_RESET_UVD_MASK); // 0x40000 // eq. to dream engine
++	//mdelay(5); // no delay in dream
++	mdelay(1); // no delay in dream
+ 
+ 	/* enable VCPU clock */
+-	WREG32(mmUVD_VCPU_CNTL,  1 << 9);
++	WREG32(mmUVD_VCPU_CNTL,  1 << 9); // eq. to DE
+ 
+ 	/* disable interrupt */
+-	WREG32_P(mmUVD_MASTINT_EN, 0, ~(1 << 1));
++	WREG32_P(mmUVD_MASTINT_EN, 0, ~(1 << 1)); //eq.
+ 
+ #ifdef __BIG_ENDIAN
+ 	/* swap (8 in 32) RB and IB */
+-	lmi_swap_cntl = 0xa;
++	lmi_swap_cntl = 0xa;	//untraversed ifdef
+ 	mp_swap_cntl = 0;
+ #endif
+-	WREG32(mmUVD_LMI_SWAP_CNTL, lmi_swap_cntl);
+-	WREG32(mmUVD_MP_SWAP_CNTL, mp_swap_cntl);
++	WREG32(mmUVD_LMI_SWAP_CNTL, lmi_swap_cntl); //eq.
++	WREG32(mmUVD_MP_SWAP_CNTL, mp_swap_cntl);  // ...
++
++	//dream does some weird things at this stage:
++
++	WREG32(0x3d68, 0x3dff);  // ... mmUVD_LMI_SOMETHING? Seems to be some sort of mask
++	
++
++	unsigned int Variable1;
++	unsigned int Variable2;
++	unsigned int Variable3;
++	unsigned int Variable4;
++	unsigned long Variable5;
++	int Variable6;
++
++	//Variable1 = *(unsigned int *)(Parameter1 + 0x40); //Parameter1 is adev?
++
++	//Variable2 = Variable1 & 0xf;
++	//Variable3 = RREG32(mmUVD_CTX_INDEX);
++	//WREG32(mmUVD_CTX_INDEX, 0x99);
++	//Variable4 = RREG32(mmUVD_CTX_DATA);
++	//WREG32(mmUVD_CTX_DATA, Variable2 | Variable2 << 4 | Variable2 << 8 |
++	//	Variable2 << 0xc | Variable2 << 0x10 | Variable2 << 0x14 | Variable4 0xff000000); // Could be tiling information
++	//	We might not need it as we use bonaire tiling information for now.
++	//WREG32(mmUVD_CTX_INDEX, Variable3); //restore index to old state
++
++	//WREG32(mmUVD_CTX_INDEX, 0x9a); 
++	//RREG32(mmUVD_CTX_DATA); // weird, needs read before write? whatevs
++	//WREG32(mmUVD_CTX_DATA, 0);
++	//WREG32(mmUVD_CTX_INDEX, Variable3); //restore index to old state
++
+ 
+ 	/* initialize UVD memory controller */
+ 	WREG32(mmUVD_LMI_CTRL, 0x203108);
+ 
+ 	tmp = RREG32(mmUVD_MPC_CNTL);
+-	WREG32(mmUVD_MPC_CNTL, tmp | 0x10);
++	pr_info("uvd_v4_2: mmUVD_MPC_CNTL through RREG32 = %08x\n", tmp);
++
++	//WREG32(mmUVD_MPC_CNTL, tmp | 0x10);
++	WREG32(mmUVD_MPC_CNTL, 0x10); //dream writes 0x10 directly, although they also do a read first into the register
++
++	WREG32(mmUVD_MPC_SET_MUXA0, 0x40c2040); //eq
++	WREG32(mmUVD_MPC_SET_MUXA1, 0x0); //eq
++	WREG32(mmUVD_MPC_SET_MUXB0, 0x40c2040); //eq
++	WREG32(mmUVD_MPC_SET_MUXB1, 0x0); //eq
++	WREG32(mmUVD_MPC_SET_ALU, 0); //eq
++	WREG32(mmUVD_MPC_SET_MUX, 0x88); //eq
++
++	// dream again does some weird things here:
++	Variable1 = RREG32(0x3dab); //dream only ; note assignment into variable 1 from before
++	WREG32(0x3dab, Variable1 | 2); //mmUVD_RBC_RB_RPTR_CNTL? or some lvp internal enable bit? //dream only
++
++	Variable3 = RREG32(mmUVD_CTX_INDEX);
++	WREG32(mmUVD_CTX_INDEX, 0x9b); //earlier we 0'd out 0x9a
++	Variable1 = RREG32(mmUVD_CTX_DATA);
++	WREG32(mmUVD_CTX_DATA, Variable1 & 0xffffffef); // some sort of mask, {WREG32_P(mmUVD_CTX_DATA, 0, ~(1 << 2 << 2))};
++
++	WREG32(mmUVD_CTX_INDEX, Variable3); //restore index to old state
++	
++	uvd_v4_2_mc_resume(adev); // eq. with ordering switchups and hardcoded vals
++
++	// weird dream stuff again:
++	//Variable3 = *(uint32_t *)(Parameter1 + 0x88);
++	Variable1 = RREG32(mmUVD_RBC_RB_CNTL);
++	pr_info("%s: mmUVD_RBC_RB_CNTL before writing 0x10000000 to it: %08x\n", __func__,  (unsigned int)Variable1);
++	WREG32(mmUVD_RBC_RB_CNTL, Variable1 | 0x10000000); // enable Ring Buffer Controller something? Probably important --- Okay so RBC_RB_CNTL is the most
++							   // important register it appears
++	pr_info("%s: mmUVD_RBC_RB_CNTL after Dream specific write: %08x\n", __func__, (unsigned int)RREG32(mmUVD_RBC_RB_CNTL));
++	WREG32(0x3dc0, 0); // enable something?
++	WREG32(0x3dab, 1); // disable something? // earlier we OR'ed 2 into here
++
++
++	//*(uint64_t *)((char *)Parameter1 + 0x2c) = 0x40000000000ULL; // we should cast to char before doing + offset for param_1
++	//*(uint64_t *)((char *)Parameter1 + 0x24) = 0x40000000000ULL; // could be setting max address limit/ceiilng or something?  we should probably let the
++								     // driver handle that.
++
++	//Variable1 = RREG32(0x1401);
++	//WREG32(0x1401, Variable1 | 8); // uhhh; IDK WHAT THIS IS. could be mmGARLIC_FLUSH_CNTL = 0x1401 // maybe it just flushes the garlic (vram tunnel);
++				       // TODO: but turn it on in different build
++
++	//Variable1 = RREG32(mmUVD_LMI_EXT40_ADDR); // more address things...
++	//Variable1 = Variable & 0xffe0ffff; // mask
++	//WREG32(mmUVD_LMI_EXT40_ADDR, Variable1 + 0x70000); // i doubt it's needed ?
++	//WREG32(mmUVD_LMI_EXT40_ADDR, Variable1 + 0x100000);
++	//WREG32(mmUVD_LMI_EXT40_ADDR, Variable1 + 0x110000);
++	//WREG32(mmUVD_RBC_RB_BASE, Variable3); //0x3da3, ... // dream sets base address early, we do it later. But it seems Parameter1 is indeed adev struct.
++	//can't know what it holds just now though...
+ 
+-	WREG32(mmUVD_MPC_SET_MUXA0, 0x40c2040);
+-	WREG32(mmUVD_MPC_SET_MUXA1, 0x0);
+-	WREG32(mmUVD_MPC_SET_MUXB0, 0x40c2040);
+-	WREG32(mmUVD_MPC_SET_MUXB1, 0x0);
+-	WREG32(mmUVD_MPC_SET_ALU, 0);
+-	WREG32(mmUVD_MPC_SET_MUX, 0x88);
++	/* program the 4GB memory segment for rptr and ring buffer */
++	WREG32(mmUVD_LMI_EXT40_ADDR, upper_32_bits(ring->gpu_addr) |
++				   (0x7 << 16) | (0x1 << 31)); // do it early now
++	WREG32(mmUVD_RBC_RB_BASE, ring->gpu_addr); // do it early now
++
++	WREG32(mmUVD_RBC_RB_WPTR,0);
++	WREG32(mmUVD_RBC_RB_RPTR,0); // we set to 0 in upstream as well, but dream does it before vcpu test
++	ring->wptr = RREG32(mmUVD_RBC_RB_RPTR); // do it early now
++
++
++	Variable1 = RREG32(mmUVD_RBC_RB_CNTL);
++	WREG32(mmUVD_RBC_RB_CNTL, (Variable1 & 0xefffe0e0) + 0x80c); // some bit stuff // actually seems to be rbc_rb size. don't touch manually
++	// IMPORTANT: this will probably set rbc size, but also will enable some strange bit at 0x800... If the size is wrong, it'll be fixed after
++	// (if) we pass the VCPU test with this.
++	WREG32(0x3dac, 0x10); // some bit set
++	Variable1 = RREG32(0x3dab); 
++	WREG32(0x3dab, Variable1 | 1); // some bit enable.... 3daa is mmUVD_RBC_RB_RPTR_ADDR 
++
++	//---
++	Variable1 = RREG32(mmUVD_VCPU_CNTL);
++	WREG32(mmUVD_VCPU_CNTL,Variable1 & 0xfffbffff); // mask VCPU control -- TODO: could be bad
++	Variable3 = RREG32(mmUVD_CTX_INDEX);
++	WREG32(mmUVD_CTX_INDEX, 0x9b);
++	Variable1 = RREG32(mmUVD_CTX_DATA);
++	WREG32(mmUVD_CTX_DATA, Variable1 & 0xffffffef); // mask some CTX_DATA
++	WREG32(mmUVD_CTX_INDEX, Variable3); // reset old index
++	
++	//tmp = RREG32_UVD_CTX(ixUVD_LMI_CACHE_CTRL); // not
++	//pr_info("uvd_v4_2: ixUVD_LMI_CACHE_CTRL through RREG32 = %08x\n", tmp); // done
++	//WREG32_UVD_CTX(ixUVD_LMI_CACHE_CTRL, tmp & (~0x10)); // in dream
+ 
+-	uvd_v4_2_mc_resume(adev);
++	/* enable UMC */
++	WREG32_P(mmUVD_LMI_CTRL2, 0, ~(1 << 8)); //good - eq.
+ 
+-	tmp = RREG32_UVD_CTX(ixUVD_LMI_CACHE_CTRL);
+-	WREG32_UVD_CTX(ixUVD_LMI_CACHE_CTRL, tmp & (~0x10));
++	tmp = RREG32(mmUVD_STATUS); //TODO: Could damage state to read status before reset? But check for bits.
++	pr_info("%s: mmUVD_STATUS before VCPU soft reset: %08x\n", __func__,  (unsigned int)tmp);
+ 
+-	/* enable UMC */
+-	WREG32_P(mmUVD_LMI_CTRL2, 0, ~(1 << 8));
++	WREG32_P(mmUVD_SOFT_RESET, 0, ~UVD_SOFT_RESET__LMI_SOFT_RESET_MASK); // eq.
++
++	//WREG32_P(mmUVD_SOFT_RESET, 0, ~UVD_SOFT_RESET__LMI_UMC_SOFT_RESET_MASK); //eq.
+ 
+-	WREG32_P(mmUVD_SOFT_RESET, 0, ~UVD_SOFT_RESET__LMI_SOFT_RESET_MASK);
++	//WREG32_P(mmUVD_SOFT_RESET, 0, ~UVD_SOFT_RESET__VCPU_SOFT_RESET_MASK); // eq.
++	// order is switched in dream:
++	
++	WREG32_P(mmUVD_SOFT_RESET, 0, ~UVD_SOFT_RESET__VCPU_SOFT_RESET_MASK); //eq
+ 
+-	WREG32_P(mmUVD_SOFT_RESET, 0, ~UVD_SOFT_RESET__LMI_UMC_SOFT_RESET_MASK);
++	WREG32_P(mmUVD_SOFT_RESET, 0, ~UVD_SOFT_RESET__LMI_UMC_SOFT_RESET_MASK); //eq.
+ 
+-	WREG32_P(mmUVD_SOFT_RESET, 0, ~UVD_SOFT_RESET__VCPU_SOFT_RESET_MASK);
+ 
+-	mdelay(10);
++	//mdelay(10);
++	mdelay(16);
+ 
+ 	for (i = 0; i < 10; ++i) {
+ 		uint32_t status;
+-		for (j = 0; j < 100; ++j) {
++		//for (j = 0; j < 100; ++j) {
++		for (j = 0; j < 2000; ++j) { // 2000 checks in total
+ 			status = RREG32(mmUVD_STATUS);
+-			if (status & 2)
++			if (status & 2) // STATUS & 2 doesn't seem to say "power-on/off. But rather whether UVD responded to the last commands...
+ 				break;
+-			mdelay(10);
++			//mdelay(10);
++			mdelay(1); // more frequent checks in dream
+ 		}
+ 		r = 0;
++		pr_info("uvd_v4_2: mmUVD_STATUS through RREG32 after test = %08x\n", (unsigned int)status);
+ 		if (status & 2)
+ 			break;
+ 
+ 		DRM_ERROR("UVD not responding, trying to reset the VCPU!!!\n");
+-		WREG32_P(mmUVD_SOFT_RESET, UVD_SOFT_RESET__VCPU_SOFT_RESET_MASK,
++		WREG32_P(mmUVD_SOFT_RESET, UVD_SOFT_RESET__VCPU_SOFT_RESET_MASK, // we don't really handle a fail in dream; cuz dreams never fail
+ 				~UVD_SOFT_RESET__VCPU_SOFT_RESET_MASK);
+ 		mdelay(10);
+ 		WREG32_P(mmUVD_SOFT_RESET, 0, ~UVD_SOFT_RESET__VCPU_SOFT_RESET_MASK);
+@@ -368,35 +501,48 @@ static int uvd_v4_2_start(struct amdgpu_device *adev)
+ 		return r;
+ 	}
+ 
++	pr_info("%s: OHMYGOD WE passed THE test.\n", __func__);
+ 	/* enable interupt */
+ 	WREG32_P(mmUVD_MASTINT_EN, 3<<1, ~(3 << 1));
++	
++	//Variable1 = RREG32(mmUVD_MASTINT_EN);
++	//WREG32(mmUVD_MASTINT_EN, Variable1 | 2); // dream turns this on directly, but i wonder if this somehow breaks interrupts on newer kernel assumptions
++						 // TODO: pass VCPU test first for now
+ 
+-	WREG32_P(mmUVD_STATUS, 0, ~(1<<2));
++	WREG32_P(mmUVD_STATUS, 0, ~(1<<2)); //eq.
+ 
+ 	/* force RBC into idle state */
+-	WREG32(mmUVD_RBC_RB_CNTL, 0x11010101);
++	//WREG32(mmUVD_RBC_RB_CNTL, 0x11010101); //not done in dream; we make it 0x10000000 in dream earlier
+ 
+ 	/* Set the write pointer delay */
+-	WREG32(mmUVD_RBC_RB_WPTR_CNTL, 0);
++	//WREG32(mmUVD_RBC_RB_WPTR_CNTL, 0); // not done in dream, assume default
+ 
+ 	/* program the 4GB memory segment for rptr and ring buffer */
+-	WREG32(mmUVD_LMI_EXT40_ADDR, upper_32_bits(ring->gpu_addr) |
+-				   (0x7 << 16) | (0x1 << 31));
++	//WREG32(mmUVD_LMI_EXT40_ADDR, upper_32_bits(ring->gpu_addr) |
++	//			   (0x7 << 16) | (0x1 << 31)); // done earlier in dream -- MAYBE we need to program the ring buffer address before VCPU on LVP?
++	//			    TODO: do beforehand for now
+ 
+ 	/* Initialize the ring buffer's read and write pointers */
+-	WREG32(mmUVD_RBC_RB_RPTR, 0x0);
++	//WREG32(mmUVD_RBC_RB_RPTR, 0x0); // done earlier in dream
+ 
+-	ring->wptr = RREG32(mmUVD_RBC_RB_RPTR);
+-	WREG32(mmUVD_RBC_RB_WPTR, lower_32_bits(ring->wptr));
++	//ring->wptr = RREG32(mmUVD_RBC_RB_RPTR); //done directly in dream; but keep this for struct coherence; TODO: do beforehand for now
++	//WREG32(mmUVD_RBC_RB_WPTR, lower_32_bits(ring->wptr)); // ^^
+ 
+ 	/* set the ring address */
+-	WREG32(mmUVD_RBC_RB_BASE, ring->gpu_addr);
++	//WREG32(mmUVD_RBC_RB_BASE, ring->gpu_addr); // done earlier in dream; TODO: do beforehand for now
+ 
+ 	/* Set ring buffer size */
+ 	rb_bufsz = order_base_2(ring->ring_size);
+ 	rb_bufsz = (0x1 << 8) | rb_bufsz;
+-	WREG32_P(mmUVD_RBC_RB_CNTL, rb_bufsz, ~0x11f1f);
+-
++	WREG32_P(mmUVD_RBC_RB_CNTL, rb_bufsz, ~0x11f1f); // we do this earlier in dream, but check if 0x800 is a required bit for lvp
++							 // Doing it twice now.
++	pr_info("%s: mmUVD_RBC_RB_CNTL after upstream mask+size write: %08x\n", __func__, (unsigned int)RREG32(mmUVD_RBC_RB_CNTL));
++
++	/* unnecessary since we do it in mgcg anyway.. but maybe we shouldn't call enable_mgcg early...? */
++#ifdef CONFIG_X86_PS4 // Add this to other PS4 specific init paths as well.
++	WREG32_P(mmUVD_CGC_CTRL, 0, ~(1 << 0)); // Preserve all bits except bit 0 (enable?). dream does this at end of start()
++						// not sure if this is needed? Maybe it is. Maybe it disables clock gating? likely...
++#endif
+ 	return 0;
+ }
+ 
+@@ -409,46 +555,66 @@ static int uvd_v4_2_start(struct amdgpu_device *adev)
+  */
+ static void uvd_v4_2_stop(struct amdgpu_device *adev)
+ {
++	/* Number 1: */
++	pr_info("uvd_v4_2: called %s\n", __func__);
+ 	uint32_t i, j;
+ 	uint32_t status;
+ 
++	// put RBC into idle state
+ 	WREG32(mmUVD_RBC_RB_CNTL, 0x11010101);
+ 
+ 	for (i = 0; i < 10; ++i) {
+ 		for (j = 0; j < 100; ++j) {
+-			status = RREG32(mmUVD_STATUS);
+-			if (status & 2)
++			status = RREG32(mmUVD_STATUS); //1
++			if (status & 2) {
++				pr_info("uvd_v4_2: UVD stop status reached in %s!\n", __func__);
+ 				break;
++			}
+ 			mdelay(1);
+ 		}
+-		if (status & 2)
++		if (status & 2) {
++			pr_info("uvd_v4_2: UVD stop status was reached in %s!\n", __func__);
+ 			break;
++		}
+ 	}
++	
++	pr_info("uvd_v4_2: UVD stop test done. Make sure you got a response!\n");
+ 
+ 	for (i = 0; i < 10; ++i) {
+ 		for (j = 0; j < 100; ++j) {
+-			status = RREG32(mmUVD_LMI_STATUS);
+-			if (status & 0xf)
++			status = RREG32(mmUVD_LMI_STATUS); // 2
++			if (status & 0xf) {
++				pr_info("uvd_v4_2: UVD LMI stop status reached in %s!\n", __func__);
+ 				break;
++			}
+ 			mdelay(1);
+ 		}
+-		if (status & 0xf)
++		if (status & 0xf) {
++			pr_info("uvd_v4_2: UVD LMI stop status was reached in %s!\n", __func__);
+ 			break;
++		}
+ 	}
+ 
++	pr_info("uvd_v4_2: UVD LMI stop test done. Make sure you got a response!\n");
++
+ 	/* Stall UMC and register bus before resetting VCPU */
+ 	WREG32_P(mmUVD_LMI_CTRL2, 1 << 8, ~(1 << 8));
+ 
+ 	for (i = 0; i < 10; ++i) {
+ 		for (j = 0; j < 100; ++j) {
+ 			status = RREG32(mmUVD_LMI_STATUS);
+-			if (status & 0x240)
++			if (status & 0x240) {
++				pr_info("uvd_v4_2: UVD LMI desired status was reached in %s!\n", __func__);
+ 				break;
++			}
+ 			mdelay(1);
+ 		}
+-		if (status & 0x240)
++		if (status & 0x240) {
++			pr_info("uvd_v4_2: UVD LMI desired status was reached in %s!\n", __func__);
+ 			break;
++		}
+ 	}
++	pr_info("uvd_v4_2: UVD LMI desired status test done. Make sure you got a response!\n");
+ 
+ 	WREG32_P(0x3D49, 0, ~(1 << 2));
+ 
+@@ -477,6 +643,7 @@ static void uvd_v4_2_stop(struct amdgpu_device *adev)
+ static void uvd_v4_2_ring_emit_fence(struct amdgpu_ring *ring, u64 addr, u64 seq,
+ 				     unsigned flags)
+ {
++	//pr_info("uvd_v4_2: called %s\n", __func__);
+ 	WARN_ON(flags & AMDGPU_FENCE_FLAG_64BIT);
+ 
+ 	amdgpu_ring_write(ring, PACKET0(mmUVD_CONTEXT_ID, 0));
+@@ -509,6 +676,8 @@ static int uvd_v4_2_ring_test_ring(struct amdgpu_ring *ring)
+ 	uint32_t tmp = 0;
+ 	unsigned i;
+ 	int r;
++	pr_info("uvd_v4_2: called %s\n", __func__);
++	// Make this more like cik_sdma ring test
+ 
+ 	WREG32(mmUVD_CONTEXT_ID, 0xCAFEDEAD);
+ 	r = amdgpu_ring_alloc(ring, 3);
+@@ -520,8 +689,13 @@ static int uvd_v4_2_ring_test_ring(struct amdgpu_ring *ring)
+ 	amdgpu_ring_commit(ring);
+ 	for (i = 0; i < adev->usec_timeout; i++) {
+ 		tmp = RREG32(mmUVD_CONTEXT_ID);
+-		if (tmp == 0xDEADBEEF)
++		//pr_info("uvd_v4_2: mmUVD_CONTEXT_ID through RREG32 after ring write = %08x\n", (unsigned int)tmp);
++		// This stays as cafedead... ring_write function didn't work or the log spam prevents it from passing (timeout). 
++		// Probably the latter as this is new symptom. At least wreg works!
++		if (tmp == 0xDEADBEEF) {
++			pr_info("uvd_v4_2: mmUVD_CONTEXT_ID through RREG32 after ring write has returned deadbeef! Breaking out.\n");
+ 			break;
++		}
+ 		udelay(1);
+ 	}
+ 
+@@ -546,6 +720,7 @@ static void uvd_v4_2_ring_emit_ib(struct amdgpu_ring *ring,
+ 				  struct amdgpu_ib *ib,
+ 				  uint32_t flags)
+ {
++	pr_info("uvd_v4_2: called %s\n", __func__);
+ 	amdgpu_ring_write(ring, PACKET0(mmUVD_RBC_IB_BASE, 0));
+ 	amdgpu_ring_write(ring, ib->gpu_addr);
+ 	amdgpu_ring_write(ring, PACKET0(mmUVD_RBC_IB_SIZE, 0));
+@@ -554,6 +729,7 @@ static void uvd_v4_2_ring_emit_ib(struct amdgpu_ring *ring,
+ 
+ static void uvd_v4_2_ring_insert_nop(struct amdgpu_ring *ring, uint32_t count)
+ {
++	pr_info("uvd_v4_2: called %s\n", __func__);
+ 	int i;
+ 
+ 	WARN_ON(ring->wptr % 2 || count % 2);
+@@ -573,43 +749,53 @@ static void uvd_v4_2_ring_insert_nop(struct amdgpu_ring *ring, uint32_t count)
+  */
+ static void uvd_v4_2_mc_resume(struct amdgpu_device *adev)
+ {
++	pr_info("uvd_v4_2: called %s\n", __func__);
+ 	uint64_t addr;
+ 	uint32_t size;
+ 
++	// Basically pure hardcoding
+ 	/* program the VCPU memory controller bits 0-27 */
+-	addr = (adev->uvd.inst->gpu_addr + AMDGPU_UVD_FIRMWARE_OFFSET) >> 3;
++	addr = (adev->uvd.inst->gpu_addr + AMDGPU_UVD_FIRMWARE_OFFSET) >> 3; //is this right - offset = 256? 
+ 	size = AMDGPU_UVD_FIRMWARE_SIZE(adev) >> 3;
+-	WREG32(mmUVD_VCPU_CACHE_OFFSET0, addr);
+-	WREG32(mmUVD_VCPU_CACHE_SIZE0, size);
++	WREG32(mmUVD_VCPU_CACHE_OFFSET0, addr); // 3; dream sets to 0; upstream = 256;
++	WREG32(mmUVD_VCPU_CACHE_SIZE0, size); // 4; dream uses hardcoded 0x7d000 for all three gpus. So it must be using gpu agnostic firmware?
+ 
+ 	addr += size;
+ 	size = AMDGPU_UVD_HEAP_SIZE >> 3;
+-	WREG32(mmUVD_VCPU_CACHE_OFFSET1, addr);
+-	WREG32(mmUVD_VCPU_CACHE_SIZE1, size);
++	WREG32(mmUVD_VCPU_CACHE_OFFSET1, addr); //5;
++	WREG32(mmUVD_VCPU_CACHE_SIZE1, size); //6;
+ 
+ 	addr += size;
+ 	size = (AMDGPU_UVD_STACK_SIZE +
+ 	       (AMDGPU_UVD_SESSION_SIZE * adev->uvd.max_handles)) >> 3;
+-	WREG32(mmUVD_VCPU_CACHE_OFFSET2, addr);
+-	WREG32(mmUVD_VCPU_CACHE_SIZE2, size);
++	WREG32(mmUVD_VCPU_CACHE_OFFSET2, addr); //7;
++	WREG32(mmUVD_VCPU_CACHE_SIZE2, size); //8;
+ 
+ 	/* bits 28-31 */
+ 	addr = (adev->uvd.inst->gpu_addr >> 28) & 0xF;
+-	WREG32(mmUVD_LMI_ADDR_EXT, (addr << 12) | (addr << 0));
++	WREG32(mmUVD_LMI_ADDR_EXT, (addr << 12) | (addr << 0)); // sequence 1; seems somewhat eq.
+ 
+ 	/* bits 32-39 */
+ 	addr = (adev->uvd.inst->gpu_addr >> 32) & 0xFF;
+-	WREG32(mmUVD_LMI_EXT40_ADDR, addr | (0x9 << 16) | (0x1 << 31));
++	WREG32(mmUVD_LMI_EXT40_ADDR, addr | (0x9 << 16) | (0x1 << 31)); // sequence 2; seems eq. 8009000(3?)
+ 
+-	WREG32(mmUVD_UDEC_ADDR_CONFIG, adev->gfx.config.gb_addr_config);
+-	WREG32(mmUVD_UDEC_DB_ADDR_CONFIG, adev->gfx.config.gb_addr_config);
+-	WREG32(mmUVD_UDEC_DBW_ADDR_CONFIG, adev->gfx.config.gb_addr_config);
++	WREG32(mmUVD_UDEC_ADDR_CONFIG, adev->gfx.config.gb_addr_config); // these
++	WREG32(mmUVD_UDEC_DB_ADDR_CONFIG, adev->gfx.config.gb_addr_config); // three
++	WREG32(mmUVD_UDEC_DBW_ADDR_CONFIG, adev->gfx.config.gb_addr_config); // are set right away in start() in dream; with custom LVP addr_config
+ }
+ 
+ static void uvd_v4_2_enable_mgcg(struct amdgpu_device *adev,
+ 				 bool enable)
+ {
++	pr_info("uvd_v4_2: called %s\n", __func__);
+ 	u32 orig, data;
++#ifdef CONFIG_X86_PS4
++	WREG32_P(mmUVD_CGC_CTRL, 0, ~(1 << 0)); // Preserve all bits except bit 0 (enable?). dream does this at end of start()
++	return;
++	// Should we set the MEM_CTRL and CGC_CTRL first then disable like this? Or no.. Just follow hardware guidance
++	// Without MGCG I had faulted in the past, but maybe that's because things were *actually* working, but the addressing was broken?
++	// Just do this dream-iness disabled CGC_CTRL but still unamsked CGC_MEM_CTRL? Probably unnecessary to mask the latter I assume.
++#endif
+ 
+ 	if (enable && (adev->cg_flags & AMD_CG_SUPPORT_UVD_MGCG)) {
+ 		data = RREG32_UVD_CTX(ixUVD_CGC_MEM_CTRL);
+@@ -617,7 +803,7 @@ static void uvd_v4_2_enable_mgcg(struct amdgpu_device *adev,
+ 		WREG32_UVD_CTX(ixUVD_CGC_MEM_CTRL, data);
+ 
+ 		orig = data = RREG32(mmUVD_CGC_CTRL);
+-		data |= UVD_CGC_CTRL__DYN_CLOCK_MODE_MASK;
++		data |= UVD_CGC_CTRL__DYN_CLOCK_MODE_MASK; // mask = 1 -- looks good
+ 		if (orig != data)
+ 			WREG32(mmUVD_CGC_CTRL, data);
+ 	} else {
+@@ -626,7 +812,7 @@ static void uvd_v4_2_enable_mgcg(struct amdgpu_device *adev,
+ 		WREG32_UVD_CTX(ixUVD_CGC_MEM_CTRL, data);
+ 
+ 		orig = data = RREG32(mmUVD_CGC_CTRL);
+-		data &= ~UVD_CGC_CTRL__DYN_CLOCK_MODE_MASK;
++		data &= ~UVD_CGC_CTRL__DYN_CLOCK_MODE_MASK; // essentially what dream does but it doesn't mask out CGC_MEM_CTRL
+ 		if (orig != data)
+ 			WREG32(mmUVD_CGC_CTRL, data);
+ 	}
+@@ -635,11 +821,13 @@ static void uvd_v4_2_enable_mgcg(struct amdgpu_device *adev,
+ static void uvd_v4_2_set_dcm(struct amdgpu_device *adev,
+ 			     bool sw_mode)
+ {
++	pr_info("uvd_v4_2: called %s\n", __func__);
+ 	u32 tmp, tmp2;
+ 
+ 	WREG32_FIELD(UVD_CGC_GATE, REGS, 0);
+ 
+ 	tmp = RREG32(mmUVD_CGC_CTRL);
++	pr_info("uvd_v4_2: mmUVD_CGC_CTRL through RREG32 after field write = %08x\n", (unsigned int)tmp);
+ 	tmp &= ~(UVD_CGC_CTRL__CLK_OFF_DELAY_MASK | UVD_CGC_CTRL__CLK_GATE_DLY_TIMER_MASK);
+ 	tmp |= UVD_CGC_CTRL__DYN_CLOCK_MODE_MASK |
+ 		(1 << UVD_CGC_CTRL__CLK_GATE_DLY_TIMER__SHIFT) |
+@@ -661,6 +849,7 @@ static void uvd_v4_2_set_dcm(struct amdgpu_device *adev,
+ 
+ static bool uvd_v4_2_is_idle(struct amdgpu_ip_block *ip_block)
+ {
++	pr_info("uvd_v4_2: called %s\n", __func__);
+ 	struct amdgpu_device *adev = ip_block->adev;
+ 
+ 	return !(RREG32(mmSRBM_STATUS) & SRBM_STATUS__UVD_BUSY_MASK);
+@@ -668,6 +857,7 @@ static bool uvd_v4_2_is_idle(struct amdgpu_ip_block *ip_block)
+ 
+ static int uvd_v4_2_wait_for_idle(struct amdgpu_ip_block *ip_block)
+ {
++	//pr_info("uvd_v4_2: called %s\n", __func__);
+ 	unsigned i;
+ 	struct amdgpu_device *adev = ip_block->adev;
+ 
+@@ -680,6 +870,7 @@ static int uvd_v4_2_wait_for_idle(struct amdgpu_ip_block *ip_block)
+ 
+ static int uvd_v4_2_soft_reset(struct amdgpu_ip_block *ip_block)
+ {
++	pr_info("uvd_v4_2: called %s\n", __func__);
+ 	struct amdgpu_device *adev = ip_block->adev;
+ 
+ 	uvd_v4_2_stop(adev);
+@@ -696,6 +887,7 @@ static int uvd_v4_2_set_interrupt_state(struct amdgpu_device *adev,
+ 					unsigned type,
+ 					enum amdgpu_interrupt_state state)
+ {
++    //pr_info("uvd_v4_2: called %s\n", __func__);
+ 	// TODO
+ 	return 0;
+ }
+@@ -704,6 +896,7 @@ static int uvd_v4_2_process_interrupt(struct amdgpu_device *adev,
+ 				      struct amdgpu_irq_src *source,
+ 				      struct amdgpu_iv_entry *entry)
+ {
++	//pr_info("uvd_v4_2: called %s\n", __func__);
+ 	DRM_DEBUG("IH: UVD TRAP\n");
+ 	amdgpu_fence_process(&adev->uvd.inst->ring);
+ 	return 0;
+@@ -712,6 +905,7 @@ static int uvd_v4_2_process_interrupt(struct amdgpu_device *adev,
+ static int uvd_v4_2_set_clockgating_state(struct amdgpu_ip_block *ip_block,
+ 					  enum amd_clockgating_state state)
+ {
++    //pr_info("uvd_v4_2: called %s\n", __func__); //stub
+ 	return 0;
+ }
+ 
+@@ -725,12 +919,19 @@ static int uvd_v4_2_set_powergating_state(struct amdgpu_ip_block *ip_block,
+ 	 * revisit this when there is a cleaner line between
+ 	 * the smc and the hw blocks
+ 	 */
++	pr_info("uvd_v4_2: called %s\n", __func__);
+ 	struct amdgpu_device *adev = ip_block->adev;
+ 
++	//amdgpu_rreg_t rreg_print; // just use unint32 for stupid pointer conversion things
++	uint32_t rreg_print;
++
+ 	if (state == AMD_PG_STATE_GATE) {
+ 		uvd_v4_2_stop(adev);
+ 		if (adev->pg_flags & AMD_PG_SUPPORT_UVD && !adev->pm.dpm_enabled) {
+-			if (!(RREG32_SMC(ixCURRENT_PG_STATUS) &
++			rreg_print = RREG32_SMC(ixCURRENT_PG_STATUS);
++			pr_info("uvd_v4_2: ixCURRENT_PG_STATUS through RREG32_SMC after uvd_stop = %08x\n", (unsigned int)rreg_print); // orbis never touches
++																       // ixCURRENT_PG_STATUS....
++			if (!(rreg_print &
+ 				CURRENT_PG_STATUS__UVD_PG_STATUS_MASK)) {
+ 				WREG32(mmUVD_PGFSM_CONFIG, (UVD_PGFSM_CONFIG__UVD_PGFSM_FSM_ADDR_MASK   |
+ 							UVD_PGFSM_CONFIG__UVD_PGFSM_POWER_DOWN_MASK |
+@@ -741,8 +942,12 @@ static int uvd_v4_2_set_powergating_state(struct amdgpu_ip_block *ip_block,
+ 		return 0;
+ 	} else {
+ 		if (adev->pg_flags & AMD_PG_SUPPORT_UVD && !adev->pm.dpm_enabled) {
+-			if (RREG32_SMC(ixCURRENT_PG_STATUS) &
++
++			rreg_print = RREG32_SMC(ixCURRENT_PG_STATUS);
++			pr_info("uvd_v4_2: ixCURRENT_PG_STATUS through RREG32_SMC = %08x\n", (unsigned int)rreg_print);
++			if (rreg_print &
+ 				CURRENT_PG_STATUS__UVD_PG_STATUS_MASK) {
++				pr_info("uvd_v4_2: ixCURRENT_PG_STATUS has UVD_PG_STATUS_MASK\n");
+ 				WREG32(mmUVD_PGFSM_CONFIG, (UVD_PGFSM_CONFIG__UVD_PGFSM_FSM_ADDR_MASK   |
+ 						UVD_PGFSM_CONFIG__UVD_PGFSM_POWER_UP_MASK |
+ 						UVD_PGFSM_CONFIG__UVD_PGFSM_P1_SELECT_MASK));
+@@ -794,6 +999,7 @@ static const struct amdgpu_ring_funcs uvd_v4_2_ring_funcs = {
+ 
+ static void uvd_v4_2_set_ring_funcs(struct amdgpu_device *adev)
+ {
++	//pr_info("uvd_v4_2: called %s\n", __func__);
+ 	adev->uvd.inst->ring.funcs = &uvd_v4_2_ring_funcs;
+ }
+ 
+@@ -804,6 +1010,7 @@ static const struct amdgpu_irq_src_funcs uvd_v4_2_irq_funcs = {
+ 
+ static void uvd_v4_2_set_irq_funcs(struct amdgpu_device *adev)
+ {
++	//pr_info("uvd_v4_2: called %s\n", __func__);
+ 	adev->uvd.inst->irq.num_types = 1;
+ 	adev->uvd.inst->irq.funcs = &uvd_v4_2_irq_funcs;
+ }
+diff --git a/drivers/gpu/drm/amd/include/asic_reg/smu/smu_7_0_1_d.h b/drivers/gpu/drm/amd/include/asic_reg/smu/smu_7_0_1_d.h
+index 71169daa70..c7d5852706 100644
+--- a/drivers/gpu/drm/amd/include/asic_reg/smu/smu_7_0_1_d.h
++++ b/drivers/gpu/drm/amd/include/asic_reg/smu/smu_7_0_1_d.h
+@@ -34,13 +34,16 @@
+ #define mmGCK1_GCK_SMC_IND_DATA                                                 0x83
+ #define mmGCK2_GCK_SMC_IND_DATA                                                 0x85
+ #define mmGCK3_GCK_SMC_IND_DATA                                                 0x87
++//#define ixPS4_SOMETHING_IMPORTANT						0xc0500080
+ #define ixCG_DCLK_CNTL                                                          0xc050009c
+ #define ixCG_DCLK_STATUS                                                        0xc05000a0
+ #define ixCG_VCLK_CNTL                                                          0xc05000a4
+ #define ixCG_VCLK_STATUS                                                        0xc05000a8
++//#define MISSING_BIT								0xc05000ab
+ #define ixCG_ECLK_CNTL                                                          0xc05000ac
+ #define ixCG_ECLK_STATUS                                                        0xc05000b0
+ #define ixCG_ACLK_CNTL                                                          0xc05000dc
++//#define
+ #define ixGCK_DFS_BYPASS_CNTL                                                   0xc0500118
+ #define ixCG_SPLL_FUNC_CNTL                                                     0xc0500140
+ #define ixCG_SPLL_FUNC_CNTL_2                                                   0xc0500144
+diff --git a/drivers/gpu/drm/amd/include/asic_reg/uvd/uvd_4_2_d.h b/drivers/gpu/drm/amd/include/asic_reg/uvd/uvd_4_2_d.h
+index 19802e9641..dcc55b5d4e 100644
+--- a/drivers/gpu/drm/amd/include/asic_reg/uvd/uvd_4_2_d.h
++++ b/drivers/gpu/drm/amd/include/asic_reg/uvd/uvd_4_2_d.h
+@@ -48,6 +48,7 @@
+ #define mmUVD_LMI_ADDR_EXT                                                      0x3d65
+ #define mmUVD_LMI_CTRL                                                          0x3d66
+ #define mmUVD_LMI_STATUS                                                        0x3d67
++//#define mmUVD_LMI_SOMETHING							0x3d68 ?
+ #define mmUVD_LMI_SWAP_CNTL                                                     0x3d6d
+ #define mmUVD_MP_SWAP_CNTL                                                      0x3d6f
+ #define mmUVD_MPC_CNTL                                                          0x3d77
+@@ -73,6 +74,7 @@
+ #define mmUVD_RBC_RB_WPTR_CNTL                                                  0x3da6
+ #define mmUVD_RBC_RB_CNTL                                                       0x3da9
+ #define mmUVD_RBC_RB_RPTR_ADDR                                                  0x3daa
++//#define mmUVD_RBC_RB_RPTR_CNTL						0x3dab ?
+ #define mmUVD_STATUS                                                            0x3daf
+ #define mmUVD_SEMA_TIMEOUT_STATUS                                               0x3db0
+ #define mmUVD_SEMA_WAIT_INCOMPLETE_TIMEOUT_CNTL                                 0x3db1

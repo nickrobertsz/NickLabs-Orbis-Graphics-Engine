@@ -1,0 +1,258 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: NickLabs Orbis <orbis@nicklabs.invalid>
+Date: Mon, 26 Oct 2026 13:02:07 -0700
+Subject: [PATCH] drm/amdgpu: PS4 engine-activity telemetry and runtime GTT
+ budget (Orbis)
+
+Original NickLabs Orbis Graphics Engine 2.0 code for Liverpool/Gladius:
+
+- orbis_engine_busy (sysfs, ro): busy fractions of GUI/CP/shader (SPI)/texture (TA),
+  SDMA0/1, UVD and the memory controller, sampled from GRBM_STATUS / SRBM_STATUS /
+  SRBM_STATUS2 (200 samples, 100 us apart). Liverpool has no powerplay, so amdgpu
+  exposes no gpu_busy_percent; this replaces guesswork with first-hand register state.
+- orbis_gtt_budget (sysfs, rw): the GTT domain budget enforced by amdgpu_gtt_mgr for
+  system-memory-backed GPU buffers. Writable at runtime within [256 MiB,
+  ttm.pages_limit]; the reader in amdgpu_gtt_mgr_new() now uses READ_ONCE. A lower value
+  only affects later allocations (TTM evicts to system pages instead of failing).
+  This is the runtime half of the Orbis unified-memory design: the VRAM carve-out is
+  fixed by the loader, the GTT side follows the PC/GAMING/AI policy (orbis-memd).
+
+Status: applies; not compiled or tested on hardware.
+---
+ drivers/gpu/drm/amd/amdgpu/Makefile          |   2 +-
+ drivers/gpu/drm/amd/amdgpu/amdgpu_gtt_mgr.c  |   2 +-
+ drivers/gpu/drm/amd/amdgpu/cik.c             |   3 +
+ drivers/gpu/drm/amd/amdgpu/liverpool_orbis.c | 147 +++++++++++++++++++
+ drivers/gpu/drm/amd/amdgpu/liverpool_orbis.h |  15 ++
+ 5 files changed, 167 insertions(+), 2 deletions(-)
+ create mode 100644 drivers/gpu/drm/amd/amdgpu/liverpool_orbis.c
+ create mode 100644 drivers/gpu/drm/amd/amdgpu/liverpool_orbis.h
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/Makefile b/drivers/gpu/drm/amd/amdgpu/Makefile
+index 6f9f03842..bcfe08285 100644
+--- a/drivers/gpu/drm/amd/amdgpu/Makefile
++++ b/drivers/gpu/drm/amd/amdgpu/Makefile
+@@ -75,7 +75,7 @@ amdgpu-$(CONFIG_PERF_EVENTS) += amdgpu_pmu.o
+ # add asic specific block
+ amdgpu-$(CONFIG_DRM_AMDGPU_CIK)+= cik.o cik_ih.o \
+ 	dce_v8_0.o gfx_v7_0.o cik_sdma.o uvd_v4_2.o vce_v2_0.o \
+-	liverpool_clk.o
++	liverpool_clk.o liverpool_orbis.o
+ 
+ amdgpu-$(CONFIG_DRM_AMDGPU_SI)+= si.o gmc_v6_0.o gfx_v6_0.o si_ih.o si_dma.o dce_v6_0.o \
+ 	uvd_v3_1.o
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_gtt_mgr.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_gtt_mgr.c
+index 0760e7040..c4d6c974b 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_gtt_mgr.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_gtt_mgr.c
+@@ -126,7 +126,7 @@ static int amdgpu_gtt_mgr_new(struct ttm_resource_manager *man,
+ 
+ 	ttm_resource_init(tbo, place, &node->base);
+ 	if (!(place->flags & TTM_PL_FLAG_TEMPORARY) &&
+-	    ttm_resource_manager_usage(man) > man->size) {
++	    ttm_resource_manager_usage(man) > READ_ONCE(man->size)) {
+ 		r = -ENOSPC;
+ 		goto err_free;
+ 	}
+diff --git a/drivers/gpu/drm/amd/amdgpu/cik.c b/drivers/gpu/drm/amd/amdgpu/cik.c
+index 4fca86cf3..61f5732d3 100644
+--- a/drivers/gpu/drm/amd/amdgpu/cik.c
++++ b/drivers/gpu/drm/amd/amdgpu/cik.c
+@@ -44,6 +44,7 @@
+ #include "gfx_v7_0.h"
+ #include "cik_sdma.h"
+ #include "liverpool_clk.h"
++#include "liverpool_orbis.h"
+ #include "uvd_v4_2.h"
+ #include "vce_v2_0.h"
+ #include "cik_dpm.h"
+@@ -2543,6 +2544,7 @@ static int cik_common_hw_init(struct amdgpu_ip_block *ip_block)
+ 		adev->clock.default_mclk = adev->asic_type == CHIP_LIVERPOOL ? 137500 : 170000;
+ 		liverpool_clk_force_max(adev);
+ 		liverpool_clk_sysfs_init(adev);
++		liverpool_orbis_sysfs_init(adev);
+ 	}
+ 
+ 	return 0;
+@@ -2551,6 +2553,7 @@ static int cik_common_hw_init(struct amdgpu_ip_block *ip_block)
+ static int cik_common_hw_fini(struct amdgpu_ip_block *ip_block)
+ {
+ 	liverpool_clk_sysfs_fini(ip_block->adev);
++	liverpool_orbis_sysfs_fini(ip_block->adev);
+ 	return 0;
+ }
+ 
+diff --git a/drivers/gpu/drm/amd/amdgpu/liverpool_orbis.c b/drivers/gpu/drm/amd/amdgpu/liverpool_orbis.c
+new file mode 100644
+index 000000000..0c8c13dd9
+--- /dev/null
++++ b/drivers/gpu/drm/amd/amdgpu/liverpool_orbis.c
+@@ -0,0 +1,147 @@
++// SPDX-License-Identifier: MIT
++/*
++ * liverpool_orbis.c - NickLabs Orbis Graphics Engine 2.0 telemetry and memory budget
++ * for the PS4 Liverpool/Gladius GPU (CIK APU without powerplay).
++ *
++ * sysfs files on the GPU's PCI device (read by orbis-hwd / orbis-memd / orbis-debug):
++ *
++ *   orbis_engine_busy (ro)  engine activity sampled from GRBM_STATUS, SRBM_STATUS and
++ *                           SRBM_STATUS2 over a short window (200 samples, 100 us apart).
++ *                           Liverpool has no SMU activity counters under Linux, so this is
++ *                           the only first-hand utilisation source; the values are sampled
++ *                           busy fractions, not cycle counts.
++ *   orbis_gtt_budget (rw)   the GTT domain budget (bytes) that amdgpu enforces for new
++ *                           system-memory-backed GPU allocations. Raising it lets graphics
++ *                           and compute use more of the shared GDDR5 pool through GPUVM;
++ *                           lowering it below current use makes TTM evict GTT buffers to
++ *                           system pages instead of failing. Bounded by ttm.pages_limit
++ *                           (itself writable at runtime) and a 256 MiB floor.
++ *
++ * The VRAM carve-out size is fixed by the loader before Linux starts (vram.txt); only
++ * the GTT side of the unified pool can move at runtime.
++ */
++
++#include <linux/delay.h>
++#include <linux/sysfs.h>
++#include <drm/ttm/ttm_tt.h>
++#include <drm/ttm/ttm_resource.h>
++
++#include "amdgpu.h"
++#include "liverpool_orbis.h"
++
++#include "gca/gfx_7_2_d.h"
++#include "gca/gfx_7_2_sh_mask.h"
++#include "oss/oss_2_0_d.h"
++#include "oss/oss_2_0_sh_mask.h"
++
++#define ORBIS_BUSY_SAMPLES	200
++#define ORBIS_BUSY_STEP_US	100
++#define ORBIS_GTT_MIN_BYTES	(256ULL << 20)
++
++static bool liverpool_orbis_sysfs_added;
++
++static bool liverpool_orbis_is_ps4(struct amdgpu_device *adev)
++{
++	return adev->asic_type == CHIP_LIVERPOOL || adev->asic_type == CHIP_GLADIUS;
++}
++
++static ssize_t orbis_engine_busy_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct amdgpu_device *adev = drm_to_adev(dev_get_drvdata(dev));
++	unsigned int gui = 0, cp = 0, spi = 0, ta = 0, sdma0 = 0, sdma1 = 0, uvd = 0, mc = 0;
++	u32 grbm, srbm, srbm2;
++	int i;
++
++	if (amdgpu_in_reset(adev) || adev->in_suspend)
++		return -EBUSY;
++
++	for (i = 0; i < ORBIS_BUSY_SAMPLES; i++) {
++		grbm = RREG32(mmGRBM_STATUS);
++		srbm = RREG32(mmSRBM_STATUS);
++		srbm2 = RREG32(mmSRBM_STATUS2);
++		gui += !!(grbm & GRBM_STATUS__GUI_ACTIVE_MASK);
++		cp += !!(grbm & GRBM_STATUS__CP_BUSY_MASK);
++		spi += !!(grbm & GRBM_STATUS__SPI_BUSY_MASK);
++		ta += !!(grbm & GRBM_STATUS__TA_BUSY_MASK);
++		sdma0 += !!(srbm2 & SRBM_STATUS2__SDMA_BUSY_MASK);
++		sdma1 += !!(srbm2 & SRBM_STATUS2__SDMA1_BUSY_MASK);
++		uvd += !!(srbm & SRBM_STATUS__UVD_BUSY_MASK);
++		mc += !!(srbm & (SRBM_STATUS__VMC_BUSY_MASK | SRBM_STATUS__MCB_BUSY_MASK));
++		udelay(ORBIS_BUSY_STEP_US);
++	}
++
++#define PCT(x) ((x) * 100 / ORBIS_BUSY_SAMPLES)
++	return sysfs_emit(buf, "gfx=%u shader=%u texture=%u cp=%u sdma0=%u sdma1=%u uvd=%u mc=%u "
++			  "samples=%u window_us=%u\n",
++			  PCT(gui), PCT(spi), PCT(ta), PCT(cp), PCT(sdma0), PCT(sdma1), PCT(uvd), PCT(mc),
++			  ORBIS_BUSY_SAMPLES, ORBIS_BUSY_SAMPLES * ORBIS_BUSY_STEP_US);
++#undef PCT
++}
++static DEVICE_ATTR_RO(orbis_engine_busy);
++
++static ssize_t orbis_gtt_budget_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct amdgpu_device *adev = drm_to_adev(dev_get_drvdata(dev));
++	struct ttm_resource_manager *man = ttm_manager_type(&adev->mman.bdev, TTM_PL_TT);
++
++	return sysfs_emit(buf, "budget=%llu usage=%llu ttm_pages_limit=%llu min=%llu vram_carveout=%llu\n",
++			  READ_ONCE(man->size), ttm_resource_manager_usage(man),
++			  (u64)ttm_tt_pages_limit() << PAGE_SHIFT, ORBIS_GTT_MIN_BYTES,
++			  adev->gmc.real_vram_size);
++}
++
++static ssize_t orbis_gtt_budget_store(struct device *dev, struct device_attribute *attr,
++				      const char *buf, size_t count)
++{
++	struct amdgpu_device *adev = drm_to_adev(dev_get_drvdata(dev));
++	struct ttm_resource_manager *man = ttm_manager_type(&adev->mman.bdev, TTM_PL_TT);
++	u64 val, limit = (u64)ttm_tt_pages_limit() << PAGE_SHIFT, old;
++	int r;
++
++	r = kstrtou64(buf, 0, &val);
++	if (r)
++		return r;
++	if (val < ORBIS_GTT_MIN_BYTES || val > limit)
++		return -ERANGE;
++	val = round_down(val, PAGE_SIZE);
++	old = READ_ONCE(man->size);
++	/* ttm_resource_manager.size is documented as constant; amdgpu only uses it as the
++	 * budget compared against usage in amdgpu_gtt_mgr_new() and for reporting, so a
++	 * new value applies to later allocations only. */
++	WRITE_ONCE(man->size, val);
++	dev_info(adev->dev, "Orbis: GTT budget %llu MiB -> %llu MiB (usage %llu MiB)\n",
++		 old >> 20, val >> 20, ttm_resource_manager_usage(man) >> 20);
++	return count;
++}
++static DEVICE_ATTR_RW(orbis_gtt_budget);
++
++static struct attribute *liverpool_orbis_attrs[] = {
++	&dev_attr_orbis_engine_busy.attr,
++	&dev_attr_orbis_gtt_budget.attr,
++	NULL,
++};
++
++static const struct attribute_group liverpool_orbis_group = {
++	.attrs = liverpool_orbis_attrs,
++};
++
++void liverpool_orbis_sysfs_init(struct amdgpu_device *adev)
++{
++	int r;
++
++	if (!liverpool_orbis_is_ps4(adev) || liverpool_orbis_sysfs_added)
++		return;
++	r = sysfs_create_group(&adev->dev->kobj, &liverpool_orbis_group);
++	if (r)
++		dev_warn(adev->dev, "Orbis: cannot create telemetry sysfs files: %d\n", r);
++	else
++		liverpool_orbis_sysfs_added = true;
++}
++
++void liverpool_orbis_sysfs_fini(struct amdgpu_device *adev)
++{
++	if (liverpool_orbis_sysfs_added) {
++		sysfs_remove_group(&adev->dev->kobj, &liverpool_orbis_group);
++		liverpool_orbis_sysfs_added = false;
++	}
++}
+diff --git a/drivers/gpu/drm/amd/amdgpu/liverpool_orbis.h b/drivers/gpu/drm/amd/amdgpu/liverpool_orbis.h
+new file mode 100644
+index 000000000..c253ac7fc
+--- /dev/null
++++ b/drivers/gpu/drm/amd/amdgpu/liverpool_orbis.h
+@@ -0,0 +1,15 @@
++/* SPDX-License-Identifier: MIT */
++#ifndef LIVERPOOL_ORBIS_H
++#define LIVERPOOL_ORBIS_H
++
++struct amdgpu_device;
++
++#ifdef CONFIG_DRM_AMDGPU_CIK
++void liverpool_orbis_sysfs_init(struct amdgpu_device *adev);
++void liverpool_orbis_sysfs_fini(struct amdgpu_device *adev);
++#else
++static inline void liverpool_orbis_sysfs_init(struct amdgpu_device *adev) { }
++static inline void liverpool_orbis_sysfs_fini(struct amdgpu_device *adev) { }
++#endif
++
++#endif

@@ -1,0 +1,162 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: "NickLabs Orbis (port)" <orbis@nicklabs.invalid>
+Date: Mon, 26 Oct 2026 12:58:00 -0700
+Subject: [PATCH] drm/amdgpu/ps4_bridge: runtime A/B knobs for the MN864729
+ un-mute fix
+
+Port of aday1/ps4-hdmi-blackscreen@5c1c2fc patches/0003-ps4_bridge-unstrand-the-unmute.patch
+(GPL-2.0, author aday) to the Orbis 0.2.0 kernel (feeRnt 6.15.4 crashnt-4.7 @ 108ef97 + Orbis 0001).
+
+This tree already has the in-queue ICC delays removed, so the ps4_bridge_icc_delays knob and
+its helper are dropped (they would be dead code here). The remaining knobs keep the exact
+0.2.0 behaviour by default and can be flipped on the PS4 command line (bootargs.txt) or at
+runtime in /sys/module/amdgpu/parameters/ for an A/B test after a black-screen modeset:
+
+  amdgpu.ps4_bridge_mute_on_disable=0   do not assert VMUTE in .disable (aday1 default)
+  amdgpu.ps4_bridge_force_unmute=1      re-issue the VMUTE clear as its own ICC transaction
+  amdgpu.ps4_bridge_debug_regs=1        log mute/DP/HDMI status registers after enable
+  amdgpu.ps4_bridge_fix_hdcpen=1        write HDCPEN_ENC_DIS to HDCPEN (suspected stock typo)
+
+Status: applies to the Orbis kernel tree with patch -F0 (checked); NOT compile-tested by Orbis
+(compile on Nobara with kernel/build-gfx-kernel.sh); NOT boot-tested. Not in the default series.
+---
+ drivers/gpu/drm/amd/amdgpu/ps4_bridge.c | 91 +++++++++++++++++++++++--
+ 1 file changed, 87 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+index c133861a3..092c9d75d 100644
+--- a/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
++++ b/drivers/gpu/drm/amd/amdgpu/ps4_bridge.c
+@@ -41,6 +41,8 @@
+ 
+ #include <linux/i2c.h>
+ #include <linux/i2c-algo-bit.h>
++#include <linux/delay.h>
++#include <linux/moduleparam.h>
+ 
+ 
+ #include "amdgpu.h"
+@@ -48,6 +50,34 @@
+ #include "atombios_dp.h"
+ #include "ObjectID.h"
+ 
++/*
++ * Runtime knobs (Orbis port of aday1/ps4-hdmi-blackscreen 0003). Defaults keep the
++ * exact behaviour of the Orbis 0.2.0 kernel; set them for an A/B test. ps4_bridge.o is
++ * linked into amdgpu, so these appear as
++ *   /sys/module/amdgpu/parameters/ps4_bridge_*
++ * and as amdgpu.ps4_bridge_*=N on the kernel command line. Everything here
++ * can therefore be A/B tested without rebuilding or re-running the exploit.
++ */
++static int ps4_bridge_mute_on_disable = 1;
++module_param_named(ps4_bridge_mute_on_disable, ps4_bridge_mute_on_disable, int, 0644);
++MODULE_PARM_DESC(ps4_bridge_mute_on_disable,
++	"1=assert VMUTE in bridge disable (stock, default), 0=leave video unmuted (aday1 fix)");
++
++static int ps4_bridge_force_unmute = 0;
++module_param_named(ps4_bridge_force_unmute, ps4_bridge_force_unmute, int, 0644);
++MODULE_PARM_DESC(ps4_bridge_force_unmute,
++	"1=re-issue the VMUTE clear as its own ICC transaction after enable (aday1 fix; default 0)");
++
++static int ps4_bridge_debug_regs = 0;
++module_param_named(ps4_bridge_debug_regs, ps4_bridge_debug_regs, int, 0644);
++MODULE_PARM_DESC(ps4_bridge_debug_regs,
++	"1=read back mute/DP/HDMI status registers after enable and print them (default 0)");
++
++static int ps4_bridge_fix_hdcpen = 0;
++module_param_named(ps4_bridge_fix_hdcpen, ps4_bridge_fix_hdcpen, int, 0644);
++MODULE_PARM_DESC(ps4_bridge_fix_hdcpen,
++	"1=write HDCPEN_ENC_DIS to HDCPEN instead of TSRST in pre_enable");
++
+ #define CMD_READ	1, 1
+ #define CMD_WRITE	2, 2
+ #define CMD_MASK	2, 3
+@@ -307,6 +337,31 @@ static void cq_wait_clear(struct i2c_cmdqueue *q, u16 addr, u8 mask)
+ 	*q->p++ = mask;
+ }
+ 
++/* One-register read as its own ICC transaction. Returns <0 on failure. */
++static int ps4_bridge_peek(struct ps4_bridge *mn_bridge, u16 addr)
++{
++	cq_init(&mn_bridge->cq, 4);
++	cq_read(&mn_bridge->cq, addr, 1);
++	if (cq_exec(&mn_bridge->cq) < 9)
++		return -EIO;
++	return mn_bridge->cq.reply.databuf[3];
++}
++
++static void ps4_bridge_dump_regs(struct ps4_bridge *mn_bridge, const char *when)
++{
++	static const u16 regs[] = { 0x705f, 0x7203, 0x60f8, 0x60f9, 0x10f6, 0x7204 };
++	unsigned int i;
++	int v;
++
++	for (i = 0; i < ARRAY_SIZE(regs); i++) {
++		v = ps4_bridge_peek(mn_bridge, regs[i]);
++		if (v < 0)
++			pr_info("ps4_bridge: regs %s 0x%04x = READ-FAILED\n", when, regs[i]);
++		else
++			pr_info("ps4_bridge: regs %s 0x%04x = 0x%02x\n", when, regs[i], v);
++	}
++}
++
+ static inline struct ps4_bridge *
+ 		bridge_to_ps4_bridge(struct drm_bridge *bridge)
+ {
+@@ -384,8 +439,13 @@ static void ps4_bridge_pre_enable(struct drm_bridge *bridge)
+ 	cq_writereg(&mn_bridge->cq, INFENA, 0x00);
+ 	/* Reset HDCP */
+ 	cq_writereg(&mn_bridge->cq, TSRST, TSRST_ENCSRST | TSRST_HDCPSRST);
+-	/* Disable HDCP flag */
+-	cq_writereg(&mn_bridge->cq, TSRST, HDCPEN_ENC_DIS);
++	/* Disable HDCP flag. NOTE: stock writes HDCPEN_ENC_DIS (0x05) into
++	 * TSRST (0x7006), where 0x05 decodes as AVCSRST|FIFOSRST. Almost
++	 * certainly meant for HDCPEN (0x7a8b); knob defaults to stock. */
++	if (ps4_bridge_fix_hdcpen)
++		cq_writereg(&mn_bridge->cq, HDCPEN, HDCPEN_ENC_DIS);
++	else
++		cq_writereg(&mn_bridge->cq, TSRST, HDCPEN_ENC_DIS);
+ 	/* HDCP AKE reset */
+ 	cq_writereg(&mn_bridge->cq, AKESRST, 0xff);
+ 	/* Wait AKE busy */
+@@ -657,6 +717,20 @@ static void ps4_bridge_enable(struct drm_bridge *bridge)
+ 				DRM_ERROR("failed to run enable hdmi audio seq. 1");
+ 		}
+ 		#endif
++
++		/* Insurance: the un-mute above is the tail of a long queue. Re-issue
++		 * it on its own so a truncated transaction cannot leave the panel
++		 * muted for the rest of the boot. */
++		if (ps4_bridge_force_unmute) {
++			cq_init(&mn_bridge->cq, 4);
++			cq_writereg(&mn_bridge->cq, VMUTECNT, VMUTECNT_LINEWIDTH_90);
++			if (cq_exec(&mn_bridge->cq) < 0)
++				DRM_ERROR("ps4_bridge: forced un-mute failed\n");
++		}
++
++		if (ps4_bridge_debug_regs)
++			ps4_bridge_dump_regs(mn_bridge, "post-enable");
++
+ 		mutex_unlock(&mn_bridge->mutex);
+ 	}
+ 
+@@ -669,8 +743,17 @@ static void ps4_bridge_disable(struct drm_bridge *bridge)
+ 
+ 	mutex_lock(&mn_bridge->mutex);
+ 	cq_init(&mn_bridge->cq, 4);
+-	cq_writereg(&mn_bridge->cq, VMUTECNT, VMUTECNT_LINEWIDTH_90 | VMUTECNT_VMUTE_MUTE_NORMAL);
+-	cq_writereg(&mn_bridge->cq, INFENA, 0x00);
++	/* Muting here is what turns a failed re-enable into a permanently black
++	 * panel: the matching un-mute is the last command of the enable queue.
++	 * DRM never calls .disable on a bridge that was never enabled, which is
++	 * exactly why the boot console survives and the first userspace modeset
++	 * kills it. Orbis default: stock (mute); amdgpu.ps4_bridge_mute_on_disable=0
++	 * is the aday1 fix. */
++	if (ps4_bridge_mute_on_disable) {
++		cq_writereg(&mn_bridge->cq, VMUTECNT,
++			    VMUTECNT_LINEWIDTH_90 | VMUTECNT_VMUTE_MUTE_NORMAL);
++		cq_writereg(&mn_bridge->cq, INFENA, 0x00);
++	}
+ 	if (cq_exec(&mn_bridge->cq) < 0) {
+ 		DRM_ERROR("Failed to disable bridge\n");
+ 	}

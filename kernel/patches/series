@@ -1,0 +1,9 @@
+ge-6.15/0001-drivers-ps4-add-Aeolia-Belize-fan-threshold-APU-temp.patch
+ge-6.15/0002-drm-amdgpu-restore-and-control-the-PS4-Liverpool-Gla.patch
+ge-6.15/0003-drm-amdgpu-report-the-PS4-GDDR5-type-and-real-defaul.patch
+ge-6.15/0004-PS4-HDMI-audio-program-the-audio-DTO-in-modeset-enab.patch
+ge-6.15/0005-drm-amdgpu-ps4_bridge-runtime-A-B-knobs-for-the-MN86.patch
+ge-6.15/0006-drm-amdgpu-ps4_bridge-display-robustness-knobs-enabl.patch
+ge-6.15/0007-cpufreq-add-the-PS4-AMD-Jaguar-hardware-P-state-driv.patch
+ge-6.15/0008-drm-amdgpu-PS4-engine-activity-telemetry-and-runtime.patch
+ge-6.15/0009-drm-amdgpu-PS4-SMU-mailbox-expert-interface-opt-in.patch

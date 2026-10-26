@@ -25,7 +25,7 @@ step() { echo; echo "=== $*"; }
 # never chowned; packages land in /build/pkg and are copied into the staging repo.
 rm -rf /build && mkdir -p /build/pkg /build/src
 tar -C "$R" --exclude=./out --exclude=./.git -cf - . | tar -C /build/src -xf -
-mkdir -p /build/src/out && [ ! -d "$R/out/kernel-gfx" ] || cp -a "$R/out/kernel-gfx" /build/src/out/
+mkdir -p /build/src/out && [ ! -d "$R/out/kernel-ge" ] || cp -a "$R/out/kernel-ge" /build/src/out/
 chown -R builder /build
 B=/build/src
 
@@ -74,9 +74,9 @@ printf '%s\n%s\n' "$exp_state" "$exp_reason" > "$staging/experimental-state.txt"
 
 if grep -qv '^[[:space:]]*\(#\|$\)' "$R/kernel/patches/series" 2>/dev/null; then
   step "graphics kernel package (kernel/patches/series lists reviewed patches)"
-  [ -f "$R/out/kernel-gfx/build-manifest.json" ] || {
-    echo "kernel/patches/series is not empty but out/kernel-gfx is missing: run kernel/build-gfx-kernel.sh first" >&2; exit 5; }
-  mk kernel/package linux-orbis-ps4-gfx nodeps
+  [ -f "$R/out/kernel-ge/build-manifest.json" ] || {
+    echo "kernel/patches/series is not empty but out/kernel-ge is missing: run kernel/build-ge-kernel.sh first" >&2; exit 5; }
+  mk kernel/package linux-orbis-ps4-ge nodeps
 else
   step "kernel: no reviewed graphics patches in kernel/patches/series; the Orbis 0.2.0 kernel is kept"
 fi
