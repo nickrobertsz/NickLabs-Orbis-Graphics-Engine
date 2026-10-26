@@ -1,15 +1,25 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From ef46ffbd5a35ca539835013994ca6dc5e2cef347 Mon Sep 17 00:00:00 2001
 From: NickLabs Orbis <orbis@nicklabs.invalid>
-Date: Mon, 26 Oct 2026 13:07:10 -0700
+Date: Mon, 26 Oct 2026 14:08:54 -0700
 Subject: [PATCH] Orbis GE 2.0: exact VRAM carve-out MTRRs, validated vram.txt,
- gtt.txt, boot identity token
+ gtt.txt, boot identity, time handoff
 
+- VRAM: one UC MTRR per power-of-two block (MTRRs 3-7, VCNT checked), so every
+  validated size (16 MiB multiple, 64..4096, <= 5 blocks, e.g. 768/1536/3072) is
+  covered exactly; upstream's single mask was only correct for powers of two.
+- vram.txt validated with an on-screen alert; gtt.txt (MiB) -> ttm.pages_limit +
+  amdgpu.gttsize (ps4-linux-payloads semantics).
+- boot identity: orbis.loader=ge2 orbis.vram_mb=N [orbis.gtt_mb=N].
+- time handoff: orbis.time=<UTC seconds>.<ns> from clock_gettime(CLOCK_REALTIME)
+  and orbis.time_tsc=<TSC>, so the GE kernel starts with the right date instead
+  of 1970 (the Aeolia RTC is not readable at boot).
+- command line capped at the kernel's 2048 bytes.
 ---
- linux/Makefile                      | 10 +++-
- linux/main-aio.c                    | 91 ++++++++++++++++++++++++++++-
- linux/ps4-kexec-common/linux_boot.c | 32 ++++++++--
- linux/ps4-kexec-common/orbis_vram.h | 78 +++++++++++++++++++++++++
- 4 files changed, 205 insertions(+), 6 deletions(-)
+ linux/Makefile                      |  10 +-
+ linux/main-aio.c                    | 157 +++++++++++++++++++++++++++-
+ linux/ps4-kexec-common/linux_boot.c |  32 +++++-
+ linux/ps4-kexec-common/orbis_vram.h |  78 ++++++++++++++
+ 4 files changed, 271 insertions(+), 6 deletions(-)
  create mode 100644 linux/ps4-kexec-common/orbis_vram.h
 
 diff --git a/linux/Makefile b/linux/Makefile
@@ -50,7 +60,7 @@ index 0f85903..b3ec6f8 100644
  # kexec-diff-check: kexec-bins
  # 	@sha256sum -c $(KEXEC_HASH_MANIFEST)
 diff --git a/linux/main-aio.c b/linux/main-aio.c
-index 7bd9261..6176a66 100644
+index 7bd9261..88f1c86 100644
 --- a/linux/main-aio.c
 +++ b/linux/main-aio.c
 @@ -22,6 +22,7 @@
@@ -61,7 +71,7 @@ index 7bd9261..6176a66 100644
  
  void* dlopen(const char*, int);
  void* dlsym(void*, const char*);
-@@ -228,6 +229,77 @@ int my_atoi(const char *s)
+@@ -228,6 +229,126 @@ int my_atoi(const char *s)
      return neg ? -ret : ret;
  }
  
@@ -107,13 +117,60 @@ index 7bd9261..6176a66 100644
 +    return orbis_append(dst, cap, len, buf);
 +}
 +
++/* Wall-clock time OrbisOS had when the payload ran (UTC) and the TSC at that moment. */
++#define ORBIS_CMDLINE_MAX 2048        /* x86 COMMAND_LINE_SIZE */
++
++struct orbis_boot_time {
++    long long sec;               /* 0 = not available */
++    long nsec;
++    unsigned long long tsc;      /* 0 = not available */
++};
++
++/* " orbis.time=SEC.NNNNNNNNN [orbis.time_tsc=TSC]" */
++static int orbis_append_time(char *dst, unsigned long long cap, unsigned long long *len,
++                             const struct orbis_boot_time *t)
++{
++    char buf[64];
++    int n = 0, k;
++    long long sec = t->sec;
++    long nsec = t->nsec;
++    char digits[24];
++    const char *key = "orbis.time=";
++
++    if (sec <= 0 || nsec < 0 || nsec > 999999999L)
++        return 0;
++    for (k = 0; key[k]; k++)
++        buf[n++] = key[k];
++    k = 0;
++    do {
++        digits[k++] = (char)('0' + sec % 10);
++        sec /= 10;
++    } while (sec && k < 20);
++    while (k)
++        buf[n++] = digits[--k];
++    buf[n++] = '.';
++    for (k = 8; k >= 0; k--) {
++        digits[k] = (char)('0' + nsec % 10);
++        nsec /= 10;
++    }
++    for (k = 0; k < 9; k++)
++        buf[n++] = digits[k];
++    buf[n] = '\0';
++    if (orbis_append(dst, cap, len, buf))
++        return -1;
++    if (t->tsc && orbis_append_num(dst, cap, len, "orbis.time_tsc=", (long long)t->tsc))
++        return -1;
++    return 0;
++}
++
 +/*
-+ * cmdline + " orbis.loader=ge2 orbis.vram_mb=N [orbis.gtt_mb=N ttm.pages_limit=P amdgpu.gttsize=N]"
-+ * into dst. The kernel ignores unknown orbis.* parameters; orbis-blackbox reads them from
-+ * /proc/cmdline to record the boot memory contract.
++ * cmdline + " orbis.loader=ge2 orbis.vram_mb=N [orbis.gtt_mb=N ttm.pages_limit=P amdgpu.gttsize=N]
++ * [orbis.time=SEC.NSEC orbis.time_tsc=TSC]" into dst. orbis.loader/vram/gtt are recorded by
++ * orbis-blackbox; orbis.time sets the kernel's wall clock at boot (GE kernel ge-6.15/0010).
++ * cap must not exceed the kernel's command-line size (2048 on x86).
 + */
 +static int orbis_cmdline_compose(char *dst, unsigned long long cap, const char *src,
-+                                 int vram_mb, int gtt_mb)
++                                 int vram_mb, int gtt_mb, const struct orbis_boot_time *t)
 +{
 +    unsigned long long len = 0;
 +
@@ -133,23 +190,26 @@ index 7bd9261..6176a66 100644
 +            orbis_append_num(dst, cap, &len, "amdgpu.gttsize=", gtt_mb))
 +            return -1;
 +    }
++    if (t && orbis_append_time(dst, cap, &len, t))
++        return -1;
 +    return 0;
 +}
 +
  static int pack_kexec_args(int vram_mb, u16 fw_ver, int sb_val)
  {
      u32 sb_family = (u32)((sb_val >> 16) & 0xF); 
-@@ -374,6 +446,9 @@ int main(void)
+@@ -374,6 +495,10 @@ int main(void)
      char *cmdline = NULL; unsigned long long cmdline_size = 0;
      char *vramstr = NULL; unsigned long long vramstr_size = 0;
      int vram_mb = 0;
 +    char *gttstr = NULL; unsigned long long gttstr_size = 0;
 +    int gtt_mb = 0;
-+    static char cmdline_orbis[4096];
++    static char cmdline_orbis[ORBIS_CMDLINE_MAX];
++    struct orbis_boot_time boot_time = { 0, 0, 0 };
  
  #define L(name, where, wheresz, is_fatal) \
      if (read_file("/mnt/usb0/" name, where, wheresz) \
-@@ -404,12 +479,26 @@ int main(void)
+@@ -404,12 +529,42 @@ int main(void)
      L("vram.txt", &vramstr, &vramstr_size, 0);
      if (vramstr && vramstr_size) {
          vram_mb = my_atoi(vramstr);
@@ -171,8 +231,24 @@ index 7bd9261..6176a66 100644
 +        if (gtt_mb < 256 || gtt_mb > 7680)
 +            gtt_mb = 0;
 +    }
-+    if (orbis_cmdline_compose(cmdline_orbis, sizeof(cmdline_orbis), cmdline, vram_mb, gtt_mb) == 0)
++    // NickLabs Orbis: hand the current time to Linux (the PS4 kernel has no readable RTC
++    // at boot). The TSC lets the kernel add the time the exploit and kexec take.
++    {
++        struct timespec ts;
++        unsigned int lo, hi;
++
++        if (clock_gettime(CLOCK_REALTIME, &ts) == 0 && ts.tv_sec > 1577836800LL) {
++            __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
++            boot_time.sec = ts.tv_sec;
++            boot_time.nsec = ts.tv_nsec;
++            boot_time.tsc = ((unsigned long long)hi << 32) | lo;
++        }
++    }
++    if (orbis_cmdline_compose(cmdline_orbis, ORBIS_CMDLINE_MAX, cmdline, vram_mb, gtt_mb,
++                              &boot_time) == 0)
 +        cmdline = cmdline_orbis;
++    else
++        log_msg("Orbis loader: bootargs.txt too long for the Orbis additions (2048-byte kernel limit)");
 +
      // Launch kernel exploit → kernel_main()
      kexec(kernel_main, (void *)0);
@@ -314,3 +390,6 @@ index 0000000..450674a
 +}
 +
 +#endif
+-- 
+2.43.0
+

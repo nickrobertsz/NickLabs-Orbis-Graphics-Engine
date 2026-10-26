@@ -1,0 +1,62 @@
+From f727e8e2fc271b759ce565332464a466bb75c24b Mon Sep 17 00:00:00 2001
+From: NickLabs Orbis <orbis@nicklabs.invalid>
+Date: Mon, 26 Oct 2026 14:06:13 -0700
+Subject: [PATCH 13/13] x86/ps4: optional Jaguar (btver2) kernel code
+ generation
+
+CONFIG_X86_PS4_JAGUAR_TUNE builds the PS4-only kernel with -march=btver2
+-mtune=btver2 instead of generic x86-64: the Jaguar integer ISA (POPCNT, LZCNT,
+BMI1, MOVBE) and scheduling model. Kernel code keeps -mno-sse/-mno-avx, and
+btver2 has no AVX2/BMI2/FMA, so nothing Jaguar lacks can be emitted. Mirrors
+CachyOS/graysky's per-microarchitecture kernel option for this one CPU.
+
+Status: NickLabs Orbis; not compiled by the author's environment.
+---
+ arch/x86/Kconfig  | 9 +++++++++
+ arch/x86/Makefile | 8 ++++++++
+ 2 files changed, 17 insertions(+)
+
+diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
+index b30141216..5636bb223 100644
+--- a/arch/x86/Kconfig
++++ b/arch/x86/Kconfig
+@@ -591,6 +591,15 @@ config X86_PS4
+ 	depends on PCI
+ 	help
+ 	  Select to include support for the Sony PlayStation 4 game console.
++
++config X86_PS4_JAGUAR_TUNE
++	bool "Build the kernel for the PS4's AMD Jaguar CPU only (-march=btver2)"
++	depends on X86_PS4
++	help
++	  Compile the kernel with -march=btver2 (AMD family 16h, the PS4 CPU):
++	  POPCNT/LZCNT/BMI1/MOVBE and Jaguar instruction scheduling. The kernel no
++	  longer runs on other x86-64 CPUs. Vector instructions stay disabled in
++	  kernel code as usual. AVX2/BMI2/FMA are never used (Jaguar lacks them).
+  
+ config X86_VSMP
+ 	bool "ScaleMP vSMP"
+diff --git a/arch/x86/Makefile b/arch/x86/Makefile
+index 594723005..7b9d69d96 100644
+--- a/arch/x86/Makefile
++++ b/arch/x86/Makefile
+@@ -173,8 +173,16 @@ else
+ 	# Use -mskip-rax-setup if supported.
+ 	KBUILD_CFLAGS += $(call cc-option,-mskip-rax-setup)
+ 
++ifdef CONFIG_X86_PS4_JAGUAR_TUNE
++        # PS4-only kernel: AMD Jaguar (family 16h, btver2). The kernel's own
++        # -mno-sse/-mno-avx flags still keep vector code out; this adds the
++        # integer ISA (POPCNT, LZCNT, BMI1, MOVBE) and Jaguar scheduling.
++        KBUILD_CFLAGS += -march=btver2 -mtune=btver2
++        KBUILD_RUSTFLAGS += -Ctarget-cpu=btver2
++else
+         KBUILD_CFLAGS += -march=x86-64 -mtune=generic
+         KBUILD_RUSTFLAGS += -Ctarget-cpu=x86-64 -Ztune-cpu=generic
++endif
+ 
+         KBUILD_CFLAGS += -mno-red-zone
+         KBUILD_CFLAGS += -mcmodel=kernel
+-- 
+2.43.0
+

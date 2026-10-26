@@ -27,6 +27,17 @@ def added_block(patch: str, start: str, last_function: str) -> str:
     return text[i:j]
 
 
+def post_image_block(patch: str, path: str, function: str) -> str:
+    """One function as it reads after the patch (context + added lines of `path`'s hunks)."""
+    m = re.search(r"^\+\+\+ b/" + re.escape(path) + r"\n(.*?)(?=^diff --git |\Z)", patch, re.S | re.M)
+    assert m, path
+    post = [l[1:] for l in m.group(1).splitlines() if l[:1] in ("+", " ")]
+    text = "\n".join(post)
+    i = text.index(function)
+    j = text.index("\n}\n", i) + 3
+    return text[i:j]
+
+
 @unittest.skipUnless(CC, "no C compiler")
 class LoaderPatchTest(unittest.TestCase):
     def setUp(self):
@@ -56,6 +67,19 @@ class LoaderPatchTest(unittest.TestCase):
         (self.d / "extracted_cmdline.inc").write_text(block + "\n")
         out = self.build_run(REPO / "tests/loader/test_cmdline.c", "-Wno-unused-function")
         self.assertIn("cmdline OK", out)
+
+    def test_kernel_time_parser(self):
+        """ps4_parse_epoch() from the GE kernel patch 0010 (loader time handoff), compiled on the host."""
+        kp = next((REPO / "kernel/patches/ge-6.15").glob("0010-*.patch")).read_text()
+        block = post_image_block(kp, "arch/x86/platform/ps4/ps4.c", "static int __init ps4_parse_epoch")
+        (self.d / "extracted_epoch.inc").write_text(block + "\n")
+        out = self.build_run(REPO / "tests/loader/test_kernel_time.c")
+        self.assertIn("epoch OK", out)
+
+    def test_loader_time_handoff_present(self):
+        self.assertIn('clock_gettime(CLOCK_REALTIME, &ts)', self.patch)
+        self.assertIn('"orbis.time_tsc="', self.patch)
+        self.assertIn("#define ORBIS_CMDLINE_MAX 2048", self.patch)
 
     def test_patch_targets_pinned_loader(self):
         src = (REPO / "manifest/sources.json").read_text()

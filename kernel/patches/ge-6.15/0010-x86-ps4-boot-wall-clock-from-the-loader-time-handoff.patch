@@ -1,0 +1,265 @@
+From c29316345efd546c386ce2fd2ebf545707470c55 Mon Sep 17 00:00:00 2001
+From: NickLabs Orbis <orbis@nicklabs.invalid>
+Date: Mon, 26 Oct 2026 14:03:17 -0700
+Subject: [PATCH 10/13] x86/ps4: boot wall clock from the loader time handoff
+ (orbis.time=, time=)
+
+The PS4 platform code stubbed x86_platform.get_wallclock() to return 0, so every
+boot started on 1970-01-01 until userspace or the network fixed the clock (HTTPS,
+package signatures, Steam and file timestamps all break meanwhile). The Aeolia
+RTC cannot be read this early.
+
+The NickLabs Orbis loader now passes the time OrbisOS had when the payload ran:
+orbis.time=<unix seconds>.<ns> (UTC, clock_gettime(CLOCK_REALTIME)) and
+orbis.time_tsc=<TSC at that moment>. The community payloads' time=CURRENTTIME
+form is accepted too. timekeeping_init() gets that time, plus the kexec time
+measured with the TSC (only when the TSC delta is plausible, <= 900 s). Values
+outside 2020..2100 are rejected. The value is used once; on resume the platform
+keeps reporting "no persistent clock". ps4_loader_wallclock() exposes it to the
+Aeolia RTC driver.
+
+Status: NickLabs Orbis; not compiled or boot-tested by the author's environment.
+---
+ arch/x86/include/asm/ps4.h  |  10 +++
+ arch/x86/platform/ps4/ps4.c | 171 ++++++++++++++++++++++++++++++++++--
+ 2 files changed, 174 insertions(+), 7 deletions(-)
+
+diff --git a/arch/x86/include/asm/ps4.h b/arch/x86/include/asm/ps4.h
+index 09d6f9ec2..fe3a0ee7a 100644
+--- a/arch/x86/include/asm/ps4.h
++++ b/arch/x86/include/asm/ps4.h
+@@ -38,6 +38,10 @@ extern int apcie_status(void);
+ extern int apcie_icc_cmd(u8 major, u16 minor, const void *data,
+ 			 u16 length, void *reply, u16 reply_length);
+ 
++struct timespec64;
++extern bool ps4_loader_wallclock(struct timespec64 *wall, u64 *at_clock_ns,
++				 const char **source);
++
+ 
+ #else
+ 
+@@ -57,6 +61,12 @@ static inline int apcie_icc_cmd(u8 major, u16 minor, const void *data,
+ {
+ 	return -ENODEV;
+ }
++struct timespec64;
++static inline bool ps4_loader_wallclock(struct timespec64 *wall, u64 *at_clock_ns,
++					const char **source)
++{
++	return false;
++}
+ 
+ #endif
+ #endif
+diff --git a/arch/x86/platform/ps4/ps4.c b/arch/x86/platform/ps4/ps4.c
+index 8a3a11263..d9b936a08 100644
+--- a/arch/x86/platform/ps4/ps4.c
++++ b/arch/x86/platform/ps4/ps4.c
+@@ -16,6 +16,10 @@
+ #include <linux/irq.h>
+ #include <linux/module.h>
+ #include <linux/notifier.h>
++#include <linux/kstrtox.h>
++#include <linux/math64.h>
++#include <linux/sched/clock.h>
++#include <linux/time64.h>
+ 
+ #include <asm/setup.h>
+ #include <asm/mpspec_def.h>
+@@ -27,23 +31,176 @@
+ #include <asm/reboot.h>
+ #include <asm/msr.h>
+ #include <asm/ps4.h>
++#include <asm/tsc.h>
+ 
+ static bool is_ps4;
+ bool apcie_initialized;
+ 
+ /*
+- * The RTC is part of the Aeolia PCI device and will be implemented there as
+- * an RTC class device; stub these out.
++ * Wall clock at boot.
++ *
++ * The RTC is part of the Aeolia PCI device and is handled there as an RTC class
++ * device (drivers/ps4/ps4-apcie-rtc.c); it cannot be read this early. Instead the
++ * PS4 loader passes the time OrbisOS had when the payload ran:
++ *
++ *   orbis.time=<unix seconds>[.<fraction>]   NickLabs Orbis loader (UTC)
++ *   orbis.time_tsc=<TSC at that moment>       lets us add the time kexec took
++ *   time=<unix seconds>                       community payloads (time=CURRENTTIME)
++ *
++ * The value is used once, by timekeeping_init(); afterwards (e.g. on resume) the
++ * platform reports "no persistent clock" as before. Values before 2020 or after
++ * 2100 are rejected, so a console with a lost clock never yields a bogus date.
+  */
+-static void dummy_get_wallclock(struct timespec64 *now)
++#define PS4_TIME_MIN	1577836800LL	/* 2020-01-01T00:00:00Z */
++#define PS4_TIME_MAX	4102444800LL	/* 2100-01-01T00:00:00Z */
++#define PS4_TIME_MAX_KEXEC_NS	(900ULL * NSEC_PER_SEC)
++
++static struct timespec64 ps4_boot_wall;
++static u64 ps4_boot_wall_tsc;
++static u64 ps4_boot_wall_set_ns;	/* local_clock() when the wall clock was handed out */
++static bool ps4_boot_wall_valid;
++static bool ps4_boot_wall_used;
++static const char *ps4_boot_wall_src = "none";
++
++static int __init ps4_parse_epoch(const char *s, struct timespec64 *ts)
+ {
+-	now->tv_sec = now->tv_nsec = 0;
++	s64 sec = 0;
++	long nsec = 0;
++	int digits = 0, frac = 0;
++
++	if (!s)
++		return -EINVAL;
++	while (*s >= '0' && *s <= '9') {
++		if (++digits > 12)
++			return -ERANGE;
++		sec = sec * 10 + (*s++ - '0');
++	}
++	if (!digits)
++		return -EINVAL;
++	if (*s == '.') {
++		s++;
++		while (*s >= '0' && *s <= '9') {
++			if (frac < 9) {
++				nsec = nsec * 10 + (*s - '0');
++				frac++;
++			}
++			s++;
++		}
++		while (frac > 0 && frac < 9) {
++			nsec *= 10;
++			frac++;
++		}
++	}
++	if (*s)
++		return -EINVAL;
++	if (sec < PS4_TIME_MIN || sec > PS4_TIME_MAX)
++		return -ERANGE;
++	ts->tv_sec = sec;
++	ts->tv_nsec = nsec;
++	return 0;
+ }
+-static int dummy_set_wallclock(const struct timespec64 *now)
++
++static int __init ps4_orbis_time_setup(char *arg)
++{
++	struct timespec64 ts;
++
++	if (ps4_parse_epoch(arg, &ts))
++		return 0;	/* ignored, reported by ps4_get_wallclock() */
++	ps4_boot_wall = ts;
++	ps4_boot_wall_valid = true;
++	ps4_boot_wall_src = "orbis.time";
++	return 0;
++}
++early_param("orbis.time", ps4_orbis_time_setup);
++
++static int __init ps4_orbis_time_tsc_setup(char *arg)
++{
++	u64 v;
++
++	if (arg && !kstrtoull(arg, 10, &v))
++		ps4_boot_wall_tsc = v;
++	return 0;
++}
++early_param("orbis.time_tsc", ps4_orbis_time_tsc_setup);
++
++static int __init ps4_compat_time_setup(char *arg)
++{
++	struct timespec64 ts;
++
++	/* orbis.time wins when both are present */
++	if (ps4_boot_wall_valid || ps4_parse_epoch(arg, &ts))
++		return 0;
++	ps4_boot_wall = ts;
++	ps4_boot_wall_valid = true;
++	ps4_boot_wall_src = "time";
++	return 0;
++}
++early_param("time", ps4_compat_time_setup);
++
++static void ps4_get_wallclock(struct timespec64 *now)
++{
++	struct timespec64 t;
++	u64 elapsed = 0;
++
++	if (!ps4_boot_wall_valid || ps4_boot_wall_used) {
++		now->tv_sec = now->tv_nsec = 0;
++		return;
++	}
++	t = ps4_boot_wall;
++	if (ps4_boot_wall_tsc && tsc_khz) {
++		u64 tsc_now = rdtsc();
++
++		if (tsc_now > ps4_boot_wall_tsc)
++			elapsed = mul_u64_u32_div(tsc_now - ps4_boot_wall_tsc, 1000000, tsc_khz);
++		if (elapsed > PS4_TIME_MAX_KEXEC_NS)
++			elapsed = 0;	/* TSC not continuous across the handoff: do not guess */
++		else
++			timespec64_add_ns(&t, elapsed);
++	}
++	ps4_boot_wall = t;
++	ps4_boot_wall_set_ns = local_clock();
++	ps4_boot_wall_used = true;
++	*now = t;
++}
++
++static int ps4_set_wallclock(const struct timespec64 *now)
+ {
+ 	return -ENODEV;
+ }
+ 
++/*
++ * For the Aeolia RTC driver: the wall clock handed to timekeeping at boot and the
++ * local_clock() value it corresponds to. Returns false without a loader time.
++ */
++bool ps4_loader_wallclock(struct timespec64 *wall, u64 *at_clock_ns, const char **source)
++{
++	if (!ps4_boot_wall_valid || !ps4_boot_wall_used)
++		return false;
++	if (wall)
++		*wall = ps4_boot_wall;
++	if (at_clock_ns)
++		*at_clock_ns = ps4_boot_wall_set_ns;
++	if (source)
++		*source = ps4_boot_wall_src;
++	return true;
++}
++EXPORT_SYMBOL_GPL(ps4_loader_wallclock);
++
++static int __init ps4_wallclock_report(void)
++{
++	if (!is_ps4)
++		return 0;
++	if (ps4_boot_wall_used)
++		pr_info("wall clock from the loader (%s): %lld.%09ld UTC%s\n", ps4_boot_wall_src,
++			(long long)ps4_boot_wall.tv_sec, ps4_boot_wall.tv_nsec,
++			ps4_boot_wall_tsc ? " (+ kexec time from TSC)" : "");
++	else
++		pr_warn("no valid loader time (orbis.time=/time=): the clock starts at 1970 until "
++			"userspace restores it\n");
++	return 0;
++}
++late_initcall(ps4_wallclock_report);
++
+ /*
+  * Provide a way for generic drivers to query for the availability of the
+  * PS4 apcie driver/device, which is a dependency for them.
+@@ -66,8 +223,8 @@ void __init x86_ps4_early_setup(void)
+ 	pr_info("x86_ps4_early_setup: PS4 early setup\n");
+ 	is_ps4 = true;
+ 	x86_platform.calibrate_tsc = ps4_calibrate_tsc;
+-	x86_platform.get_wallclock = dummy_get_wallclock;
+-	x86_platform.set_wallclock = dummy_set_wallclock;
++	x86_platform.get_wallclock = ps4_get_wallclock;
++	x86_platform.set_wallclock = ps4_set_wallclock;
+ 
+ 	legacy_pic = &null_legacy_pic;
+ 	machine_ops.emergency_restart = icc_reboot;
+-- 
+2.43.0
+

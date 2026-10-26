@@ -1,0 +1,90 @@
+# NickLabs Orbis performance layer (Nobara/CachyOS-derived, adapted to Jaguar/Liverpool).
+# Merged after orbis-ge.fragment by kernel/build-ge-kernel.sh. Nobara 6.15's config
+# (Nobara-Project/rpm-sources baseos/kernel/mainline/6.15/config) is the reference.
+
+# --- scheduling: EEVDF baseline with CachyOS defaults, sched_ext for runtime BPF schedulers
+CONFIG_CACHY=y
+CONFIG_PREEMPT_DYNAMIC=y
+CONFIG_SCHED_AUTOGROUP=y
+CONFIG_BPF_SYSCALL=y
+CONFIG_BPF_JIT=y
+CONFIG_BPF_JIT_ALWAYS_ON=y
+CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=y
+# CONFIG_DEBUG_INFO_REDUCED is not set
+# CONFIG_DEBUG_INFO_SPLIT is not set
+CONFIG_DEBUG_INFO_BTF=y
+CONFIG_DEBUG_INFO_BTF_MODULES=y
+CONFIG_SCHED_CLASS_EXT=y
+CONFIG_CGROUP_BPF=y
+CONFIG_BPF_EVENTS=y
+CONFIG_FTRACE=y
+CONFIG_UCLAMP_TASK=y
+CONFIG_UCLAMP_TASK_GROUP=y
+
+# --- cgroup v2 resource control used by the Orbis performance controller
+CONFIG_CPUSETS=y
+CONFIG_CGROUP_DMEM=y
+CONFIG_PSI=y
+
+# --- Windows synchronization for Wine/Proton (fsync = futex_waitv, mainline)
+CONFIG_NTSYNC=y
+CONFIG_FUTEX=y
+
+# --- memory: MGLRU, zram (no disk swap on the USB drive), le9uo protection
+CONFIG_LRU_GEN=y
+CONFIG_LRU_GEN_ENABLED=y
+CONFIG_ZRAM=y
+CONFIG_ZRAM_BACKEND_LZ4=y
+CONFIG_ZRAM_BACKEND_ZSTD=y
+CONFIG_ZRAM_DEF_COMP_LZ4=y
+CONFIG_ZRAM_WRITEBACK=y
+CONFIG_ZSWAP=y
+# CONFIG_ZSWAP_DEFAULT_ON is not set
+CONFIG_TRANSPARENT_HUGEPAGE=y
+CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y
+CONFIG_ANON_MIN_RATIO=1
+CONFIG_CLEAN_LOW_RATIO=15
+CONFIG_CLEAN_MIN_RATIO=4
+
+# --- I/O schedulers (chosen per device and mode at runtime)
+CONFIG_MQ_IOSCHED_DEADLINE=y
+CONFIG_MQ_IOSCHED_KYBER=y
+CONFIG_IOSCHED_BFQ=y
+CONFIG_BFQ_GROUP_IOSCHED=y
+CONFIG_MQ_IOSCHED_ADIOS=y
+
+# --- network queueing (LAN streaming, Steam downloads)
+CONFIG_TCP_CONG_BBR=y
+CONFIG_NET_SCH_FQ=y
+CONFIG_NET_SCH_FQ_CODEL=y
+CONFIG_NET_SCH_CAKE=m
+CONFIG_DEFAULT_FQ_CODEL=y
+
+# --- real-time clock: Aeolia RTC driver (ps4-apcie-rtc); never the PC CMOS RTC
+CONFIG_RTC_CLASS=y
+CONFIG_RTC_HCTOSYS=y
+CONFIG_RTC_HCTOSYS_DEVICE="rtc0"
+CONFIG_RTC_SYSTOHC=y
+CONFIG_RTC_SYSTOHC_DEVICE="rtc0"
+CONFIG_RTC_INTF_SYSFS=y
+CONFIG_RTC_INTF_PROC=y
+CONFIG_RTC_INTF_DEV=y
+# CONFIG_RTC_DRV_CMOS is not set
+# CONFIG_RTC_DRV_EFI is not set
+# CONFIG_HPET_EMULATE_RTC is not set
+
+# --- controllers for games
+CONFIG_INPUT_UINPUT=y
+CONFIG_HID_PLAYSTATION=y
+CONFIG_HID_SONY=y
+CONFIG_HID_STEAM=y
+CONFIG_HID_NINTENDO=y
+CONFIG_JOYSTICK_XPAD=y
+CONFIG_JOYSTICK_XPAD_FF=y
+
+# --- containers used by Steam (pressure-vessel) and Flatpak
+CONFIG_USER_NS=y
+CONFIG_USER_NS_UNPRIVILEGED=y
+
+# --- compiler target: Jaguar only (ge-6.15/0013)
+CONFIG_X86_PS4_JAGUAR_TUNE=y

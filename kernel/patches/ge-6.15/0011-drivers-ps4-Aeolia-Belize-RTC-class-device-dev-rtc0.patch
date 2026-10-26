@@ -1,0 +1,395 @@
+From eca5d7e69935b1a7d316526d142d69f2db482d5e Mon Sep 17 00:00:00 2001
+From: NickLabs Orbis <orbis@nicklabs.invalid>
+Date: Mon, 26 Oct 2026 14:04:31 -0700
+Subject: [PATCH 11/13] drivers/ps4: Aeolia/Belize RTC class device (/dev/rtc0)
+
+The PS4 kernels have no RTC driver (CONFIG_RTC_CLASS was off; the Aeolia RTC
+sub-function was never implemented), so there is no /dev/rtc0, hwclock fails
+and the clock cannot be restored from hardware.
+
+New RTC class device on the Aeolia apcie device with an explicit time base:
+
+- hardware: with ps4_rtc.hw_probe=1 and ps4_rtc.counter_reg=<offset>, the
+  battery-backed counter in the RTC window (first page of BAR2; MMIO, not RAM)
+  plus a calendar offset. The offset is calibrated at boot from the loader time
+  (orbis.time=) or restored by userspace through sysfs "offset", the way OrbisOS
+  keeps its own offset. This keeps the clock right on boots without a loader time.
+- loader: the loader's wall clock plus the time since then (valid for this boot).
+
+Setting the time only moves the offset; the hardware is never written. The
+register window is read only with ps4_rtc.hw_probe=1 (undocumented registers;
+uart init on the same device is known to hang), and then debugfs
+ps4_rtc/window shows it for counter discovery. sysfs: source, offset,
+hw_counter. Without any base no device is registered. The PS4 secure clock is
+not involved.
+
+Status: NickLabs Orbis; not compiled or tested on hardware. The counter offset
+is unknown until discovered on a console (orbis-time rtc-probe).
+---
+ drivers/ps4/Makefile        |   2 +
+ drivers/ps4/ps4-apcie-rtc.c | 306 ++++++++++++++++++++++++++++++++++++
+ drivers/ps4/ps4-apcie.c     |  11 ++
+ 3 files changed, 319 insertions(+)
+ create mode 100644 drivers/ps4/ps4-apcie-rtc.c
+
+diff --git a/drivers/ps4/Makefile b/drivers/ps4/Makefile
+index 049136353..8b6fa2ae2 100644
+--- a/drivers/ps4/Makefile
++++ b/drivers/ps4/Makefile
+@@ -8,3 +8,5 @@ obj-y += ps4-apcie.o \
+ 	ps4-apcie-pwrbutton.o \
+ 	icc/i2c.o \
+ 	ps4-fan.o
++# NickLabs Orbis: Aeolia RTC (loader-calibrated, optional hardware counter)
++obj-$(CONFIG_RTC_CLASS) += ps4-apcie-rtc.o
+diff --git a/drivers/ps4/ps4-apcie-rtc.c b/drivers/ps4/ps4-apcie-rtc.c
+new file mode 100644
+index 000000000..6a6703ca4
+--- /dev/null
++++ b/drivers/ps4/ps4-apcie-rtc.c
+@@ -0,0 +1,306 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * PS4 Aeolia/Belize real-time clock (NickLabs Orbis).
++ *
++ * What is known: the southbridge keeps a battery-backed free-running counter
++ * (the EMC "rtc" command reports an "RTC Counter"), and its register window is
++ * the first page of Aeolia BAR2 (APCIE_RGN_RTC_BASE, MSI sub-function 13). OrbisOS
++ * keeps the calendar date as counter + offset; the offset lives in OrbisOS
++ * storage that Linux cannot read. The register layout is not documented.
++ *
++ * So this driver offers two time bases and says which one it uses:
++ *
++ *   hardware   ps4_rtc.hw_probe=1 ps4_rtc.counter_reg=<offset>: the battery-backed
++ *              counter at that offset of the RTC window (ps4_rtc.counter_hz ticks
++ *              per second, default 1). The offset to the calendar is calibrated at
++ *              boot from the loader's time (orbis.time=) or restored by userspace
++ *              (sysfs "offset", saved by orbis-time on every shutdown), so the clock
++ *              stays right on boots without a loader time and across power cycles.
++ *   loader     the wall clock the loader handed over at boot plus the time since
++ *              then (no battery: valid for this boot only).
++ *
++ * Writing the time (hwclock --systohc, the kernel's NTP sync) moves the offset; it
++ * never writes the hardware. Reading the RTC window happens only with
++ * ps4_rtc.hw_probe=1 (default off) because the registers are undocumented; with it,
++ * debugfs ps4_rtc/window shows the first probe_len bytes for counter discovery
++ * (orbis-time rtc-probe). The window is device MMIO (a PCI BAR), not system RAM.
++ *
++ * The PS4's secure (licence/trophy) clock is separate and is never touched.
++ */
++#include <linux/debugfs.h>
++#include <linux/io.h>
++#include <linux/kernel.h>
++#include <linux/moduleparam.h>
++#include <linux/pci.h>
++#include <linux/rtc.h>
++#include <linux/sched/clock.h>
++#include <linux/seq_file.h>
++#include <linux/spinlock.h>
++#include <linux/timekeeping.h>
++#include <asm/ps4.h>
++
++#include "aeolia.h"
++
++#undef MODULE_PARAM_PREFIX
++#define MODULE_PARAM_PREFIX "ps4_rtc."
++
++static bool hw_probe;
++module_param(hw_probe, bool, 0444);
++MODULE_PARM_DESC(hw_probe, "Read the Aeolia RTC register window (undocumented; default off)");
++
++static int counter_reg = -1;
++module_param(counter_reg, int, 0444);
++MODULE_PARM_DESC(counter_reg, "Byte offset of the battery-backed counter in the RTC window (-1 = unknown)");
++
++static unsigned int counter_hz = 1;
++module_param(counter_hz, uint, 0444);
++MODULE_PARM_DESC(counter_hz, "Counter ticks per second (default 1)");
++
++static unsigned int probe_len = 0x100;
++module_param(probe_len, uint, 0444);
++MODULE_PARM_DESC(probe_len, "Bytes of the RTC window shown in debugfs with hw_probe=1 (max 4096)");
++
++enum ps4_rtc_base { PS4_RTC_NONE, PS4_RTC_HW, PS4_RTC_LOADER };
++
++struct ps4_rtc {
++	struct apcie_dev *sc;
++	struct rtc_device *rtc;
++	void __iomem *win;		/* BAR2 + APCIE_RGN_RTC_BASE, only with hw_probe */
++	bool region;
++	enum ps4_rtc_base base;
++	spinlock_t lock;
++	s64 offset;			/* calendar seconds = base seconds + offset */
++	bool offset_valid;
++	const char *offset_from;	/* "loader", "userspace", "rtc-set" */
++	struct dentry *dbg;
++};
++
++static struct ps4_rtc *ps4_rtc_dev;
++
++static u64 ps4_rtc_counter_raw(struct ps4_rtc *r)
++{
++	return ioread32(r->win + counter_reg);
++}
++
++/* Seconds of the active time base, now. */
++static s64 ps4_rtc_base_now(struct ps4_rtc *r)
++{
++	if (r->base == PS4_RTC_HW)
++		return div_u64(ps4_rtc_counter_raw(r), counter_hz ? counter_hz : 1);
++	return div_u64(local_clock(), NSEC_PER_SEC);
++}
++
++static int ps4_rtc_read_time(struct device *dev, struct rtc_time *tm)
++{
++	struct ps4_rtc *r = ps4_rtc_dev;
++	unsigned long flags;
++	s64 t;
++
++	spin_lock_irqsave(&r->lock, flags);
++	if (!r->offset_valid) {
++		spin_unlock_irqrestore(&r->lock, flags);
++		return -EINVAL;	/* no calibration yet: report "no valid time" */
++	}
++	t = ps4_rtc_base_now(r) + r->offset;
++	spin_unlock_irqrestore(&r->lock, flags);
++	rtc_time64_to_tm(t, tm);
++	return 0;
++}
++
++static int ps4_rtc_set_time(struct device *dev, struct rtc_time *tm)
++{
++	struct ps4_rtc *r = ps4_rtc_dev;
++	unsigned long flags;
++
++	spin_lock_irqsave(&r->lock, flags);
++	r->offset = rtc_tm_to_time64(tm) - ps4_rtc_base_now(r);
++	r->offset_valid = true;
++	r->offset_from = "rtc-set";
++	spin_unlock_irqrestore(&r->lock, flags);
++	return 0;
++}
++
++static const struct rtc_class_ops ps4_rtc_ops = {
++	.read_time = ps4_rtc_read_time,
++	.set_time = ps4_rtc_set_time,
++};
++
++static const char *ps4_rtc_base_name(enum ps4_rtc_base b)
++{
++	return b == PS4_RTC_HW ? "hardware" : b == PS4_RTC_LOADER ? "loader" : "none";
++}
++
++static ssize_t source_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct ps4_rtc *r = ps4_rtc_dev;
++
++	return sysfs_emit(buf, "base=%s offset=%s calibrated_from=%s counter_reg=%d counter_hz=%u\n",
++			  ps4_rtc_base_name(r->base), r->offset_valid ? "valid" : "unknown",
++			  r->offset_from ? r->offset_from : "none", counter_reg, counter_hz);
++}
++static DEVICE_ATTR_RO(source);
++
++static ssize_t offset_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct ps4_rtc *r = ps4_rtc_dev;
++
++	if (!r->offset_valid)
++		return sysfs_emit(buf, "unknown\n");
++	return sysfs_emit(buf, "%lld\n", (long long)r->offset);
++}
++
++/* userspace restores the offset it saved for the hardware counter on the last boot */
++static ssize_t offset_store(struct device *dev, struct device_attribute *attr,
++			    const char *buf, size_t count)
++{
++	struct ps4_rtc *r = ps4_rtc_dev;
++	unsigned long flags;
++	s64 v;
++	int ret;
++
++	if (r->base != PS4_RTC_HW)
++		return -EOPNOTSUPP;	/* the loader base restarts every boot; nothing to restore */
++	ret = kstrtos64(buf, 10, &v);
++	if (ret)
++		return ret;
++	spin_lock_irqsave(&r->lock, flags);
++	r->offset = v;
++	r->offset_valid = true;
++	r->offset_from = "userspace";
++	spin_unlock_irqrestore(&r->lock, flags);
++	return count;
++}
++static DEVICE_ATTR_RW(offset);
++
++static ssize_t hw_counter_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct ps4_rtc *r = ps4_rtc_dev;
++
++	if (r->base != PS4_RTC_HW)
++		return sysfs_emit(buf, "unavailable\n");
++	return sysfs_emit(buf, "%llu\n", ps4_rtc_counter_raw(r));
++}
++static DEVICE_ATTR_RO(hw_counter);
++
++static struct attribute *ps4_rtc_attrs[] = {
++	&dev_attr_source.attr,
++	&dev_attr_offset.attr,
++	&dev_attr_hw_counter.attr,
++	NULL,
++};
++
++static const struct attribute_group ps4_rtc_group = {
++	.attrs = ps4_rtc_attrs,
++};
++
++static int ps4_rtc_window_show(struct seq_file *m, void *v)
++{
++	struct ps4_rtc *r = m->private;
++	unsigned int len = min_t(unsigned int, probe_len, APCIE_RGN_RTC_SIZE) & ~3u;
++	unsigned int off;
++
++	seq_printf(m, "# Aeolia RTC window (BAR2+0x%x), %u bytes, read-only, ns=%llu\n",
++		   APCIE_RGN_RTC_BASE, len, local_clock());
++	for (off = 0; off < len; off += 4) {
++		if (!(off & 0xf))
++			seq_printf(m, "%03x:", off);
++		seq_printf(m, " %08x", ioread32(r->win + off));
++		if ((off & 0xf) == 0xc)
++			seq_putc(m, '\n');
++	}
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(ps4_rtc_window);
++
++int apcie_rtc_init(struct apcie_dev *sc)
++{
++	struct ps4_rtc *r;
++	struct timespec64 wall;
++	u64 wall_at;
++	const char *wsrc;
++	bool have_loader = ps4_loader_wallclock(&wall, &wall_at, &wsrc);
++	int ret;
++
++	r = devm_kzalloc(&sc->pdev->dev, sizeof(*r), GFP_KERNEL);
++	if (!r)
++		return -ENOMEM;
++	r->sc = sc;
++	spin_lock_init(&r->lock);
++
++	if (hw_probe) {
++		if (request_mem_region(pci_resource_start(sc->pdev, 2) + APCIE_RGN_RTC_BASE,
++				       APCIE_RGN_RTC_SIZE, "apcie.rtc")) {
++			r->region = true;
++			r->win = sc->bar2 + APCIE_RGN_RTC_BASE;
++		} else {
++			sc_err("rtc: RTC window busy; hardware counter not used\n");
++		}
++	}
++	if (r->win && counter_reg >= 0 && counter_reg <= APCIE_RGN_RTC_SIZE - 4 && !(counter_reg & 3))
++		r->base = PS4_RTC_HW;
++	else if (have_loader)
++		r->base = PS4_RTC_LOADER;
++
++	if (have_loader && r->base != PS4_RTC_NONE) {
++		/* the loader's boot time, advanced to now, against the active base */
++		s64 now = wall.tv_sec + (s64)div_u64(local_clock() - wall_at, NSEC_PER_SEC);
++
++		r->offset = now - ps4_rtc_base_now(r);
++		r->offset_valid = true;
++		r->offset_from = "loader";
++	}
++
++	if (r->win) {
++		r->dbg = debugfs_create_dir("ps4_rtc", NULL);
++		debugfs_create_file("window", 0400, r->dbg, r, &ps4_rtc_window_fops);
++	}
++
++	if (r->base == PS4_RTC_NONE) {
++		sc_info("rtc: no time base (no loader time%s); /dev/rtc not registered\n",
++			r->win ? ", counter_reg unknown: see debugfs ps4_rtc/window" : "");
++		ps4_rtc_dev = r;
++		return 0;
++	}
++
++	r->rtc = devm_rtc_allocate_device(&sc->pdev->dev);
++	if (IS_ERR(r->rtc)) {
++		ret = PTR_ERR(r->rtc);
++		goto fail;
++	}
++	r->rtc->ops = &ps4_rtc_ops;
++	r->rtc->range_min = 0;
++	r->rtc->range_max = 4102444799LL;	/* 2099-12-31 */
++	ret = rtc_add_group(r->rtc, &ps4_rtc_group);
++	if (ret)
++		goto fail;
++	ps4_rtc_dev = r;	/* the ops and sysfs files use it; registration may read the time */
++	ret = devm_rtc_register_device(r->rtc);
++	if (ret) {
++		ps4_rtc_dev = NULL;
++		goto fail;
++	}
++	sc_info("rtc: %s registered, base=%s, offset %s (%s)\n", dev_name(&r->rtc->dev),
++		ps4_rtc_base_name(r->base), r->offset_valid ? "calibrated" : "unknown",
++		r->offset_from ? r->offset_from : "waiting for userspace");
++	return 0;
++fail:
++	debugfs_remove_recursive(r->dbg);
++	if (r->region)
++		release_mem_region(pci_resource_start(sc->pdev, 2) + APCIE_RGN_RTC_BASE,
++				   APCIE_RGN_RTC_SIZE);
++	sc_err("rtc: registration failed (%d)\n", ret);
++	return ret;
++}
++
++void apcie_rtc_remove(struct apcie_dev *sc)
++{
++	struct ps4_rtc *r = ps4_rtc_dev;
++
++	if (!r || r->sc != sc)
++		return;
++	debugfs_remove_recursive(r->dbg);
++	if (r->region)
++		release_mem_region(pci_resource_start(sc->pdev, 2) + APCIE_RGN_RTC_BASE,
++				   APCIE_RGN_RTC_SIZE);
++	ps4_rtc_dev = NULL;
++}
+diff --git a/drivers/ps4/ps4-apcie.c b/drivers/ps4/ps4-apcie.c
+index 285f25ff8..b2a567b51 100644
+--- a/drivers/ps4/ps4-apcie.c
++++ b/drivers/ps4/ps4-apcie.c
+@@ -502,6 +502,13 @@ static int apcie_glue_resume(struct apcie_dev *sc) {
+ 
+ int apcie_uart_init(struct apcie_dev *sc);
+ int apcie_icc_init(struct apcie_dev *sc);
++#ifdef CONFIG_RTC_CLASS
++int apcie_rtc_init(struct apcie_dev *sc);
++void apcie_rtc_remove(struct apcie_dev *sc);
++#else
++static inline int apcie_rtc_init(struct apcie_dev *sc) { return 0; }
++static inline void apcie_rtc_remove(struct apcie_dev *sc) { }
++#endif
+ void apcie_uart_remove(struct apcie_dev *sc);
+ void apcie_icc_remove(struct apcie_dev *sc);
+ #ifdef CONFIG_PM
+@@ -557,6 +564,9 @@ static int apcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
+ 	//	goto remove_glue;
+ 	if ((ret = apcie_icc_init(sc)) < 0)
+ 		goto remove_glue;
++	/* the RTC is optional: a failure leaves the clock to the loader time / userspace */
++	if (apcie_rtc_init(sc) < 0)
++		sc_err("RTC not available\n");
+ 
+ 	apcie_initialized = true;
+ 	return 0;
+@@ -582,6 +592,7 @@ static void apcie_remove(struct pci_dev *dev) {
+ 	struct apcie_dev *sc;
+ 	sc = pci_get_drvdata(dev);
+ 
++	apcie_rtc_remove(sc);
+ 	apcie_icc_remove(sc);
+ 	apcie_uart_remove(sc);
+ 	apcie_glue_remove(sc);
+-- 
+2.43.0
+
