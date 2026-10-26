@@ -1,13 +1,14 @@
-# NickLabs Orbis Graphics Pack 1.0.0 — diagnostics, qualification, health, profiles, stage-0 overlay.
+# NickLabs Orbis Graphics 2.0.0 (Graphics Engine release) — diagnostics, qualification, health, profiles,
+# stage-0 overlay. 2.0.0 adds the Graphics Engine qualification checks and SCLK/fan profile settings.
 # Built from the graphics source tree this PKGBUILD lives in (build/build-pack.sh).
 pkgname=orbis-graphics
-pkgver=1.0.0
+pkgver=2.0.0
 pkgrel=1
-pkgdesc="NickLabs Orbis Graphics Pack tools: orbis-gpu (qualify/health/profile), orbis-gfx-probe, GPU stage-0 diagnosis"
+pkgdesc="NickLabs Orbis Graphics tools (Graphics Engine 2.0): orbis-gpu (qualify/health/profile), orbis-gfx-probe, GPU stage-0 diagnosis"
 arch=('x86_64')
 url="https://github.com/nicklabs/orbis-graphics"
 license=('MIT')
-depends=('python>=3.11' 'mesa-orbis-ps4>=26.2.5-101' 'vulkan-icd-loader' 'libglvnd' 'orbis-platform'
+depends=('python>=3.11' 'mesa-orbis-ps4>=26.2.5-201' 'vulkan-icd-loader' 'libglvnd' 'orbis-platform'
          'vulkan-tools' 'mesa-utils' 'libva-utils' 'clinfo' 'ocl-icd' 'util-linux')
 optdepends=('opencl-mesa-orbis-ps4: OpenCL (RustiCL) test target' 'ffmpeg: video decode checksum test'
             'drm_info: detailed KMS dump')

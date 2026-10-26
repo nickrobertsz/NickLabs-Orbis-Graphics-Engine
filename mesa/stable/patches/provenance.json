@@ -1,38 +1,69 @@
 {
-  "schema": 1,
-  "upstream": {"project": "Mesa", "version": "26.2.5", "tag": "mesa-26.2.5",
-               "commit": "ddaf85e353442d9d7f192fdcf1823e652e3f2ee3",
-               "tag_object": "f9ce5e81f30cd694726bff6d8197e509a8374ea7",
-               "archive": "https://archive.mesa3d.org/mesa-26.2.5.tar.xz",
-               "archive_sha256": "794b3d1729075dae7ebd47c7283b7ca0cdb5dec668f7f11cc0a5d82f6138a0a5",
-               "verified_by_orbis": "commit and tag object cross-checked between linux-psx sources.json and the chaotic-cx/mesa-mirror GitHub mirror; archive hash taken from linux-psx (copied from official release notes) — archive not downloaded by Orbis yet"},
-  "patches": [
-    {"file": "0001-ps4-graphics-families.patch",
-     "sha256": "b3cf0f24fd00f156bbba12be0c270189ad30c274646b5e86298890e4cb4829cc",
-     "from": "meerzulee/linux-psx@a1910182508b3609abdf22d14790de04bb036fdf userspace/mesa/patches/",
-     "origin": "port of DionKill/ps4-video-archlinux@57e0f8e mesa-ps4/ps4-mesa.patch (commit author: froyo); Liverpool/Gladius family IDs, raster config, GS depth, cache class",
-     "license": "MIT (Mesa per-file notices)",
-     "why": "required: without it Mesa does not recognise Liverpool/Gladius",
-     "orbis_check": "applies with patch -F0 to mesa-26.2.5 (src/amd); enum placed after BONAIRE (fixes the ordering hazard in the original DionKill patch)"},
-    {"file": "0003-addrlib-selected-fmask-entry.patch",
-     "sha256": "10f6369f300bd884290cc812254ee3f66694b3d0fdaeee37451b1f93561ba07c",
-     "from": "meerzulee/linux-psx@a1910182508b3609abdf22d14790de04bb036fdf",
-     "origin": "Omarchy psX contributors",
-     "license": "MIT",
-     "why": "Firefox/Chromium abort on 2D MSAA renderbuffer allocation with assertions enabled (Liverpool tile table)",
-     "orbis_check": "applies after 0001"},
-    {"file": "0005-radv-bound-meta-fill-offset.patch",
-     "sha256": "92256289369f880d6c8a85c7bec8341c29da6b7d13706bc4120795e99788ae25",
-     "from": "meerzulee/linux-psx@a1910182508b3609abdf22d14790de04bb036fdf",
-     "origin": "Linux psX contributors",
-     "license": "MIT",
-     "why": "keeps RADV compute fill on MUBUF instead of FLAT on GFX7; linux-psx observed Vulkan hangs on the FLAT path and passes with this patch on one Baikal console",
-     "orbis_check": "applies after 0003"}
-  ],
-  "excluded": [
-    {"file": "0002-ps4-uvd-avc-capabilities.patch", "reason": "pairs with the experimental UVD kernel runtime that Orbis kernels do not carry; video decode stays software"},
-    {"file": "0004-radv-liverpool-disable-htile.patch", "reason": "inactive upstream since dev5 (0005 supersedes it)"},
-    {"file": "DionKill ps4-mesa.patch clc_helpers.cpp hunk", "reason": "unrelated LLVM 21 build fix; not PS4-specific"},
-    {"file": "DionKill radeon_surface.c enum hunk", "reason": "unused private enum; radeon winsys is not used"}
-  ]
+ "schema": 1,
+ "upstream": {
+  "project": "Mesa",
+  "version": "26.2.5",
+  "tag": "mesa-26.2.5",
+  "commit": "ddaf85e353442d9d7f192fdcf1823e652e3f2ee3",
+  "tag_object": "f9ce5e81f30cd694726bff6d8197e509a8374ea7",
+  "archive": "https://archive.mesa3d.org/mesa-26.2.5.tar.xz",
+  "archive_sha256": "794b3d1729075dae7ebd47c7283b7ca0cdb5dec668f7f11cc0a5d82f6138a0a5",
+  "verified_by_orbis": "commit and tag object cross-checked between linux-psx sources.json and the chaotic-cx/mesa-mirror GitHub mirror; archive hash taken from linux-psx (copied from official release notes) \u2014 archive not downloaded by Orbis yet"
+ },
+ "patches": [
+  {
+   "file": "0001-ps4-graphics-families.patch",
+   "sha256": "b3cf0f24fd00f156bbba12be0c270189ad30c274646b5e86298890e4cb4829cc",
+   "from": "meerzulee/linux-psx@a1910182508b3609abdf22d14790de04bb036fdf userspace/mesa/patches/",
+   "origin": "port of DionKill/ps4-video-archlinux@57e0f8e mesa-ps4/ps4-mesa.patch (commit author: froyo); Liverpool/Gladius family IDs, raster config, GS depth, cache class",
+   "license": "MIT (Mesa per-file notices)",
+   "why": "required: without it Mesa does not recognise Liverpool/Gladius",
+   "orbis_check": "applies with patch -F0 to mesa-26.2.5 (src/amd); enum placed after BONAIRE (fixes the ordering hazard in the original DionKill patch)"
+  },
+  {
+   "file": "0002-ps4-uvd-avc-capabilities.patch",
+   "sha256": "ea9d72c9335872b1cf41611ba225e4b645b5ecd81feff8323f4302e038196ac0",
+   "from": "meerzulee/linux-psx@2138063970722631aa0a7cb7f034ba3e11b82507 userspace/mesa/patches/ (blob 843cb0b)",
+   "origin": "Linux psX contributors",
+   "license": "MIT (Mesa per-file notices)",
+   "why": "Graphics Engine 2.0 video: Mesa only offers VA-API H.264 decode on Liverpool when the kernel exposes a UVD queue and reports AVC caps; otherwise no video caps (fail closed)",
+   "orbis_check": "applies with patch -F0 after 0001 to mesa-26.2.5 ac_video.c (checked against chaotic-cx/mesa-mirror @ddaf85e, tag mesa-26.2.5); not compiled here"
+  },
+  {
+   "file": "0003-addrlib-selected-fmask-entry.patch",
+   "sha256": "10f6369f300bd884290cc812254ee3f66694b3d0fdaeee37451b1f93561ba07c",
+   "from": "meerzulee/linux-psx@a1910182508b3609abdf22d14790de04bb036fdf",
+   "origin": "Omarchy psX contributors",
+   "license": "MIT",
+   "why": "Firefox/Chromium abort on 2D MSAA renderbuffer allocation with assertions enabled (Liverpool tile table)",
+   "orbis_check": "applies after 0001"
+  },
+  {
+   "file": "0005-radv-bound-meta-fill-offset.patch",
+   "sha256": "92256289369f880d6c8a85c7bec8341c29da6b7d13706bc4120795e99788ae25",
+   "from": "meerzulee/linux-psx@a1910182508b3609abdf22d14790de04bb036fdf",
+   "origin": "Linux psX contributors",
+   "license": "MIT",
+   "why": "keeps RADV compute fill on MUBUF instead of FLAT on GFX7; linux-psx observed Vulkan hangs on the FLAT path and passes with this patch on one Baikal console",
+   "orbis_check": "applies after 0003"
+  }
+ ],
+ "excluded": [
+  {
+   "file": "0002-ps4-uvd-avc-capabilities.patch",
+   "reason": "pairs with the experimental UVD kernel runtime that Orbis kernels do not carry; video decode stays software"
+  },
+  {
+   "file": "0004-radv-liverpool-disable-htile.patch",
+   "reason": "inactive upstream since dev5 (0005 supersedes it)"
+  },
+  {
+   "file": "DionKill ps4-mesa.patch clc_helpers.cpp hunk",
+   "reason": "unrelated LLVM 21 build fix; not PS4-specific"
+  },
+  {
+   "file": "DionKill radeon_surface.c enum hunk",
+   "reason": "unused private enum; radeon winsys is not used"
+  }
+ ]
 }

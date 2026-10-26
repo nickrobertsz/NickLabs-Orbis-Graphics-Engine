@@ -1,12 +1,14 @@
-# NickLabs Orbis Graphics Pack 1.0.0 — meta package: everything the pack installs on a CUH-1215A image.
+# NickLabs Orbis Graphics Engine 2.0.0 — meta package: everything the release installs on a CUH-1215A image
+# (the name orbis-graphics-pack is kept so 1.0.0 -> 2.0.0 is an ordinary upgrade and rollback scripts stay simple).
 pkgname=orbis-graphics-pack
-pkgver=1.0.0
+pkgver=2.0.0
 pkgrel=1
-pkgdesc="NickLabs Orbis Graphics Pack 1.0.0 (stable Mesa line, RustiCL, 32-bit Mesa, diagnostics, tools)"
+pkgdesc="NickLabs Orbis Graphics Engine 2.0.0 (GE kernel, Mesa 26.2.5-201, RustiCL, 32-bit Mesa, Black Box, memory policy, tools)"
 arch=('any')
 url="https://github.com/nicklabs/orbis-graphics"
 license=('MIT')
-depends=('orbis-graphics=1.0.0'
-         'mesa-orbis-ps4>=26.2.5-101' 'opencl-mesa-orbis-ps4>=26.2.5-101' 'lib32-mesa-orbis-ps4>=26.2.5-101'
+depends=('orbis-graphics=2.0.0' 'orbis-graphics-engine=2.0.0' 'linux-orbis-ps4-ge'
+         'mesa-orbis-ps4>=26.2.5-201' 'opencl-mesa-orbis-ps4>=26.2.5-201' 'lib32-mesa-orbis-ps4>=26.2.5-201'
          'xf86-video-amdgpu-orbis-ps4' 'vulkan-icd-loader' 'lib32-vulkan-icd-loader' 'ocl-icd'
-         'vulkan-tools' 'mesa-utils' 'libva-utils' 'clinfo' 'drm_info' 'lm_sensors')
+         'vulkan-tools' 'mesa-utils' 'libva-utils' 'clinfo' 'drm_info' 'lm_sensors'
+         'ffmpeg' 'kexec-tools' 'busybox')

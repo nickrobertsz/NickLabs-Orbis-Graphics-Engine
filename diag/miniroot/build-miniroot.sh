@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# NickLabs Orbis Graphics Pack — build the stage-0 GPU diagnostic mini-root (inside the Arch build
+# NickLabs Orbis Graphics Engine — build the stage-0 GPU diagnostic mini-root (inside the Arch build
 # container on Nobara, as root).
 #
 #   diag/miniroot/build-miniroot.sh --snapshot 2026/10/20 --repo out/pack/repo --out out/pack/miniroot
@@ -46,13 +46,17 @@ root="$(mktemp -d)"
 pkgs=(glibc gcc-libs bash coreutils util-linux grep gawk python
       mesa-orbis-ps4 opencl-mesa-orbis-ps4 vulkan-icd-loader ocl-icd libdrm)
 pacstrap -C "$conf" -M -G -c "$root" "${pkgs[@]}"
-og="$(ls "$repo"/orbis-graphics-1.0.0-*.pkg.tar.zst | head -1)"
+ver="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$(dirname "$0")/../../manifest/release.json")"
+og="$(ls "$repo"/orbis-graphics-"$ver"-*.pkg.tar.zst | head -1)"
 tar --zstd -xf "$og" -C "$root" usr/lib/orbis-graphics usr/bin/orbis-gpu usr/share/orbis-graphics
+# Graphics Engine telemetry/register tools for the stage-0 report (orbis-hw, orbis-mem, orbis-debug)
+oe="$(ls "$repo"/orbis-graphics-engine-"$ver"-*.pkg.tar.zst 2>/dev/null | head -1)"
+[ -n "$oe" ] && tar --zstd -xf "$oe" -C "$root" usr/lib/orbis-graphics/orbis_engine usr/bin/orbis-hw usr/bin/orbis-mem usr/bin/orbis-debug
 rm -rf "$root"/var/cache/pacman/pkg/* "$root"/usr/share/{man,doc,info,locale,i18n,gtk-doc} "$root"/usr/include
 for d in dev proc sys sys/kernel/debug tmp out; do mkdir -p "$root/$d"; done
 chroot "$root" pacman -Q > "$root/orbis-gfxdiag-packages.txt" 2>/dev/null || pacman --root "$root" -Q > "$root/orbis-gfxdiag-packages.txt"
 mesa="$(grep '^mesa-orbis-ps4 ' "$root/orbis-gfxdiag-packages.txt" | cut -d' ' -f2)"
-printf 'orbis-gfxdiag 1.0.0 mesa-orbis-ps4 %s snapshot %s\n' "$mesa" "$snapshot" > "$root/MINIROOT"
+printf 'orbis-gfxdiag %s mesa-orbis-ps4 %s snapshot %s\n' "$ver" "$mesa" "$snapshot" > "$root/MINIROOT"
 mkdir -p "$out"
 tar --sort=name --numeric-owner --mtime=@0 --xattrs -C "$root" -cf - . | zstd -T0 -19 -q -o "$out/orbis-gfxdiag-miniroot.tar.zst"
 python3 - "$root" "$out" <<'PY'

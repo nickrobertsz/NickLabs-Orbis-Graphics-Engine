@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble ORBIS-GRAPHICS-PACK-v<ver>.tar.zst from a staging directory (last step of build-pack.sh).
+"""Assemble <archive_prefix>-v<ver>.tar.zst (manifest/release.json; ORBIS-GRAPHICS-ENGINE-v2.0.0) from a staging directory (last step of build-pack.sh).
 
   build/assemble_pack.py --staging out/pack --out out/release [--experimental-state BUILT|BLOCKED|NOT_BUILT]
                          [--experimental-reason TEXT] [--base-packages FILE] [--git-commit SHA]
@@ -8,6 +8,7 @@ Staging layout (filled by build/in-container-build.sh):
   repo/                 *.pkg.tar.zst (+ .sig), orbis-graphics.db.tar.zst, orbis-graphics.files...
   miniroot/             orbis-gfxdiag-miniroot.tar.zst + .manifest.json
   keys/                 orbis-repo-key.asc + .fingerprint (only when signed)
+  loader/               Graphics Engine loader payloads (orbis-ge-<N>mb.bin + SHA256SUMS + build.json), optional
 The assembler adds: stage0/ (overlay cpio), integrator/, docs/, source archive, LICENSES/,
 pack-manifest.json and SHA256SUMS, then writes the deterministic archive and its .sha256.
 """
@@ -26,9 +27,10 @@ R = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(R / "build"))
 import make_overlay_cpio  # noqa: E402
 
-NAME = "NickLabs Orbis Graphics Pack"
-VERSION = "1.0.0"
-TOP = f"ORBIS-GRAPHICS-PACK-v{VERSION}"
+RELEASE = json.loads((R / "manifest/release.json").read_text())
+NAME = RELEASE["name"]
+VERSION = RELEASE["version"]
+TOP = f"{RELEASE['archive_prefix']}-v{VERSION}"
 
 
 def sha256(p: Path) -> str:
@@ -47,11 +49,11 @@ def pkg_meta(f: Path) -> dict:
 
 
 ORBIS_BUILT = {"mesa-orbis-ps4", "opencl-mesa-orbis-ps4", "lib32-mesa-orbis-ps4", "mesa-orbis-ps4-experimental",
-               "orbis-graphics", "orbis-graphics-pack", "linux-orbis-ps4-ge"}
+               "orbis-graphics", "orbis-graphics-pack", "orbis-graphics-engine", "linux-orbis-ps4-ge"}
 
 
 def git_source_archive(dest: Path, commit: str | None) -> Path:
-    out = dest / f"NICKLABS-ORBIS-GRAPHICS-SOURCE-v{VERSION}.tar.gz"
+    out = dest / f"{RELEASE['source_prefix']}-v{VERSION}.tar.gz"
     rev = commit if commit and commit != "worktree" else "HEAD"
     if (R / ".git").exists():
         r = subprocess.run(["git", "-C", str(R), "archive", "--format=tar.gz", f"--prefix=nicklabs-orbis-graphics-{VERSION}/",
@@ -68,13 +70,35 @@ def git_source_archive(dest: Path, commit: str | None) -> Path:
     return out
 
 
+def _kernel_info(pkgs: list, sources: dict) -> dict:
+    k = next((p for p in pkgs if p["name"] == "linux-orbis-ps4-ge"), None)
+    info = {"replacement": k is not None, "package": k and {x: k[x] for x in ("name", "version", "sha256")},
+            "series": sources.get("kernel_series"),
+            "boot_tested": False,
+            "note": "linux-orbis-ps4-ge installs beside the Orbis 0.2.0 kernel package; the integrator stages it as "
+                    "bzImage and keeps the previous bzImage (rollback). Not compiled or booted by the author's "
+                    "environment: the first PS4 boot is the qualification."}
+    if not k:
+        info["note"] = "no Graphics Engine kernel in this pack (kernel build missing): the Orbis 0.2.0 kernel is kept"
+    return info
+
+
+def _loader_info(top: Path) -> dict:
+    d = top / "loader"
+    bins = sorted(p.name for p in d.glob("*.bin")) if d.is_dir() else []
+    bj = d / "build.json"
+    return {"payloads": bins, "build": json.loads(bj.read_text()) if bj.exists() else None,
+            "note": None if bins else "loader payloads not built (loader/build-loader.sh); the stock loader keeps "
+                                      "working, without gtt.txt and non-power-of-two vram.txt support"}
+
+
 def assemble(staging: Path, outdir: Path, exp_state: str, exp_reason: str | None, base_packages: Path | None,
              commit: str | None, now: str | None = None) -> Path:
     top = outdir / TOP
     if top.exists():
         shutil.rmtree(top)
     top.mkdir(parents=True)
-    for sub in ("repo", "miniroot", "keys"):
+    for sub in ("repo", "miniroot", "keys", "loader"):
         if (staging / sub).is_dir():
             shutil.copytree(staging / sub, top / sub)
     if not (top / "repo/orbis-graphics.db.tar.zst").exists():
@@ -108,10 +132,8 @@ def assemble(staging: Path, outdir: Path, exp_state: str, exp_reason: str | None
                  "kernel_release": sources["orbis_base"]["kernel_release"],
                  "kernel_bzimage_sha256": sources["orbis_base"]["kernel_bzimage_sha256"],
                  "profile": sources["orbis_base"]["profile"], "arch_snapshot": sources["arch_snapshot"]["date"]},
-        "kernel": {"replacement": any(p["name"] == "linux-orbis-ps4-ge" for p in pkgs),
-                   "note": "1.0.0 ships no replacement kernel: the Orbis 0.2.0 kernel already has amdgpu, debugfs, "
-                           "hwmon/k10temp and every interface the diagnostics read; forward-port candidates are in "
-                           "docs/GRAPHICS-KERNEL-MESA-COMPATIBILITY.md and kernel/ (wiring for a -gfx kernel)."},
+        "kernel": _kernel_info(pkgs, sources),
+        "loader": _loader_info(top),
         "packages": pkgs,
         "orbis_built": sorted(p["name"] for p in pkgs if p["name"] in ORBIS_BUILT),
         "dependency_closure": sorted(p["name"] for p in pkgs if p["name"] not in ORBIS_BUILT),

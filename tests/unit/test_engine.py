@@ -195,6 +195,17 @@ class MemoryTest(EngineBase):
             f"budget={3 * GiB} usage=0 ttm_pages_limit={5 * GiB} min={256 * MiB} vram_carveout={GiB}\n")
         self.assertEqual(memory.Policy("ai", clock=lambda: t[0], immediate=True).tick()["decision"], "converge")
 
+    def test_pc_mode_never_below_kernel_default_when_calm(self):
+        self.tree(psi_some=0.0)
+        (self.gpu_dir() / "orbis_gtt_budget").write_text(
+            f"budget={int(3.5 * GiB)} usage=0 ttm_pages_limit={4 * GiB} min={256 * MiB} vram_carveout={GiB}\n")
+        self.assertLess(memory.plan("pc")["gtt_budget_target"], int(3.5 * GiB))
+        d = memory.Policy("pc", immediate=True).tick()
+        self.assertEqual(d["decision"], "hold")
+        self.assertEqual(d["why"], "at target")
+        st = json.loads((self.root / "var/lib/orbis-graphics/memory/boot-default.json").read_text())
+        self.assertEqual(st["budget"], int(3.5 * GiB))
+
     def test_no_interface_no_decision(self):
         self.tree(ge=False)
         self.assertEqual(memory.Policy("pc").tick()["decision"], "none")
@@ -576,6 +587,40 @@ class KdumpRegsTest(EngineBase):
     def test_regs_unavailable_without_debugfs(self):
         self.tree(ge=False)
         self.assertFalse(gpuregs.dump()["available"])
+
+
+class QualifyEngineChecksTest(EngineBase):
+    def _checks(self):
+        from orbis_gfx import qualify
+        from orbis_gfx.results import Report
+        rep = Report(tool="t", version="t", stage="t")
+        qualify.kernel_checks(rep, qualify.Ctx({}, run=FakeRunner()))
+        return {c.id: c for c in rep.checks}
+
+    def test_ge_kernel(self):
+        self.tree()
+        c = self._checks()
+        self.assertEqual(c["pm.sclk"].state, "DEGRADED")            # fixture: state=startup
+        self.assertEqual(c["thermal.fan"].state, "PASS")
+        self.assertEqual(c["sensors.gpu"].state, "PASS")
+        self.assertEqual(c["memory.gtt_budget"].state, "PASS")
+        self.assertEqual(c["memory.loader_contract"].state, "PASS")  # 1024 MiB both sides
+        self.assertEqual(c["cpu.cpufreq"].state, "UNSUPPORTED")      # fixture has no scaling_driver
+        self.assertEqual(c["display.bridge_status"].state, "PASS")
+        (self.gpu_dir() / "ps4_sclk").write_text("state=max did=1 startup_did=8\n")
+        (self.root / "proc/cmdline").write_text("orbis.loader=ge2 orbis.vram_mb=512\n")
+        c = self._checks()
+        self.assertEqual(c["pm.sclk"].state, "PASS")
+        self.assertEqual(c["memory.loader_contract"].state, "FAIL")
+
+    def test_stock_kernel(self):
+        self.tree(ge=False, loader=None)
+        c = self._checks()
+        for k in ("pm.sclk", "thermal.fan", "memory.gtt_budget"):
+            self.assertEqual(c[k].state, "UNSUPPORTED", k)
+            self.assertIn("ge-6.15", c[k].blocker)
+        self.assertEqual(c["memory.loader_contract"].state, "NOT_RUN")
+        self.assertNotIn("display.bridge_status", c)
 
 
 class CliTest(EngineBase):

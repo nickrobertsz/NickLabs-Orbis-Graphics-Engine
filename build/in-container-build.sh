@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# NickLabs Orbis Graphics Pack — package build, dependency closure and mini-root. Runs as root INSIDE
+# NickLabs Orbis Graphics Engine — package build, dependency closure and mini-root. Runs as root INSIDE
 # the graphics build container (build/Containerfile.gfx); build/build-pack.sh starts it.
 #
 #   build/in-container-build.sh --staging /src/out/pack [--experimental] [--orbis-repo /orbis/out/repo]
@@ -56,6 +56,7 @@ step "32-bit Mesa (build deps preinstalled by Containerfile.gfx; mesa-orbis-ps4 
 mk mesa/lib32 mesa-lib32 nodeps
 step "orbis-graphics tools + meta package"
 mk packages/orbis-graphics orbis-graphics nodeps
+mk packages/orbis-graphics-engine orbis-graphics-engine nodeps
 mk packages/orbis-graphics-pack orbis-graphics-pack nodeps
 
 exp_state=NOT_BUILT; exp_reason="not requested (build-pack.sh --experimental)"

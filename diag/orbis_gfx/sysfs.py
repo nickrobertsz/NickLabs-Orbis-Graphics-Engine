@@ -147,6 +147,25 @@ def cpu_temps() -> dict:
     return out
 
 
+def hwmon_by_name(name: str) -> Path | None:
+    base = p("sys/class/hwmon")
+    for h in sorted(base.glob("hwmon*")) if base.is_dir() else []:
+        if read(h / "name") == name:
+            return h
+    return None
+
+
+def kv_line(text: str | None) -> dict:
+    """'a=1 b=0x2 c=x' -> {"a": 1, "b": 2, "c": "x"} (Graphics Engine sysfs format)."""
+    out = {}
+    for k, v in re.findall(r"(\w+)=(\S+)", text or ""):
+        try:
+            out[k] = int(v, 0)
+        except ValueError:
+            out[k] = v
+    return out
+
+
 def connectors(g: Gpu) -> list[dict]:
     out = []
     for c in sorted(p("sys/class/drm").glob(f"{g.card}-*")):

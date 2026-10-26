@@ -142,7 +142,13 @@ def kernel_checks(rep: Report, cx: Ctx) -> None:
     hw = sysfs.hwmon(g)
     ct = sysfs.cpu_temps()
     temps = {k: v for k, v in hw.items() if "temp" in k and k.endswith("_input")}
-    if temps:
+    fan = sysfs.hwmon_by_name("ps4_fan")
+    if fan is not None and sysfs.read_int(fan / "temp1_input") is not None:
+        t = sysfs.read_int(fan / "temp1_input")
+        _ck(rep, id="sensors.gpu", title="GPU/APU temperature sensor", category="power", state="PASS",
+            detail=f"APU {t / 1000:.1f}°C from the EMC (ps4_fan hwmon, Graphics Engine kernel)",
+            evidence={"ps4_fan": str(fan), "hwmon": hw, "cpu_temps": ct})
+    elif temps:
         _ck(rep, id="sensors.gpu", title="GPU temperature sensor", category="power", state="PASS",
             detail=", ".join(f"{k}={int(v) / 1000:.1f}°C" for k, v in temps.items() if v and v.lstrip('-').isdigit()),
             evidence={"hwmon": hw})
@@ -150,10 +156,80 @@ def kernel_checks(rep: Report, cx: Ctx) -> None:
         _ck(rep, id="sensors.gpu", title="GPU temperature sensor", category="power", state="UNSUPPORTED",
             blocker="amdgpu registers no hwmon temperature for Liverpool (no SMU/thermal block on this kernel); "
                     "APU temperature is approximated by k10temp", evidence={"hwmon": hw, "cpu_temps": ct})
+    engine_checks(rep, g)
     faults = {k: len(hits[k]) for k in ("vm_fault", "ring_timeout", "gpu_reset")}
     _ck(rep, id="health.since_boot", title="no VM faults, ring timeouts or resets since boot", category="kernel",
         state="PASS" if not any(faults.values()) else "FAIL", detail=", ".join(f"{k}={v}" for k, v in faults.items()),
         evidence={k: hits[k] for k in faults})
+
+
+def engine_checks(rep: Report, g) -> None:
+    """Graphics Engine 2.0 kernel interfaces. On a kernel without them each check says so
+    (UNSUPPORTED with the patch that adds it) instead of guessing."""
+    def missing(cid, title, cat, patch):
+        _ck(rep, id=cid, title=title, category=cat, state="UNSUPPORTED",
+            blocker=f"kernel without the Graphics Engine interface ({patch}); boot linux-orbis-ps4-ge")
+    sclk = sysfs.read(g.sysdir / "ps4_sclk")
+    if sclk is None:
+        missing("pm.sclk", "GPU engine clock restored to full speed", "power", "ge-6.15/0002")
+    else:
+        v = sysfs.kv_line(sclk)
+        st = v.get("state")
+        if st == "max":
+            _ck(rep, id="pm.sclk", title="GPU engine clock restored to full speed", category="power", state="PASS",
+                detail=f"SCLK divider {v.get('did')} (full SPLL output; fused startup divider {v.get('startup_did')})",
+                evidence=v)
+        else:
+            _ck(rep, id="pm.sclk", title="GPU engine clock restored to full speed", category="power", state="DEGRADED",
+                detail=f"GPU runs at the fused startup divider {v.get('did')} (amdgpu.ps4_sclk_restore="
+                       f"{v.get('restore_param')}); `orbis-hw set gpu-sclk max` or check dmesg 'Liverpool CLK'",
+                evidence=v)
+    fan = sysfs.hwmon_by_name("ps4_fan")
+    if fan is None:
+        missing("thermal.fan", "fan/thermal control (EMC via ICC)", "power", "ge-6.15/0001")
+    else:
+        crit = sysfs.read_int(fan / "temp1_crit")
+        t = sysfs.read_int(fan / "temp1_input")
+        ok = crit is not None and t is not None and 20000 <= crit <= 85000
+        _ck(rep, id="thermal.fan", title="fan/thermal control (EMC via ICC)", category="power",
+            state="PASS" if ok else "FAIL",
+            detail=f"APU {(t or 0) / 1000:.1f}°C, fan threshold {(crit or 0) / 1000:.0f}°C" if ok else
+                   "ps4_fan hwmon present but temperature/threshold unreadable (ICC error?)",
+            evidence={"temp1_input": t, "temp1_crit": crit})
+    gb = sysfs.read(g.sysdir / "orbis_gtt_budget")
+    if gb is None:
+        missing("memory.gtt_budget", "runtime GPU memory (GTT) budget", "memory", "ge-6.15/0008")
+    else:
+        v = sysfs.kv_line(gb)
+        ok = isinstance(v.get("budget"), int) and v["budget"] >= v.get("min", 0)
+        _ck(rep, id="memory.gtt_budget", title="runtime GPU memory (GTT) budget", category="memory",
+            state="PASS" if ok else "FAIL",
+            detail=f"budget {v.get('budget', 0) >> 20} MiB, in use {v.get('usage', 0) >> 20} MiB, TTM limit "
+                   f"{v.get('ttm_pages_limit', 0) >> 20} MiB, carve-out {v.get('vram_carveout', 0) >> 20} MiB", evidence=v)
+    cl = sysfs.cmdline().split()
+    tok = {t.split("=", 1)[0]: t.split("=", 1)[1] for t in cl if "=" in t}
+    vram_total = sysfs.read_int(g.sysdir / "mem_info_vram_total")
+    if tok.get("orbis.loader") == "ge2" and tok.get("orbis.vram_mb", "").isdigit():
+        want = int(tok["orbis.vram_mb"]) << 20
+        _ck(rep, id="memory.loader_contract", title="loader carve-out matches what amdgpu sees", category="memory",
+            state="PASS" if vram_total == want else "FAIL",
+            detail=f"loader {want >> 20} MiB, amdgpu {(vram_total or 0) >> 20} MiB",
+            evidence={"cmdline": {k: v for k, v in tok.items() if k.startswith(("orbis.", "ttm.", "amdgpu.gtt"))}})
+    else:
+        _ck(rep, id="memory.loader_contract", title="loader carve-out matches what amdgpu sees", category="memory",
+            state="NOT_RUN", detail="booted by a loader without the Graphics Engine boot identity "
+                                    "(no orbis.loader=ge2 on the command line); nothing to cross-check")
+    drv = sysfs.read(sysfs.p("sys/devices/system/cpu/cpu0/cpufreq/scaling_driver"))
+    if drv:
+        _ck(rep, id="cpu.cpufreq", title="CPU frequency scaling", category="power", state="PASS",
+            detail=f"driver {drv}, governor {sysfs.read(sysfs.p('sys/devices/system/cpu/cpu0/cpufreq/scaling_governor'))}")
+    else:
+        missing("cpu.cpufreq", "CPU frequency scaling", "power", "ge-6.15/0007 ps4-cpufreq")
+    if g.debugfs is not None:
+        bs = sysfs.read(g.debugfs / "ps4_bridge_status")
+        if bs is not None:
+            _ck(rep, id="display.bridge_status", title="HDMI bridge state readable", category="display", state="PASS",
+                detail=" ".join(bs.split())[:200], evidence={"ps4_bridge_status": bs})
 
 
 # ------------------------------------------------------------------ userspace

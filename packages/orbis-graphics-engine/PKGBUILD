@@ -1,0 +1,41 @@
+# NickLabs Orbis Graphics Engine 2.0 — userspace: unified-memory policy (orbis-memd), hardware API
+# (orbis-hwd), controls/telemetry (orbis-hw, orbis-mem), Black Box recorder + orbis-debug,
+# video status/test (orbis-video), Vulkan inference tuning (orbis-ai-gpu), optional kdump.
+# Built from the source tree this PKGBUILD lives in (build/build-pack.sh).
+pkgname=orbis-graphics-engine
+pkgver=2.0.0
+pkgrel=1
+pkgdesc="NickLabs Orbis Graphics Engine 2.0: memory policy, hardware API, Black Box diagnostics, video and AI tooling"
+arch=('any')
+url="https://github.com/nicklabs/orbis-graphics"
+license=('MIT')
+depends=('python>=3.11' 'orbis-graphics=2.0.0' 'iproute2' 'util-linux')
+optdepends=('linux-orbis-ps4-ge: the kernel interfaces most controls need (without it they report UNSUPPORTED)'
+            'ffmpeg: orbis-video test' 'libva-utils: orbis-video status'
+            'kexec-tools: orbis-debug kdump (experimental)' 'busybox: orbis-debug kdump capture initramfs'
+            'mpv: orbis-video configure writes its config')
+backup=('etc/orbis/blackbox.json' 'etc/orbis/hwd.json')
+install=orbis-graphics-engine.install
+
+_root() { echo "${startdir}/../.."; }
+
+package() {
+  local R; R="$(_root)"
+  install -d "$pkgdir/usr/lib/orbis-graphics"
+  cp -r "$R/diag/orbis_engine" "$pkgdir/usr/lib/orbis-graphics/"
+  find "$pkgdir/usr/lib/orbis-graphics/orbis_engine" -name __pycache__ -prune -exec rm -rf {} +
+  python -m compileall -q "$pkgdir/usr/lib/orbis-graphics/orbis_engine"
+  for b in orbis-hw orbis-mem orbis-debug orbis-video orbis-ai-gpu orbis-blackbox orbis-hwd; do
+    install -Dm755 "$R/diag/bin/$b" "$pkgdir/usr/bin/$b"
+  done
+  for u in orbis-blackbox orbis-memd orbis-hwd orbis-kdump; do
+    install -Dm644 "$R/diag/systemd/$u.service" "$pkgdir/usr/lib/systemd/system/$u.service"
+  done
+  install -Dm644 "$R/diag/config/journald.conf.d/90-orbis-blackbox.conf" \
+    "$pkgdir/usr/lib/systemd/journald.conf.d/90-orbis-blackbox.conf"
+  install -Dm644 /dev/stdin "$pkgdir/etc/orbis/blackbox.json" <<<'{}'
+  install -Dm644 /dev/stdin "$pkgdir/etc/orbis/hwd.json" <<<'{"bind": "127.0.0.1", "port": 8421}'
+  # the LAN receiver runs on the Nobara/NickLabs machine; shipped here so it can be copied off
+  install -Dm755 "$R/tools/orbis-blackbox-receiver" "$pkgdir/usr/share/orbis-graphics/tools/orbis-blackbox-receiver"
+  install -Dm644 "$R/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

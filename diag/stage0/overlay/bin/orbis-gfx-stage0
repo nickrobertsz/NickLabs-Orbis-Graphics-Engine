@@ -111,8 +111,25 @@ cidx="${card##*card}"; dbg="$R/sys/kernel/debug/dri/$cidx"
 	for h in "$R"/sys/class/hwmon/hwmon*; do
 		[ "$(cat "$h/name" 2>/dev/null)" = k10temp ] && for t in "$h"/temp*_input; do echo "$(basename "$t"): $(cat "$t")"; done
 	done
+	echo; echo "== Graphics Engine 2.0 interfaces (absent on kernels without the GE series)"
+	if [ -n "$card" ]; then
+		for a in ps4_sclk orbis_engine_busy orbis_gtt_budget; do
+			if [ -e "$card/device/$a" ]; then echo "$a: $(cat "$card/device/$a" 2>&1 | tr '\n' ' ')"; else echo "$a: absent"; fi
+		done
+	fi
+	for f in amdgpu_liverpool_clk ps4_bridge_status; do
+		[ -e "$dbg/$f" ] && { echo "-- $f"; head -c 4096 "$dbg/$f" 2>&1; echo; }
+	done
+	for h in "$R"/sys/class/hwmon/hwmon*; do
+		[ "$(cat "$h/name" 2>/dev/null)" = ps4_fan ] && echo "ps4_fan: temp1_input=$(cat "$h/temp1_input" 2>&1) temp1_crit=$(cat "$h/temp1_crit" 2>&1)"
+	done
+	c0="$R/sys/devices/system/cpu/cpu0/cpufreq"
+	[ -d "$c0" ] && echo "cpufreq: driver=$(cat "$c0/scaling_driver" 2>/dev/null) cur=$(cat "$c0/scaling_cur_freq" 2>/dev/null) avail=$(cat "$c0/scaling_available_frequencies" 2>/dev/null)"
+	[ -e "$R/proc/pressure/memory" ] && echo "psi memory: $(tr '\n' ' ' < "$R/proc/pressure/memory")"
+	[ -e "$R/sys/module/ttm/parameters/pages_limit" ] && echo "ttm.pages_limit: $(cat "$R/sys/module/ttm/parameters/pages_limit")"
+	echo "loader identity: $(echo "$cmdline" | tr ' ' '\n' | grep -E '^(orbis\.loader|orbis\.vram_mb|orbis\.gtt_mb|ttm\.pages_limit|amdgpu\.gttsize)=' | tr '\n' ' ')"
 	echo; echo "== kernel log: GPU / display / firmware"
-	klog | grep -i -E "amdgpu|drm|radeon|liverpool|gladius|ps4.bridge|hdmi|edid|firmware|ring|fence|vm_|fault|gpu reset|dp_link|clock recovery" | tail -n 600
+	klog | grep -i -E "amdgpu|drm|radeon|liverpool|gladius|ps4.bridge|ps4.fan|ps4.cpufreq|hdmi|edid|firmware|ring|fence|vm_|fault|gpu reset|dp_link|clock recovery|Liverpool CLK" | tail -n 600
 } > "$K" 2>&1
 step "kernel evidence written ($(wc -c < "$K" 2>/dev/null) bytes)"
 
@@ -166,6 +183,14 @@ if [ -n "$mr" ] && { [ -e "$mr/MINIROOT" ] || [ -x "$mr/usr/bin/orbis-gpu" ]; };
 	done
 	if [ -z "$qrc" ]; then wait "$qpid"; qrc=$?; step "orbis-gpu qualify exit $qrc"; fi
 	klog > "$out/$N-gpu-dmesg-after.txt" 2>&1
+	if [ -z "$R" ] && [ -x "$mr/usr/bin/orbis-hw" ]; then
+		step "Graphics Engine telemetry + GPU registers"
+		chroot "$mr" /usr/bin/env -i PATH=/usr/bin:/bin HOME=/tmp ORBIS_GFX_KMSG_FILE="/tmp/out/$N-gpu-dmesg-after.txt" \
+			/usr/bin/orbis-debug --json gpu > "$out/$N-engine-gpu.json" 2>&1 &
+		epid=$!; w=0
+		while kill -0 "$epid" 2>/dev/null; do sleep 1; w=$((w + 1)); [ "$w" -ge 60 ] && { kill -9 "$epid" 2>/dev/null; break; }; done
+		chroot "$mr" /usr/bin/env -i PATH=/usr/bin:/bin HOME=/tmp /usr/bin/orbis-mem --json status > "$out/$N-engine-memory.json" 2>&1 || true
+	fi
 	if [ -z "$R" ]; then
 		for m in tmp/out tmp sys/kernel/debug sys proc dev; do umount "$mr/$m" 2>/dev/null; done
 		[ -n "$mr_dev" ] && umount "$mr_mnt" 2>/dev/null

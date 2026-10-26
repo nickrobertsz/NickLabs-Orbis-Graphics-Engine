@@ -237,6 +237,29 @@ def set_ttm_pages_limit(pages: int, why: str, dry_run: bool = False) -> dict:
     return rec
 
 
+def boot_default_budget() -> int | None:
+    """The GTT budget amdgpu chose at this boot, before orbis-memd touched it (stored per boot id).
+    When memory is calm the policy never goes below it, so every mode is at least as generous
+    to the GPU as the stock kernel; only memory pressure shrinks below it."""
+    f = p(STATE_DIR) / "boot-default.json"
+    bid = read(p("proc/sys/kernel/random/boot_id"))
+    try:
+        st = json.loads(f.read_text())
+        if st.get("boot_id") == bid and isinstance(st.get("budget"), int):
+            return st["budget"]
+    except (OSError, ValueError):
+        pass
+    g = sysfs.primary_gpu()
+    cur = kv(read(g.sysdir / "orbis_gtt_budget")).get("budget") if g else None
+    if isinstance(cur, int):
+        try:
+            atomic_write(f, json.dumps({"boot_id": bid, "budget": cur, "time": now_iso()}) + "\n")
+        except OSError:
+            pass
+        return cur
+    return None
+
+
 class Policy:
     """Pressure-driven GTT budget for the active mode (one decision per tick)."""
 
@@ -246,12 +269,13 @@ class Policy:
         self.mode = mode if mode in MODE_POLICY else "pc"
         self.clock = clock
         self.calm_since: float | None = (clock() - RELAX_S) if immediate else None
+        self.floor = boot_default_budget()
 
     def tick(self, dry_run: bool = False) -> dict:
         own = ownership()
         g = own["gpu"]
-        target = plan(self.mode)["gtt_budget_target"]
         cur = g.get("gtt_budget")
+        target = max(plan(self.mode)["gtt_budget_target"], self.floor or 0)
         if cur is None:
             return {"decision": "none", "why": "no runtime GTT budget interface"}
         psi = ((own["linux"].get("psi_memory") or {}).get("some") or {}).get("avg10")

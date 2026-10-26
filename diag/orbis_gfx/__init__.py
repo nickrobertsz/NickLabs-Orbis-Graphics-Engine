@@ -6,5 +6,5 @@ Stable machine-readable interface (for the future Orbis settings UI):
   orbis-gpu profile list --json  profiles + capabilities      schema orbis-gfx-profiles/1
   orbis-gpu capabilities --json  what this console can do     schema orbis-gfx-capabilities/1
 """
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 API_VERSION = 1

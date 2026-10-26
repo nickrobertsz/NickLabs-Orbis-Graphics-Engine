@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""orbis-graphics — integrate the NickLabs Orbis Graphics Pack with Orbis 0.2.0 images on Nobara.
+"""orbis-graphics — integrate NickLabs Orbis Graphics releases (Graphics Engine 2.0.0, Graphics Pack
+1.0.0) with Orbis 0.2.0 images on Nobara.
 
-  orbis-graphics verify    --pack ORBIS-GRAPHICS-PACK-v1.0.0.tar.zst
+  orbis-graphics verify    --pack ORBIS-GRAPHICS-ENGINE-v2.0.0.tar.zst
   orbis-graphics inspect   (--image IMG | --pack PACK | --rootfs DIR) [--json]
   orbis-graphics integrate (--base-image IMG | --base-rootfs DIR) --pack PACK [--output OUT.img]
                            [--experimental] [--dry-run] [--engine podman|docker] [--container IMAGE]
   orbis-graphics stage0    --base-stage0-image IMG --pack PACK --output OUT.img [--size 4G] [--dry-run]
-                           [--host]
+                           [--host] [--keep-base-kernel]
   orbis-graphics rollback  --image INTEGRATED.img --output OUT.img [--dry-run]
 
 Guarantees:
@@ -34,7 +35,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "vendor" / "orbis020"))
 import fat32  # noqa: E402  (vendored, unmodified Orbis 0.2.0)
 
-VERSION = "1.0.0"
+VERSION = "2.0.0"
 DEFAULT_CONTAINER = "orbis-build:0.2.0"
 
 
@@ -133,6 +134,14 @@ def mbr_partitions(img: Path) -> dict:
     return out
 
 
+def fat_root_names(img: Path, offset: int) -> set[str]:
+    """Names (files and directories) in the FAT root directory."""
+    with open(img, "rb") as fh:
+        fs = fat32.Fat32(fh, offset)
+        _, d = fs.read_dir()
+        return {e["name"] for e in fat32._parse_dir(d) if not e["attr"] & fat32.ATTR_VOLUME}
+
+
 def debugfs_cat(img: Path, offset: int, path: str) -> str | None:
     if not shutil.which("debugfs"):
         return None
@@ -158,6 +167,8 @@ def inspect_image(img: Path) -> dict:
     info["vram"] = files.get("vram.txt", b"").decode().strip() or None
     info["profile"] = (boot.get("initramfs") or {}).get("profile")
     info["gfx_integrated"] = "initramfs.cpio.gz.orbis-gfx-prev" in files
+    info["ge_kernel_staged"] = "bzImage.orbis-gfx-prev" in files
+    info["ge_loader_payloads"] = "orbis-ge-loader" in fat_root_names(img, boff)
     if "root" in parts:
         roff = parts["root"][0]
         pk = debugfs_cat(img, roff, "/usr/share/orbis/packages.txt")
@@ -323,7 +334,8 @@ def cmd_integrate(a) -> int:
     plan = {"base": {"image": str(base), "sha256": None if a.dry_run else sha256(base), "kernel": info["kernel_sha256"],
                      "profile": info["profile"], "orbis_platform": (info.get("root_packages") or {}).get("orbis-platform")},
             "output": str(out), "steps": ["sparse copy base -> output", f"container {a.container}: loop-mount copy, "
-                                           "install orbis-graphics-pack offline, initramfs overlay, receipt, umount, e2fsck/fsck.fat",
+                                           "install orbis-graphics-pack offline (GE kernel staged as bzImage when the pack has one), initramfs overlay, "
+                                           "GE loader payloads, receipt, umount, e2fsck/fsck.fat",
                                            "host: re-read FAT, fsck, write OUT.integration.json + OUT.sha256"]}
     if a.dry_run:
         print(json.dumps({"dry_run": True, "plan": plan}, indent=1))
@@ -342,7 +354,16 @@ def cmd_integrate(a) -> int:
         return 1
     after = inspect_image(out)
     rec["result"] = "OK"
-    rec["output_boot"] = {"initramfs_sha256": after["initramfs_sha256"], "gfx_integrated": after["gfx_integrated"]}
+    rec["output_boot"] = {"initramfs_sha256": after["initramfs_sha256"], "gfx_integrated": after["gfx_integrated"],
+                          "kernel_sha256": after["kernel_sha256"], "ge_kernel_staged": after["ge_kernel_staged"],
+                          "ge_loader_payloads": after["ge_loader_payloads"]}
+    want_k = pack_kernel(pdir, man)
+    if want_k and hashlib.sha256(want_k[0]).hexdigest() != after["kernel_sha256"]:
+        rec["result"] = "FAILED"
+        rec["why"] = "the boot partition's bzImage is not the pack's Graphics Engine kernel"
+        write_receipt(out, rec)
+        print(f"FAILED: {rec['why']}; see {out}.integration.log")
+        return 1
     rec["in_image_receipt"] = after.get("graphics_receipt")
     rec["fsck_host"] = fsck_host(out)
     write_receipt(out, rec)
@@ -350,14 +371,35 @@ def cmd_integrate(a) -> int:
     return 0
 
 
-def build_stage0_work(base: Path, pdir: Path, man: dict, work: Path) -> dict:
+def pack_kernel(pdir: Path, man: dict) -> tuple[bytes, str] | None:
+    """(bzImage bytes, release) of the Graphics Engine kernel package in the pack, if any."""
+    k = (man.get("kernel") or {}).get("package")
+    if not k:
+        return None
+    pkg = pdir / "repo" / f"{k['name']}-{k['version']}-x86_64.pkg.tar.zst"
+    if not pkg.exists():
+        raise Refused(f"pack manifest names {pkg.name} but it is not in repo/")
+    r = subprocess.run(["tar", "--zstd", "-tf", str(pkg)], capture_output=True, text=True)
+    names = [n for n in r.stdout.splitlines() if n.startswith("usr/lib/modules/") and n.endswith("/vmlinuz")]
+    if r.returncode != 0 or len(names) != 1:
+        raise Refused(f"cannot find exactly one vmlinuz in {pkg.name}")
+    data = subprocess.run(["tar", "--zstd", "-xOf", str(pkg), names[0]], capture_output=True).stdout
+    if len(data) < 0x300 or data[0x202:0x206] != b"HdrS" or data[0x1FE:0x200] != b"\x55\xaa":
+        raise Refused(f"{names[0]} in {pkg.name} is not an x86 bzImage")
+    return data, names[0].split("/")[3]
+
+
+def build_stage0_work(base: Path, pdir: Path, man: dict, work: Path, keep_base_kernel: bool = False) -> dict:
     info = inspect_image(base)
     why = check_base(info, man, want_stage0=True)
     if why:
         raise Refused("base stage-0 image refused:\n  " + "\n  ".join(why))
     files = fat32.read_root(base, info["partitions"]["boot"]["offset"])
     work.mkdir(parents=True, exist_ok=True)
-    (work / "bzImage").write_bytes(files["bzImage"])
+    ge = None if keep_base_kernel else pack_kernel(pdir, man)
+    (work / "bzImage").write_bytes(ge[0] if ge else files["bzImage"])
+    info["stage0_kernel"] = {"source": f"pack ({ge[1]})" if ge else "base stage-0 image",
+                             "sha256": hashlib.sha256(ge[0] if ge else files["bzImage"]).hexdigest()}
     overlay = (pdir / "stage0/orbis-gfx-overlay.cpio.gz").read_bytes()
     _overlay_conflicts(files["initramfs.cpio.gz"], overlay)
     (work / "initramfs.cpio.gz").write_bytes(files["initramfs.cpio.gz"] + overlay)
@@ -408,10 +450,11 @@ def cmd_stage0(a) -> int:
     if out.exists():
         raise Refused(f"{out} exists; refusing to overwrite")
     work = Path(tempfile.mkdtemp(prefix="orbis-gfx-stage0-", dir=str(out.parent)))
-    info = build_stage0_work(base, pdir, man, work)
+    info = build_stage0_work(base, pdir, man, work, keep_base_kernel=a.keep_base_kernel)
     plan = {"base": str(base), "output": str(out), "size": a.size,
             "bootargs": (work / "bootargs.txt").read_text().strip(), "vram_mb": (work / "vram.txt").read_text().strip(),
             "initramfs": {"base_sha256": info["initramfs_sha256"], "with_overlay_sha256": sha256(work / "initramfs.cpio.gz")},
+            "kernel": info.get("stage0_kernel"),
             "miniroot": man.get("miniroot")}
     if a.dry_run:
         shutil.rmtree(work)
@@ -491,6 +534,8 @@ def main(argv=None) -> int:
             p.add_argument("--base-stage0-image", required=True); p.add_argument("--pack", required=True)
             p.add_argument("--output", required=True); p.add_argument("--size", default="4G")
             p.add_argument("--host", action="store_true", help="compose on this host as root instead of in the container")
+            p.add_argument("--keep-base-kernel", action="store_true",
+                           help="boot the stage-0 image with the base image's Orbis 0.2.0 kernel instead of the pack's GE kernel")
         else:
             p.add_argument("--image", required=True); p.add_argument("--output", required=True)
     a = ap.parse_args(argv)

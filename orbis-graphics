@@ -1,4 +1,4 @@
 #!/bin/sh
-# NickLabs Orbis Graphics Pack — Nobara integrator entry point (see integrator/orbis_graphics_tool.py).
+# NickLabs Orbis Graphics (Engine 2.0 / Pack 1.0) — Nobara integrator entry point (see integrator/orbis_graphics_tool.py).
 here="$(cd "$(dirname "$0")" && pwd)"
 exec python3 "$here/integrator/orbis_graphics_tool.py" "$@"

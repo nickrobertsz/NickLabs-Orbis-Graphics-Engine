@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# NickLabs Orbis Graphics Pack 1.0.0 — install the pack into an Orbis 0.2.0 root filesystem.
+# NickLabs Orbis Graphics Engine 2.0.0 (and Graphics Pack 1.0.0) — install a pack into an Orbis 0.2.0
+# root filesystem. With a 2.0 pack this also stages the Graphics Engine kernel as the boot bzImage,
+# copies the GE loader payloads to the boot partition and enables the Black Box / memory policy /
+# hardware API services (orbis-graphics-engine.install).
 #
 #   integrate-root.sh --root DIR --pack PACKDIR [--boot BOOTDIR] [--experimental] [--dry-run]
 #
@@ -40,6 +43,10 @@ if [ -f "$receipt" ] && grep -q '"state": "integrated"' "$receipt"; then
   echo "the Graphics Pack is already integrated here (see $receipt); run rollback-root.sh first" >&2; exit 4
 fi
 ( cd "$pack" && sha256sum -c --quiet SHA256SUMS ) || { echo "pack checksum failure" >&2; exit 5; }
+free_mb=$(df -Pm "$root" | awk 'NR==2 {print $4}')
+need_mb=$(( $(du -sm "$pack/repo" | cut -f1) * 4 + 300 ))
+echo "free in root: ${free_mb} MiB; estimated need: ${need_mb} MiB (packages unpacked + kernel modules)"
+[ "$free_mb" -ge "$need_mb" ] || { echo "not enough space in $root (${free_mb} MiB free, ~${need_mb} MiB needed): enlarge ORBIS-ROOT first" >&2; exit 6; }
 signed=0; [ -f "$pack/keys/orbis-repo-key.asc" ] && [ -f "$pack/repo/orbis-graphics.db.tar.zst.sig" ] && signed=1
 
 log "record the starting state"
@@ -68,7 +75,7 @@ if ! grep -q '^\[orbis-graphics\]' "$root/etc/pacman.conf"; then
 import sys
 p, sig = sys.argv[1], sys.argv[2]
 lines = open(p).read().splitlines(True)
-block = ["# NickLabs Orbis Graphics Pack 1.0.0 (local, offline). Listed before [orbis] so its newer\n",
+block = ["# NickLabs Orbis Graphics (local, offline). Listed before [orbis] so its newer\n",
          "# mesa-orbis-ps4 builds are chosen. Removed by rollback-root.sh.\n",
          "[orbis-graphics]\n", f"SigLevel = {sig}\n", "Server = file:///var/lib/orbis-graphics/repo\n", "\n"]
 for i, l in enumerate(lines):
@@ -83,6 +90,14 @@ else:
 open(p, "w").write("".join(lines))
 PY
   fi
+fi
+
+log "save the boot files this run may replace (restored by rollback-root.sh)"
+save_prev() { [ -f "$1" ] && [ ! -f "$1.orbis-gfx-prev" ] && run cp -a "$1" "$1.orbis-gfx-prev"; return 0; }
+save_prev "$root/usr/lib/orbis/initramfs/initramfs.cpio.gz"
+if [ -n "$boot" ]; then
+  save_prev "$boot/initramfs.cpio.gz"; save_prev "$boot/bzImage"
+  [ "$dry" = 1 ] || ls -1 "$boot" > "$state/boot-files-before.txt"
 fi
 
 log "install the pack (offline: only the local [orbis-graphics] and [orbis] repositories)"
@@ -101,22 +116,45 @@ if [ "$experimental" = 1 ]; then
   run in_root pacman --config "$pconf" -S --noconfirm --ask=4 mesa-orbis-ps4-experimental
 fi
 
+if [ "$dry" = 0 ]; then   # pacman copied the pack's packages into its cache; the repo copy above is enough
+  for f in "$pack"/repo/*.pkg.tar.zst; do rm -f "$root/var/cache/pacman/pkg/$(basename "$f")" "$root/var/cache/pacman/pkg/$(basename "$f").sig"; done
+fi
+
 log "orbis-qualify extension (/usr/local/bin precedes /usr/bin)"
 run install -d "$root/usr/local/bin"
 run ln -sfn /usr/lib/orbis-graphics/orbis-qualify-with-graphics "$root/usr/local/bin/orbis-qualify"
 
 log "GPU stage-0 diagnosis in the boot initramfs (orbis.gfxdiag=1; inert otherwise)"
 overlay="$pack/stage0/orbis-gfx-overlay.cpio.gz"
-add_overlay() {  # $1 = initramfs path
+add_overlay() {  # $1 = initramfs path; its pre-integration copy was saved as .orbis-gfx-prev above
   local f="$1"
-  [ -f "$f" ] || { echo "   (no $f)"; return 0; }
-  if [ -f "$f.orbis-gfx-prev" ]; then echo "   $f already has a saved original"; return 0; fi
-  run cp -a "$f" "$f.orbis-gfx-prev"
+  [ -f "$f" ] || [ -f "$f.orbis-gfx-prev" ] || { echo "   (no $f)"; return 0; }
   if [ "$dry" = 0 ]; then cat "$f.orbis-gfx-prev" "$overlay" > "$f.new" && mv "$f.new" "$f"; fi
-  echo "   $f: + overlay ($(sha256sum "$overlay" | cut -c1-16))"
+  echo "   $f: original + overlay ($(sha256sum "$overlay" | cut -c1-16))"
 }
 add_overlay "$root/usr/lib/orbis/initramfs/initramfs.cpio.gz"
 [ -n "$boot" ] && add_overlay "$boot/initramfs.cpio.gz"
+
+gekern=""
+if [ "$dry" = 0 ]; then
+  gekern="$(ls -d "$root"/usr/lib/modules/*-orbis-ps4-ge*/vmlinuz 2>/dev/null | grep -v -- '-ge-uvd' | sort | tail -1 || true)"
+fi
+if [ -n "$gekern" ]; then
+  log "Graphics Engine kernel: $(basename "$(dirname "$gekern")")"
+  if [ -n "$boot" ]; then
+    # Orbis 0.2.0's kernel-sync hook may already have staged it (when it found the boot partition);
+    # make sure the boot partition carries exactly this kernel either way.
+    if ! cmp -s "$gekern" "$boot/bzImage"; then run cp "$gekern" "$boot/bzImage"; fi
+    echo "   $boot/bzImage = $(sha256sum "$boot/bzImage" | cut -c1-16) (previous kernel kept as bzImage.orbis-gfx-prev)"
+  else
+    echo "   no --boot given: the kernel is installed in the root; stage it with: orbis boot install-kernel $gekern"
+  fi
+fi
+if [ -d "$pack/loader" ] && ls "$pack"/loader/orbis-ge-*.bin >/dev/null 2>&1 && [ -n "$boot" ]; then
+  log "Graphics Engine loader payloads -> $boot/orbis-ge-loader/ (the console still boots with whatever payload you send)"
+  run mkdir -p "$boot/orbis-ge-loader"
+  run cp "$pack"/loader/orbis-ge-*.bin "$pack"/loader/SHA256SUMS "$pack"/loader/build.json "$boot/orbis-ge-loader/"
+fi
 
 log "receipt"
 if [ "$dry" = 0 ]; then
@@ -138,7 +176,7 @@ def h(p):
     return hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
 root = st.parents[2]
 files = {}
-for p in ["usr/lib/orbis/initramfs/initramfs.cpio.gz"] + (["BOOT:initramfs.cpio.gz"] if boot else []):
+for p in ["usr/lib/orbis/initramfs/initramfs.cpio.gz"] + (["BOOT:initramfs.cpio.gz", "BOOT:bzImage"] if boot else []):
     real = pathlib.Path(boot) / p.split(":", 1)[1] if p.startswith("BOOT:") else root / p
     files[p] = {"sha256": h(real), "original_sha256": h(str(real) + ".orbis-gfx-prev")}
 rec = {"schema": "orbis-graphics-integration/1", "state": "integrated", "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -146,7 +184,8 @@ rec = {"schema": "orbis-graphics-integration/1", "state": "integrated", "time": 
        "experimental_mesa": exp == "1", "repo_siglevel": sig,
        "installed_or_upgraded": {n: {"from": pre.get(n), "to": v} for n, v in post.items() if pre.get(n) != v},
        "removed": {n: v for n, v in pre.items() if n not in post},
-       "files": files, "symlinks": {"/usr/local/bin/orbis-qualify": "/usr/lib/orbis-graphics/orbis-qualify-with-graphics"},
+       "files": files, "ge_loader_dir": "BOOT:orbis-ge-loader" if boot and (pathlib.Path(boot) / "orbis-ge-loader").is_dir() else None,
+       "symlinks": {"/usr/local/bin/orbis-qualify": "/usr/lib/orbis-graphics/orbis-qualify-with-graphics"},
        "pacman_conf_backup": "var/lib/orbis-graphics/pacman.conf.pre-integration",
        "rollback": "/usr/lib/orbis-graphics/rollback-root.sh --root / --boot /boot/ps4"}
 (st / "integration.json").write_text(json.dumps(rec, indent=1) + "\n")

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# NickLabs Orbis Graphics Pack 1.0.0 — one command on Nobara: builds every package, the dependency
-# closure and the stage-0 GPU mini-root in a container, then assembles
-#   out/release/ORBIS-GRAPHICS-PACK-v1.0.0.tar.zst (+ .sha256)
+# NickLabs Orbis Graphics Engine 2.0.0 — builds every package (GE kernel package, Mesa 26.2.5-201,
+# tools, engine), the dependency closure and the stage-0 GPU mini-root in a container, then assembles
+#   out/release/ORBIS-GRAPHICS-ENGINE-v2.0.0.tar.zst (+ .sha256)
+# Run kernel/build-ge-kernel.sh and loader/build-loader.sh first (nobara/orbis-ge-all.sh does all of it).
 #
 #   build/build-pack.sh --orbis-src ~/orbis-release/nicklabs-ps4-orbis-linux [--experimental] [--no-tests]
 #
@@ -37,7 +38,13 @@ SUDO=""; [ "$(id -u)" = 0 ] || SUDO="sudo"
 [ -n "$orbis_src" ] && [ -f "$orbis_src/platform/orbis/__init__.py" ] || {
   echo "--orbis-src must point at the Orbis 0.2.0 checkout (the folder with platform/ packaging/ out/)" >&2; exit 2; }
 ver="$(python3 -c "import sys; sys.path.insert(0,'$orbis_src/platform'); import orbis; print(orbis.__version__)")"
-[ "$ver" = 0.2.0 ] || { echo "--orbis-src is Orbis $ver; the Graphics Pack 1.0.0 targets 0.2.0" >&2; exit 2; }
+[ "$ver" = 0.2.0 ] || { echo "--orbis-src is Orbis $ver; the Graphics Engine 2.0.0 targets 0.2.0" >&2; exit 2; }
+rel_ver="$(python3 -c "import json; print(json.load(open('manifest/release.json'))['version'])")"
+rel_pfx="$(python3 -c "import json; print(json.load(open('manifest/release.json'))['archive_prefix'])")"
+PACK="$rel_pfx-v$rel_ver.tar.zst"
+CTR="orbis-gfx-build:$rel_ver"
+[ -f out/kernel-ge/build-manifest.json ] || { echo "out/kernel-ge missing: run kernel/build-ge-kernel.sh --orbis-src $orbis_src first" >&2; exit 2; }
+[ -f out/loader-ge/build.json ] || echo "NOTE: out/loader-ge missing (loader/build-loader.sh); the pack will carry no GE loader payloads"
 [ -f "$orbis_src/out/repo/orbis.db.tar.zst" ] || echo "NOTE: $orbis_src/out/repo has no repository; Orbis 0.2.0 packages are assumed installed"
 [ -f "$orbis_src/out/rootfs/packages.txt" ] || echo "NOTE: no out/rootfs/packages.txt; the pack will carry the full dependency closure (bigger, still correct)"
 free_gb=$(df -Pk "$R" | awk 'NR==2 {print int($4/1048576)}')
@@ -55,10 +62,11 @@ if ! $SUDO "$engine" image exists orbis-build:0.2.0 2>/dev/null && ! $SUDO "$eng
   echo "orbis-build:0.2.0 missing; building it from $orbis_src (same Containerfile and snapshot as 0.2.0)"
   make -C "$orbis_src" container ENGINE="$SUDO $engine"
 fi
-$SUDO "$engine" build -t orbis-gfx-build:1.0.0 -f build/Containerfile.gfx build
+$SUDO "$engine" build -t $CTR -f build/Containerfile.gfx build
 
 step "3/5 packages, dependency closure, mini-root (in the container; Mesa takes 1-3 h)"
 rm -rf out/pack && mkdir -p out/pack
+[ -f out/loader-ge/build.json ] && cp -a out/loader-ge out/pack/loader
 mounts=(-v "$R":/src:z)
 args=(--staging /src/out/pack)
 if [ -f "$orbis_src/out/repo/orbis.db.tar.zst" ]; then mounts+=(-v "$orbis_src/out/repo":/orbis/repo:ro,z); args+=(--orbis-repo /orbis/repo); fi
@@ -66,7 +74,7 @@ if [ -f "$orbis_src/out/rootfs/packages.txt" ]; then mounts+=(-v "$orbis_src/out
 if [ -f "$orbis_src/out/keys/orbis-repo-key.fingerprint" ]; then mounts+=(-v "$orbis_src/out/keys":/orbis/keys:z); args+=(--keys /orbis/keys); fi
 [ "$experimental" = 1 ] && args+=(--experimental)
 $SUDO "$engine" run --rm --privileged "${mounts[@]}" -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" -w /src \
-  orbis-gfx-build:1.0.0 build/in-container-build.sh "${args[@]}"
+  $CTR build/in-container-build.sh "${args[@]}"
 $SUDO chown -R "$(id -u):$(id -g)" out/pack
 
 step "4/5 assemble the pack"
@@ -77,9 +85,10 @@ python3 build/assemble_pack.py --staging out/pack --out out/release --git-commit
   --experimental-state "${ex[0]}" --experimental-reason "${ex[1]:-}" "${bp[@]}"
 
 step "5/5 self-check"
-./orbis-graphics verify --pack out/release/ORBIS-GRAPHICS-PACK-v1.0.0.tar.zst
-( cd out/release && sha256sum -c ORBIS-GRAPHICS-PACK-v1.0.0.tar.zst.sha256 )
+./orbis-graphics verify --pack out/release/$PACK
+( cd out/release && sha256sum -c $PACK.sha256 )
 echo
-echo "Pack: $R/out/release/ORBIS-GRAPHICS-PACK-v1.0.0.tar.zst"
+echo "Pack: $R/out/release/$PACK"
 echo "Experimental Mesa: ${ex[0]} (${ex[1]:-})"
-echo "Next: ./orbis-graphics integrate --base-image <orbis-0.2.0 image> --pack out/release/ORBIS-GRAPHICS-PACK-v1.0.0.tar.zst --output <new image>"
+echo "Next: ./orbis-graphics integrate --base-image <orbis-0.2.0 image> --pack out/release/$PACK --output <new image>"
+echo "      ./orbis-graphics stage0 --base-stage0-image <orbis-0.2.0 stage-0 image> --pack out/release/$PACK --output <new stage-0 image>"

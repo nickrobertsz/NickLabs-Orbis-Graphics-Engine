@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# NickLabs Orbis Graphics Engine 2.0.0 — the one command for Nobara.
+#
+#   ./orbis-ge all --orbis-src ~/orbis-release/nicklabs-ps4-orbis-linux \
+#                  --base-image ~/orbis-release/orbis-0.2.0-cuh1215a.img \
+#                  [--base-stage0-image ~/orbis-release/orbis-0.2.0-stage0.img] [--jobs N] [--research-uvd]
+#
+#   ./orbis-ge kernel | loader | pack | image | stage0 | verify | status   (single steps, same options)
+#
+# Steps (each skipped when its output already exists; --rebuild redoes it):
+#   1 kernel   kernel/build-ge-kernel.sh   -> out/kernel-ge/          (GE kernel, 20-60 min)
+#   2 loader   loader/build-loader.sh      -> out/loader-ge/          (GE loader payloads, 1 min)
+#   3 pack     build/build-pack.sh         -> out/release/ORBIS-GRAPHICS-ENGINE-v2.0.0.tar.zst (Mesa 1-3 h)
+#   4 image    orbis-graphics integrate    -> out/images/orbis-0.2.0+ge-2.0.0.img (a COPY of --base-image)
+#   5 stage0   orbis-graphics stage0       -> out/images/orbis-0.2.0-stage0+ge-2.0.0.img (if a stage-0 base is given)
+#   6 verify   checksums of everything     -> out/images/SHA256SUMS, out/ORBIS-GE-RELEASE-RECEIPT.json
+#
+# Never modified: the Orbis 0.2.0 checkout, its images (--base-image is copied first), the Graphics
+# Pack 1.0.0 release, the Nobara system outside this folder (sudo is used only for podman), any PS4.
+# --research-uvd additionally builds the community UVD research kernel into out/kernel-ge-uvd/; it is
+# never put into the pack or the images (see docs/GRAPHICS-ENGINE-VIDEO.md).
+set -euo pipefail
+R="$(cd "$(dirname "$0")" && pwd)"
+cd "$R"
+cmd="${1:-help}"; [ $# -gt 0 ] && shift
+orbis_src=""; base=""; base0=""; jobs=""; uvd=0; rebuild=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --orbis-src) orbis_src="$(realpath "$2")"; shift 2 ;;
+    --base-image) base="$(realpath "$2")"; shift 2 ;;
+    --base-stage0-image) base0="$(realpath "$2")"; shift 2 ;;
+    --jobs) jobs="$2"; shift 2 ;;
+    --research-uvd) uvd=1; shift ;;
+    --rebuild) rebuild=1; shift ;;
+    *) echo "unknown option $1" >&2; exit 2 ;;
+  esac
+done
+ver="$(python3 -c "import json; print(json.load(open('manifest/release.json'))['version'])")"
+pfx="$(python3 -c "import json; print(json.load(open('manifest/release.json'))['archive_prefix'])")"
+PACK="out/release/$pfx-v$ver.tar.zst"
+IMG="out/images/orbis-0.2.0+ge-$ver.img"
+IMG0="out/images/orbis-0.2.0-stage0+ge-$ver.img"
+say() { echo; echo "######## $*"; }
+need_src() { [ -n "$orbis_src" ] && [ -f "$orbis_src/kernel/build-kernel.sh" ] || {
+  echo "--orbis-src <Orbis 0.2.0 checkout> is required for '$cmd'" >&2; exit 2; }; }
+done_or() { [ "$rebuild" = 0 ] && [ -e "$1" ] && { echo "   already built: $1 (--rebuild to redo)"; return 0; }; return 1; }
+
+step_kernel() {
+  say "1 kernel: Orbis 0.2.0 kernel + Graphics Engine series"
+  need_src
+  done_or out/kernel-ge/build-manifest.json || kernel/build-ge-kernel.sh --orbis-src "$orbis_src" ${jobs:+--jobs "$jobs"}
+  if [ "$uvd" = 1 ]; then
+    say "1b research UVD kernel (separate; not packed)"
+    done_or out/kernel-ge-uvd/build-manifest.json || \
+      kernel/build-ge-kernel.sh --orbis-src "$orbis_src" ${jobs:+--jobs "$jobs"} --research-uvd || \
+      echo "   research UVD kernel did not build: recorded as BLOCKED in docs; the release does not depend on it"
+  fi
+}
+step_loader() {
+  say "2 loader payloads (ps4-linux-loader + GE memory-contract patch)"
+  done_or out/loader-ge/build.json || loader/build-loader.sh || {
+    echo "   loader build failed: the pack is built without GE payloads (the stock loader keeps working)" >&2; }
+}
+step_pack() {
+  say "3 packages + pack"
+  need_src
+  done_or "$PACK" || build/build-pack.sh --orbis-src "$orbis_src"
+}
+step_image() {
+  say "4 bootable image (copy of the base, GE integrated)"
+  [ -n "$base" ] && [ -f "$base" ] || { echo "--base-image <Orbis 0.2.0 .img> is required" >&2; exit 2; }
+  mkdir -p out/images
+  if [ "$rebuild" = 1 ] && [ -e "$IMG" ]; then rm -f "$IMG" "$IMG".*; fi
+  done_or "$IMG" || ./orbis-graphics integrate --base-image "$base" --pack "$PACK" --output "$IMG"
+}
+step_stage0() {
+  say "5 stage-0 diagnostic image"
+  if [ -z "$base0" ]; then echo "   no --base-stage0-image given: skipped"; return 0; fi
+  mkdir -p out/images
+  if [ "$rebuild" = 1 ] && [ -e "$IMG0" ]; then rm -f "$IMG0" "$IMG0".*; fi
+  done_or "$IMG0" || ./orbis-graphics stage0 --base-stage0-image "$base0" --pack "$PACK" --output "$IMG0"
+}
+step_verify() {
+  say "6 verify + receipt"
+  ./orbis-graphics verify --pack "$PACK" > out/pack-verify.json
+  ( cd out/release && sha256sum -c "$(basename "$PACK").sha256" )
+  for f in "$IMG" "$IMG0"; do [ -f "$f" ] && ./orbis-graphics inspect --image "$f" --json > "$f.inspect.json"; done
+  ( cd out/images && sha256sum -- *.img > SHA256SUMS && cat SHA256SUMS )
+  python3 - "$PACK" "$IMG" "$IMG0" "${base:-}" <<'PY'
+import hashlib, json, os, sys, time
+pack, img, img0, base = sys.argv[1:5]
+def h(p):
+    if not p or not os.path.isfile(p):
+        return None
+    d = hashlib.sha256()
+    with open(p, "rb") as f:
+        for c in iter(lambda: f.read(1 << 20), b""):
+            d.update(c)
+    return d.hexdigest()
+def j(p):
+    try:
+        return json.load(open(p))
+    except (OSError, ValueError):
+        return None
+km = j("out/kernel-ge/build-manifest.json") or {}
+rec = {"schema": "orbis-ge-release-receipt/1", "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+       "release": json.load(open("manifest/release.json")),
+       "source_commit": os.popen("git rev-parse HEAD 2>/dev/null").read().strip() or None,
+       "kernel": {"release": km.get("kernel_release"), "bzImage_sha256": h("out/kernel-ge/bzImage"), "boot_tested": False},
+       "kernel_research_uvd": j("out/kernel-ge-uvd/build-manifest.json") and "built (not packed)",
+       "loader": j("out/loader-ge/build.json"),
+       "pack": {"file": pack, "sha256": h(pack)},
+       "image": {"file": img, "sha256": h(img), "base_image": base or None, "base_sha256_unchanged_check": h(base) if base else None,
+                 "receipt": j(img + ".integration.json") and j(img + ".integration.json").get("result")},
+       "stage0_image": {"file": img0, "sha256": h(img0), "receipt": j(img0 + ".integration.json") and j(img0 + ".integration.json").get("result")},
+       "next": ["write the image to the USB drive (Fedora Media Writer, or dd to the WHOLE USB device, never a PS4 drive)",
+                "boot it; on the console run: sudo orbis-gpu qualify && sudo orbis-debug collect",
+                "rollback: keep using the original 0.2.0 image, or ./orbis-graphics rollback --image <ge image> --output <restored image>"]}
+json.dump(rec, open("out/ORBIS-GE-RELEASE-RECEIPT.json", "w"), indent=1)
+print(json.dumps({k: rec[k] for k in ("kernel", "pack", "image", "stage0_image")}, indent=1))
+PY
+}
+step_status() {
+  for f in out/kernel-ge/build-manifest.json out/kernel-ge-uvd/build-manifest.json out/loader-ge/build.json "$PACK" "$IMG" "$IMG0"; do
+    printf '%-60s %s\n' "$f" "$([ -e "$f" ] && echo present || echo missing)"
+  done
+}
+
+case "$cmd" in
+  all)
+    command -v podman >/dev/null || { echo "need podman: sudo dnf install podman" >&2; exit 2; }
+    need_src
+    [ -n "$base" ] && [ -f "$base" ] || { echo "--base-image <Orbis 0.2.0 .img> is required for 'all'" >&2; exit 2; }
+    step_kernel; step_loader; step_pack; step_image; step_stage0; step_verify
+    echo; echo "Done. Image: $R/$IMG"; [ -f "$IMG0" ] && echo "Stage-0: $R/$IMG0"; echo "Receipt: $R/out/ORBIS-GE-RELEASE-RECEIPT.json" ;;
+  kernel) step_kernel ;;
+  loader) step_loader ;;
+  pack) step_pack ;;
+  image) step_image ;;
+  stage0) step_stage0 ;;
+  verify) step_verify ;;
+  status) step_status ;;
+  *) sed -n 2,22p "$0"; [ "$cmd" = help ] || exit 2 ;;
+esac

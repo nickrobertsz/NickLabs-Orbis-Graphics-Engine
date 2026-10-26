@@ -1,0 +1,19 @@
+# NickLabs Orbis Graphics Engine 2.0: enable the recorder, the memory policy and the (loopback-only)
+# hardware API. kdump stays off until `orbis-debug kdump enable`. Works inside a chroot (image build).
+post_install() {
+  mkdir -p /var/lib/orbis-blackbox /var/lib/orbis-graphics /var/log/orbis /var/log/journal
+  chmod 0700 /var/lib/orbis-blackbox
+  systemctl enable orbis-blackbox.service orbis-memd.service orbis-hwd.service >/dev/null 2>&1 || true
+  echo ":: orbis-graphics-engine: Black Box records every boot under /var/lib/orbis-blackbox"
+  echo ":: commands: orbis-hw, orbis-mem, orbis-debug, orbis-video, orbis-ai-gpu (all take --json)"
+}
+post_upgrade() {
+  systemctl try-restart orbis-memd.service orbis-hwd.service >/dev/null 2>&1 || true
+}
+pre_remove() {
+  /usr/bin/orbis-hw reset >/dev/null 2>&1 || true
+  /usr/bin/orbis-debug kdump disable >/dev/null 2>&1 || true
+  systemctl disable --now orbis-memd.service orbis-hwd.service orbis-kdump.service >/dev/null 2>&1 || true
+  # the recorder is stopped last and writes this boot's shutdown record
+  systemctl disable --now orbis-blackbox.service >/dev/null 2>&1 || true
+}

@@ -1,0 +1,7 @@
+{
+ "name": "NickLabs Orbis Graphics Engine",
+ "version": "2.0.0",
+ "archive_prefix": "ORBIS-GRAPHICS-ENGINE",
+ "source_prefix": "NICKLABS-ORBIS-GRAPHICS-ENGINE-SOURCE",
+ "previous_releases_untouched": ["Orbis Linux 0.2.0", "NickLabs Orbis Graphics Pack 1.0.0"]
+}

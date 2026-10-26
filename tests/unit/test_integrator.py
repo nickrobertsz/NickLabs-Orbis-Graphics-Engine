@@ -74,8 +74,8 @@ def fake_staging(d: Path) -> Path:
     s = d / "staging"
     (s / "repo").mkdir(parents=True)
     for f in ("mesa-orbis-ps4-26.2.5-101-x86_64", "opencl-mesa-orbis-ps4-26.2.5-101-x86_64",
-              "lib32-mesa-orbis-ps4-26.2.5-101-x86_64", "orbis-graphics-1.0.0-1-x86_64",
-              "orbis-graphics-pack-1.0.0-1-any", "libdrm-2.4.133-1-x86_64", "clinfo-3.0.25.02.14-1-x86_64"):
+              "lib32-mesa-orbis-ps4-26.2.5-101-x86_64", "orbis-graphics-2.0.0-1-x86_64",
+              "orbis-graphics-engine-2.0.0-1-any", "orbis-graphics-pack-2.0.0-1-any", "libdrm-2.4.133-1-x86_64", "clinfo-3.0.25.02.14-1-x86_64"):
         (s / "repo" / f"{f}.pkg.tar.zst").write_bytes(f.encode())
     (s / "repo/orbis-graphics.db.tar.zst").write_bytes(b"db")
     (s / "miniroot").mkdir()
@@ -90,8 +90,21 @@ def fake_staging(d: Path) -> Path:
     return s
 
 
-def build_pack(d: Path, kernel_sha: str | None = None, exp=("NOT_BUILT", "not requested")) -> Path:
+def add_ge_kernel(s: Path, bz: bytes, rel="6.15.4-orbis-ps4-ge-g0123456789ab") -> None:
+    """A linux-orbis-ps4-ge package (vmlinuz only) and loader payloads in a fake staging dir."""
+    zstd_tar(s / "repo/linux-orbis-ps4-ge-6.15.4.crashnt4.7.ge2.0.0-1-x86_64.pkg.tar.zst",
+             {f"usr/lib/modules/{rel}/vmlinuz": bz, f"usr/lib/modules/{rel}/pkgbase": b"linux-orbis-ps4-ge\n"})
+    (s / "loader").mkdir()
+    (s / "loader/orbis-ge-1024mb.bin").write_bytes(b"payload")
+    (s / "loader/SHA256SUMS").write_text(hashlib.sha256(b"payload").hexdigest() + "  orbis-ge-1024mb.bin\n")
+    (s / "loader/build.json").write_text(json.dumps({"schema": "orbis-ge-loader/1", "loader_commit": "d0f4d4c"}))
+
+
+def build_pack(d: Path, kernel_sha: str | None = None, exp=("NOT_BUILT", "not requested"),
+               ge_kernel: bytes | None = None) -> Path:
     s = fake_staging(d)
+    if ge_kernel is not None:
+        add_ge_kernel(s, ge_kernel)
     arc = assemble_pack.assemble(s, d / "rel", exp[0], exp[1], None, None, now="20261026T000000Z")
     if kernel_sha:
         top = d / "rel" / assemble_pack.TOP
@@ -140,7 +153,7 @@ class Base(unittest.TestCase):
 class PackTest(Base):
     def test_assemble_and_verify(self):
         arc = build_pack(self.d)
-        self.assertTrue(arc.name == "ORBIS-GRAPHICS-PACK-v1.0.0.tar.zst")
+        self.assertTrue(arc.name == "ORBIS-GRAPHICS-ENGINE-v2.0.0.tar.zst")
         rc, out, _ = quiet(ogt.main, ["verify", "--pack", str(arc)])
         self.assertEqual(rc, 0)
         v = json.loads(out)
@@ -256,6 +269,28 @@ class ImageTest(Base):
         rc, _, err = quiet(ogt.main, ["stage0", "--base-stage0-image", str(s0), "--pack", str(arc),
                                       "--output", str(self.d / "g.img"), "--dry-run"])
         self.assertEqual(rc, 2); self.assertIn("would replace", err)
+
+    def test_ge_pack_kernel_and_loader(self):
+        ge = make_bzimage() + b"GE" * 10
+        arc = build_pack(self.d, self.ksha, ge_kernel=ge)
+        m = ogt.verify_pack(arc)["manifest"]
+        self.assertTrue(m["kernel"]["replacement"])
+        self.assertFalse(m["kernel"]["boot_tested"])
+        self.assertEqual(m["loader"]["payloads"], ["orbis-ge-1024mb.bin"])
+        self.assertIn("linux-orbis-ps4-ge", m["orbis_built"])
+        pdir = ogt.unpack(arc)
+        data, rel = ogt.pack_kernel(pdir, m)
+        self.assertEqual((data, rel), (ge, "6.15.4-orbis-ps4-ge-g0123456789ab"))
+        s0 = base_image(self.d, "s0.img", True, self.kernel, self.ird)
+        rc, out, err = quiet(ogt.main, ["stage0", "--base-stage0-image", str(s0), "--pack", str(arc),
+                                        "--output", str(self.d / "g.img"), "--dry-run"])
+        self.assertEqual(rc, 0, err)
+        k = json.loads(out)["plan"]["kernel"]
+        self.assertEqual(k["sha256"], hashlib.sha256(ge).hexdigest())
+        self.assertTrue(k["source"].startswith("pack (6.15.4-orbis-ps4-ge"))
+        rc, out, err = quiet(ogt.main, ["stage0", "--base-stage0-image", str(s0), "--pack", str(arc),
+                                        "--output", str(self.d / "g.img"), "--dry-run", "--keep-base-kernel"])
+        self.assertEqual(json.loads(out)["plan"]["kernel"]["sha256"], self.ksha)
 
     def test_stage0_dry_run(self):
         arc = build_pack(self.d, self.ksha)
