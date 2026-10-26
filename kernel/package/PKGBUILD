@@ -1,0 +1,36 @@
+# NickLabs Orbis Graphics Pack — OPTIONAL graphics kernel package. Built by build/in-container-build.sh
+# only when kernel/patches/series lists reviewed patches AND kernel/build-gfx-kernel.sh produced
+# out/kernel-gfx. Installs side by side with linux-orbis-ps4 (different release name); the Orbis
+# 0.2.0 hook 95-orbis-kernel-sync stages it and keeps the previous kernel as bzImage.orbis-prev.
+pkgname=linux-orbis-ps4-gfx
+pkgver=6.15.4.crashnt4.7.gfx1
+pkgrel=1
+pkgdesc="PS4 (Aeolia/Belize) kernel: Orbis 0.2.0 kernel + reviewed GPU patches (Orbis Graphics Pack, NOT boot-tested)"
+arch=('x86_64')
+url="https://github.com/feeRnt/ps4-linux-12xx"
+license=('GPL-2.0-only')
+options=('!strip' '!debug' '!lto')
+source=()
+
+build() {
+  local K="${ORBIS_GFX_KERNEL_OUT:-${startdir}/../../out/kernel-gfx}"
+  [ -f "$K/build-manifest.json" ] || { echo "no $K/build-manifest.json: run kernel/build-gfx-kernel.sh first" >&2; return 1; }
+  rm -rf "$srcdir/out" && cp -a "$K" "$srcdir/out" && rm -rf "$srcdir/out/modroot"
+  ( cd "$srcdir/out" && sha256sum -c SHA256SUMS )
+  python -I -c "import sys; sys.path.insert(0, sys.argv[1]); from orbis import bzimage; r = bzimage.inspect(sys.argv[2]); print('loader check:', 'ok' if r.ok else r.errors); sys.exit(0 if r.ok and (r.ikconfig or {}).get('CONFIG_X86_PS4') == 'y' else 1)" \
+    "${startdir}/../../integrator/vendor/orbis020" "$srcdir/out/bzImage"
+}
+
+package() {
+  local rel
+  rel="$(python -c "import json; print(json.load(open('$srcdir/out/build-manifest.json'))['kernel_release'])")"
+  case "$rel" in *-orbis-ps4-gfx*) ;; *) echo "release $rel is not a -orbis-ps4-gfx kernel" >&2; return 1 ;; esac
+  rm -rf "$srcdir/mods" && mkdir -p "$srcdir/mods" "$pkgdir/usr/lib/modules"
+  tar -C "$srcdir/mods" -xf "$srcdir/out/modules-$rel.tar"
+  mv "$srcdir/mods/lib/modules/$rel" "$pkgdir/usr/lib/modules/$rel"
+  rm -f "$pkgdir/usr/lib/modules/$rel"/{build,source}
+  install -Dm644 "$srcdir/out/bzImage" "$pkgdir/usr/lib/modules/$rel/vmlinuz"
+  install -Dm644 "$srcdir/out/config" "$pkgdir/usr/lib/modules/$rel/config"
+  install -Dm644 "$srcdir/out/build-manifest.json" "$pkgdir/usr/lib/modules/$rel/orbis-build-manifest.json"
+  echo "$pkgname" > "$pkgdir/usr/lib/modules/$rel/pkgbase"
+}

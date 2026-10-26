@@ -1,0 +1,506 @@
+{
+ "schema": "orbis-gfx-catalog/1",
+ "generated": "2026-10-26T00:00:00Z",
+ "evidence_levels": {
+  "SAME-MODEL": "reported on a CUH-1215A",
+  "SAME-FAMILY": "reported on CUH-12xx / Liverpool",
+  "COMMUNITY": "author report or guide; hardware may differ",
+  "BA": "Baikal/Pro hardware; a lead, not transferable",
+  "DOC": "official/project documentation or source",
+  "ORBIS-SOURCE": "checked by Orbis in the pinned source",
+  "UNRATED": "collected by catalog_update.py, not reviewed"
+ },
+ "statuses": [
+  "open",
+  "monitor",
+  "research",
+  "review-needed",
+  "port-prepared",
+  "addressed-in-pack",
+  "mitigated-in-base",
+  "blocked-by-kernel",
+  "guarded",
+  "policy",
+  "documented",
+  "not-applicable-but-guarded",
+  "new-unreviewed"
+ ],
+ "entries": [
+  {
+   "id": "GFX-001",
+   "severity": "P0",
+   "evidence": "SAME-FAMILY",
+   "title": "HDMI alive at 1080p60 but all pixels black after a userspace KMS modeset (MN864729 VMUTE not cleared after disable/enable)",
+   "hardware": "CUH-12xx (Aeolia per report)",
+   "sources": [
+    {
+     "url": "https://github.com/aday1/ps4-hdmi-blackscreen"
+    }
+   ],
+   "status": "mitigated-in-base",
+   "pack_action": "0.2.0 kernel (crashnt-4.7) already removes the in-queue ICC delays that aday1 identified; aday1 reports the prebuilt crashnt-4.7 kernel fixes it on a CUH-12xx. Pack: display.connector/display.link checks + stage-0 connector/EDID capture; opt-in kernel patch kernel/patches/available/0101 adds runtime A/B knobs (defaults = 0.2.0 behaviour).",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "handoff 2026-10-26"
+  },
+  {
+   "id": "GFX-002",
+   "severity": "P0",
+   "evidence": "COMMUNITY",
+   "title": "Display manager / X11 / Wayland login black or grey screen; unsupported EDID; hotplug failure",
+   "hardware": null,
+   "sources": [
+    {
+     "url": "https://github.com/feeRnt/ps4-linux-12xx/releases"
+    },
+    {
+     "url": "https://github.com/DionKill/ps4-linux-tutorial/blob/main/docs/issues.md"
+    }
+   ],
+   "status": "monitor",
+   "pack_action": "stage-0 and qualify record connectors, modes, EDID header validity and link state; Orbis 0001 advertises 1080p60 only (safe fallback).",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "handoff 2026-10-26"
+  },
+  {
+   "id": "GFX-003",
+   "severity": "P0",
+   "evidence": "SAME-FAMILY",
+   "title": "Vulkan geometry/texture corruption while 2D/UI looks fine (RADV on Liverpool 1002:9922)",
+   "hardware": "Liverpool 1002:9922",
+   "sources": [
+    {
+     "url": "https://github.com/vinegarhq/sober/issues/2490"
+    }
+   ],
+   "status": "open",
+   "pack_action": "vk.raster pixel oracles (gradient, depth test) + vk.compute numeric oracle; Mesa patch 0005 (RADV meta fill on MUBUF) included; no universal fix known.",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "handoff 2026-10-26"
+  },
+  {
+   "id": "GFX-004",
+   "severity": "P0",
+   "evidence": "DOC",
+   "title": "GPU shows up as software renderer / DRM missing / Liverpool not mapped in libdrm/Mesa/Xorg",
+   "hardware": null,
+   "sources": [
+    {
+     "url": "https://github.com/fail0verflow/ps4-radeon-patches"
+    }
+   ],
+   "status": "addressed-in-pack",
+   "pack_action": "Mesa patch 0001 adds Liverpool/Gladius families; gl.renderer FAILs on llvmpipe/softpipe; vk.device requires a non-CPU RADV device (driverID 3).",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "handoff 2026-10-26"
+  },
+  {
+   "id": "GFX-005",
+   "severity": "P0",
+   "evidence": "COMMUNITY",
+   "title": "Missing/wrong GPU firmware; GFX/SDMA rings fail or time out",
+   "hardware": null,
+   "sources": [],
+   "status": "addressed-in-pack",
+   "pack_action": "gpu.firmware lists per-block versions from debugfs (CE PFP ME MEC MEC2 RLC SDMA0 SDMA1); gpu.rings; opt-in gpu.ib_test; pack contains no firmware.",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "handoff 2026-10-26"
+  },
+  {
+   "id": "GFX-006",
+   "severity": "P0",
+   "evidence": "BA",
+   "title": "Kernel/libdrm/Mesa ABI mismatch after upgrades (5.4 Baikal kernel + newer libdrm)",
+   "hardware": "Baikal",
+   "sources": [
+    {
+     "url": "https://github.com/feeRnt/ps4-linux-12xx/issues/8"
+    }
+   ],
+   "status": "not-applicable-but-guarded",
+   "pack_action": "6.15.4 is not capped at old Mesa; contract documented in GRAPHICS-KERNEL-MESA-COMPATIBILITY.md; build refuses libdrm < 2.4.133.",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "handoff 2026-10-26"
+  },
+  {
+   "id": "GFX-007",
+   "severity": "P1",
+   "evidence": "BA",
+   "title": "Mesa upgrade regresses: 26.2.5 on Baikal had OpenGL but stalled Vulkan/UVD and was rolled back",
+   "hardware": "Baikal",
+   "sources": [
+    {
+     "url": "https://github.com/meerzulee/linux-psx"
+    }
+   ],
+   "status": "monitor",
+   "pack_action": "Two Mesa lines (stable 26.2.5 + pinned main snapshot) and rollback-root.sh back to the 0.2.0 Mesa.",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "handoff 2026-10-26"
+  },
+  {
+   "id": "GFX-008",
+   "severity": "P1",
+   "evidence": "COMMUNITY",
+   "title": "Some apps improve with RADV_DEBUG=nocompute or amdgpu.abmlevel=0; WineD3D slow",
+   "hardware": null,
+   "sources": [
+    {
+     "url": "https://github.com/DionKill/ps4-linux-tutorial/blob/main/docs/issues.md"
+    }
+   ],
+   "status": "policy",
+   "pack_action": "Never global: profiles never set RADV_DEBUG; documented as per-application troubleshooting only (conflicts with GPU compute).",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "handoff 2026-10-26"
+  },
+  {
+   "id": "GFX-009",
+   "severity": "P1",
+   "evidence": "COMMUNITY",
+   "title": "DPCD/DP link readiness, HPD polling and clock recovery cause intermittent black screens",
+   "hardware": null,
+   "sources": [
+    {
+     "url": "https://github.com/feeRnt/ps4-linux-12xx/releases"
+    }
+   ],
+   "status": "research",
+   "pack_action": "kernel/candidates.json includes sjd-6.18.21-dprework and feeRnt 6.15.4 branches; research-deltas.sh extracts GPU/bridge diffs for review; nothing applied.",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "handoff 2026-10-26"
+  },
+  {
+   "id": "GFX-010",
+   "severity": "P1",
+   "evidence": "COMMUNITY",
+   "title": "Sustained performance depends on SCLK, low-power states, ASPM, IRQs, thermals",
+   "hardware": null,
+   "sources": [
+    {
+     "url": "https://github.com/sony-jaguar-devs/ps4-linux"
+    }
+   ],
+   "status": "blocked-by-kernel",
+   "pack_action": "On the 0.2.0 kernel Liverpool has no powerplay (pp_smu) so there is no DPM/clock control: pm.clocks = UNSUPPORTED with the reason. perf.sustained (opt-in) records frame time drift and CPU temperatures.",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "handoff 2026-10-26"
+  },
+  {
+   "id": "GFX-011",
+   "severity": "P1",
+   "evidence": "DOC",
+   "title": "GPU carve-out competes with Linux RAM in unified GDDR5",
+   "hardware": null,
+   "sources": [
+    {
+     "url": "https://github.com/ps4-linux/ps4-linux-loader"
+    }
+   ],
+   "status": "addressed-in-pack",
+   "pack_action": "Profiles only RECOMMEND vram_mb; changing it is the existing explicit 0.2.0 step (orbis boot set-vram, reboot).",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "handoff 2026-10-26"
+  },
+  {
+   "id": "GFX-012",
+   "severity": "P1",
+   "evidence": "BA",
+   "title": "UVD H.264 decode inconsistent; stalls after upgrades",
+   "hardware": "Baikal",
+   "sources": [
+    {
+     "url": "https://github.com/meerzulee/linux-psx"
+    }
+   ],
+   "status": "blocked-by-kernel",
+   "pack_action": "0.2.0 kernel has the UVD 4.2 / VCE 2.0 IP blocks commented out for Liverpool and the loader does not supply UVD/VCE firmware: video.decode = UNSUPPORTED. feeRnt x_exp__6.15.4-uvd-engine(2) are research candidates.",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "handoff 2026-10-26"
+  },
+  {
+   "id": "GFX-013",
+   "severity": "P1",
+   "evidence": "DOC",
+   "title": "Vulkan/compute may enumerate but miscompute or stall",
+   "hardware": null,
+   "sources": [
+    {
+     "url": "https://docs.mesa3d.org/drivers/radv.html"
+    },
+    {
+     "url": "https://rocm.docs.amd.com/projects/install-on-linux/en/docs-7.2.2/reference/system-requirements.html"
+    }
+   ],
+   "status": "addressed-in-pack",
+   "pack_action": "vk.compute integer oracle checked on CPU, cl.rusticl integer kernel checked on CPU, bounded by timeouts; no ROCm dependency.",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "handoff 2026-10-26"
+  },
+  {
+   "id": "GFX-014",
+   "severity": "P2",
+   "evidence": "COMMUNITY",
+   "title": "App/peripheral bugs look like GPU bugs (OSD, controller, HDMI audio)",
+   "hardware": null,
+   "sources": [
+    {
+     "url": "https://github.com/danyboy666/ps4-linux-12xx/releases"
+    }
+   ],
+   "status": "addressed-in-pack",
+   "pack_action": "qualify keeps GL, Vulkan, compute, video and display checks separate with their own result codes.",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "handoff 2026-10-26"
+  },
+  {
+   "id": "GFX-015",
+   "severity": "P2",
+   "evidence": "COMMUNITY",
+   "title": "Newer kernels: experimental 1080p120, HDMI audio, clock controls",
+   "hardware": null,
+   "sources": [
+    {
+     "url": "https://github.com/sony-jaguar-devs/ps4-linux"
+    }
+   ],
+   "status": "research",
+   "pack_action": "Opt-in only; not in 1.0.0. Candidates listed in kernel/candidates.json.",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "handoff 2026-10-26"
+  },
+  {
+   "id": "GFX-016",
+   "severity": "P2",
+   "evidence": "COMMUNITY",
+   "title": "GPU performance affected by CPU-side disk/IRQ/network load",
+   "hardware": null,
+   "sources": [
+    {
+     "url": "https://github.com/feeRnt/ps4-linux-12xx/discussions/7"
+    }
+   ],
+   "status": "addressed-in-pack",
+   "pack_action": "gl.frame_timing reports median and p95; DEGRADED when p95 > 2x median; perf.sustained is opt-in.",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "handoff 2026-10-26"
+  },
+  {
+   "id": "GFX-017",
+   "severity": "P2",
+   "evidence": "SAME-MODEL",
+   "title": "No HDMI signal can be a physical transmitter/port defect",
+   "hardware": "CUH-1215A",
+   "sources": [
+    {
+     "url": "https://www.ifixit.com/Answers/View/376181/PS4%2BCUH-1215A%2B-%2BNo%2BHDMI%2Bsignal"
+    }
+   ],
+   "status": "documented",
+   "pack_action": "GRAPHICS-HARDWARE-QUALIFICATION.md: check the PS4 menu shows a picture before Linux; stage-0 logs connector status independent of the display.",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "handoff 2026-10-26"
+  },
+  {
+   "id": "GFX-018",
+   "severity": "P2",
+   "evidence": "BA",
+   "title": "7.x Baikal GPU improvements are not a drop-in for Belize 6.15.4",
+   "hardware": "Baikal",
+   "sources": [
+    {
+     "url": "https://github.com/meerzulee/linux-psx"
+    }
+   ],
+   "status": "policy",
+   "pack_action": "Compatibility matrix is per target; 7.0-Clean is a research candidate only.",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "handoff 2026-10-26"
+  },
+  {
+   "id": "ORB-001",
+   "severity": "P0",
+   "evidence": "DOC",
+   "title": "Mesa 26.2.5 requires libdrm_amdgpu >= 2.4.133 (meson.build)",
+   "hardware": null,
+   "sources": [
+    {
+     "url": "https://gitlab.freedesktop.org/mesa/mesa/-/blob/mesa-26.2.5/meson.build"
+    }
+   ],
+   "status": "guarded",
+   "pack_action": "build/in-container-build.sh checks the snapshot's libdrm before building; mesa-orbis-ps4 depends on libdrm>=2.4.133.",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "orbis-graphics 1.0.0 review"
+  },
+  {
+   "id": "ORB-002",
+   "severity": "P1",
+   "evidence": "ORBIS-SOURCE",
+   "title": "Orbis 0.2.0 kernel (feeRnt 108ef97): CHIP_LIVERPOOL gets no pp_smu block in cik.c",
+   "hardware": null,
+   "sources": [
+    {
+     "url": "https://github.com/feeRnt/ps4-linux-12xx/tree/108ef9764583076cbff879f581fd598817eb880a/drivers/gpu/drm/amd/amdgpu/cik.c"
+    }
+   ],
+   "status": "blocked-by-kernel",
+   "pack_action": "No power_dpm_force_performance_level / pp_dpm_sclk; profile gpu_perf_level writes are skipped with a recorded reason; pm.clocks UNSUPPORTED.",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "orbis-graphics 1.0.0 review"
+  },
+  {
+   "id": "ORB-003",
+   "severity": "P1",
+   "evidence": "ORBIS-SOURCE",
+   "title": "Orbis 0.2.0 kernel: UVD 4.2 and VCE 2.0 IP blocks commented out for Liverpool",
+   "hardware": null,
+   "sources": [
+    {
+     "url": "https://github.com/feeRnt/ps4-linux-12xx/tree/108ef9764583076cbff879f581fd598817eb880a/drivers/gpu/drm/amd/amdgpu/cik.c"
+    }
+   ],
+   "status": "blocked-by-kernel",
+   "pack_action": "video.decode UNSUPPORTED (no uvd ring).",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "orbis-graphics 1.0.0 review"
+  },
+  {
+   "id": "ORB-004",
+   "severity": "P1",
+   "evidence": "ORBIS-SOURCE",
+   "title": "Loader extracts 8 GPU microcode files; liverpool_uvd.bin / liverpool_vce.bin are not extracted",
+   "hardware": null,
+   "sources": [
+    {
+     "url": "https://github.com/ps4-linux/ps4-linux-loader"
+    }
+   ],
+   "status": "documented",
+   "pack_action": "Hardware video would also need private firmware in the initramfs; the pack never ships firmware.",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "orbis-graphics 1.0.0 review"
+  },
+  {
+   "id": "ORB-005",
+   "severity": "P1",
+   "evidence": "ORBIS-SOURCE",
+   "title": "aday1 bridge patch: 2 of 8 hunks target ICC delays that crashnt-4.7 already removed",
+   "hardware": null,
+   "sources": [
+    {
+     "url": "https://github.com/aday1/ps4-hdmi-blackscreen/blob/5c1c2fc1416d1aa99da408315c37f45d2ed1d7e9/patches/0003-ps4_bridge-unstrand-the-unmute.patch"
+    }
+   ],
+   "status": "port-prepared",
+   "pack_action": "kernel/patches/available/0101 (applies -F0; not compile- or boot-tested; defaults = 0.2.0 behaviour).",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "orbis-graphics 1.0.0 review"
+  },
+  {
+   "id": "ORB-006",
+   "severity": "P2",
+   "evidence": "ORBIS-SOURCE",
+   "title": "rmuxnet/ps4-linux-12xx not reachable anonymously on 2026-10-26",
+   "hardware": null,
+   "sources": [
+    {
+     "url": "https://github.com/rmuxnet/ps4-linux-12xx"
+    }
+   ],
+   "status": "monitor",
+   "pack_action": "feeRnt carries a 6.18.21-rmuxnet-clean branch (candidate feernt-6.18.21-rmuxnet-clean).",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "orbis-graphics 1.0.0 review"
+  },
+  {
+   "id": "ORB-007",
+   "severity": "P2",
+   "evidence": "ORBIS-SOURCE",
+   "title": "linux-psx main moved from a1910182 (Orbis Mesa patch pin) to 21380639",
+   "hardware": null,
+   "sources": [
+    {
+     "url": "https://github.com/meerzulee/linux-psx"
+    }
+   ],
+   "status": "review-needed",
+   "pack_action": "Re-diff userspace/mesa/patches against the pinned copies before the next Mesa bump.",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "orbis-graphics 1.0.0 review"
+  },
+  {
+   "id": "ORB-008",
+   "severity": "P2",
+   "evidence": "ORBIS-SOURCE",
+   "title": "Community Mesa PKGBUILD (DionKill mesa-ps4) uses sha256sums SKIP",
+   "hardware": null,
+   "sources": [
+    {
+     "url": "https://github.com/DionKill/ps4-video-archlinux"
+    }
+   ],
+   "status": "policy",
+   "pack_action": "Orbis pins every source by commit or SHA-256.",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "orbis-graphics 1.0.0 review"
+  },
+  {
+   "id": "ORB-009",
+   "severity": "P2",
+   "evidence": "ORBIS-SOURCE",
+   "title": "Historic recipe (Ps3itaTeam) recommended SigLevel = Never",
+   "hardware": null,
+   "sources": [
+    {
+     "url": "https://github.com/Ps3itaTeam/ps4linux-video-drivers"
+    }
+   ],
+   "status": "policy",
+   "pack_action": "Orbis repos are signed with the local key; the pack's offline pacman config uses the Orbis key when present.",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "orbis-graphics 1.0.0 review"
+  },
+  {
+   "id": "ORB-010",
+   "severity": "P2",
+   "evidence": "ORBIS-SOURCE",
+   "title": "0.2.0 kernel builds without CONFIG_HSA_AMD (no amdkfd): no ROCm/HIP path",
+   "hardware": null,
+   "sources": [],
+   "status": "policy",
+   "pack_action": "GPU compute = Vulkan (RADV) and OpenCL (RustiCL) only, both checked with numeric oracles; CPU fallback stays the default AI backend until they pass.",
+   "first_seen": "2026-10-26",
+   "last_checked": "2026-10-26",
+   "origin": "orbis-graphics 1.0.0 review"
+  }
+ ],
+ "inbox": [],
+ "cursor": {}
+}

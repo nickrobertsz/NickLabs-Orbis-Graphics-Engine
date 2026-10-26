@@ -1,0 +1,15 @@
+{
+ "schema": 1,
+ "note": "Reviewed kernel patches that are NOT in kernel/patches/series by default. Enabling one means building a separate linux-orbis-ps4-gfx kernel (the 0.2.0 kernel stays as bzImage.orbis-prev).",
+ "patches": [
+  {"file": "0101-ps4_bridge-ab-knobs-for-unmute-fix.patch",
+   "ledger": "GFX-001",
+   "from": "https://github.com/aday1/ps4-hdmi-blackscreen @ 5c1c2fc1416d1aa99da408315c37f45d2ed1d7e9 patches/0003-ps4_bridge-unstrand-the-unmute.patch",
+   "license": "GPL-2.0 (kernel patch; the repository's tools are MIT)",
+   "changes_vs_original": "dropped ps4_bridge_icc_delays + ps4_bridge_seq_delay (delays already removed in feeRnt crashnt-4.7); defaults changed to stock behaviour (mute_on_disable=1, force_unmute=0, debug_regs=0, fix_hdcpen=0)",
+   "applies": "yes, patch -F0 on 108ef97 + Orbis 0001",
+   "compile_tested": false,
+   "boot_tested": false,
+   "enable": "echo available/0101-ps4_bridge-ab-knobs-for-unmute-fix.patch >> kernel/patches/series"}
+ ]
+}

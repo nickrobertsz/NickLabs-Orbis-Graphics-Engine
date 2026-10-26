@@ -33,6 +33,11 @@ package() {
   find "$pkgdir/usr/lib/orbis-graphics/orbis_gfx" -name __pycache__ -prune -exec rm -rf {} +
   python -m compileall -q "$pkgdir/usr/lib/orbis-graphics/orbis_gfx"
   install -Dm755 "$R/diag/bin/orbis-gpu" "$pkgdir/usr/bin/orbis-gpu"
+  # names used in the research handoff: orbis-gpu-qualify / orbis-gpu-health
+  for c in qualify health; do
+    printf '#!/bin/sh\nexec /usr/bin/orbis-gpu %s "$@"\n' "$c" > "$pkgdir/usr/bin/orbis-gpu-$c"
+    chmod 755 "$pkgdir/usr/bin/orbis-gpu-$c"
+  done
   install -Dm755 "$R/diag/bin/orbis-qualify-with-graphics" "$pkgdir/usr/lib/orbis-graphics/orbis-qualify-with-graphics"
   for u in "$R"/diag/systemd/*; do install -Dm644 "$u" "$pkgdir/usr/lib/systemd/system/$(basename "$u")"; done
   install -Dm644 "$R/diag/config/graphics.json" "$pkgdir/etc/orbis/graphics.json"

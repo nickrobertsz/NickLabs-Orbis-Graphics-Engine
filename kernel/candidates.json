@@ -1,0 +1,33 @@
+{
+ "schema": 1,
+ "note": "Kernel trees with PS4 GPU work that could be forward-ported onto the Orbis 0.2.0 kernel (feeRnt 6.15.4 crashnt-4.7 @ 108ef97). Commits observed with git ls-remote on 2026-10-26; research-deltas.sh refuses a ref that moved unless --follow is given. Nothing here is applied automatically: a reviewed commit goes into kernel/patches/ + series by hand.",
+ "base": {"repo": "https://github.com/feeRnt/ps4-linux-12xx", "ref": "refs/tags/v6.15.4_crashnt-4.7__no-built-in-fw",
+          "commit": "108ef9764583076cbff879f581fd598817eb880a", "upstream": "v6.15.4"},
+ "upstream_mirror": "https://github.com/gregkh/linux",
+ "gpu_paths": ["drivers/gpu/drm/amd", "drivers/gpu/drm/radeon", "drivers/gpu/drm/drm_edid.c", "include/drm",
+               "include/uapi/drm/amdgpu_drm.h", "arch/x86/platform/ps4", "drivers/ps4", "sound/pci/hda/patch_hdmi.c"],
+ "candidates": [
+  {"id": "feernt-crashnt-4.8.3", "repo": "https://github.com/feeRnt/ps4-linux-12xx", "ref": "refs/tags/v6.15.4__crashnt-4.8.3",
+   "commit": "b561a461526b299558d57929f2660fd983a3a847", "upstream": "v6.15.4",
+   "why": "same 6.15.4 line, newer crashnt release; tutorial lists it as the recommended base for users with issues on newer kernels"},
+  {"id": "feernt-6.15.4-crashniels", "repo": "https://github.com/feeRnt/ps4-linux-12xx", "ref": "refs/heads/6.15.4-aeolia-belize-crashniels",
+   "commit": "e155734653784d5be2495a4c5d6b00f5c4c4db5a", "upstream": "v6.15.4",
+   "why": "development branch of the 6.15.4 Aeolia/Belize line"},
+  {"id": "feernt-uvd-engine", "repo": "https://github.com/feeRnt/ps4-linux-12xx", "ref": "refs/heads/x_exp__6.15.4-uvd-engine",
+   "commit": "fb214f395b4294217f8e7bc156466bf6c3c641ad", "upstream": "v6.15.4",
+   "why": "experimental UVD (hardware video decode) bring-up on Liverpool; pairs with Mesa patch 0002 (excluded from the stable line)"},
+  {"id": "feernt-uvd-engine2", "repo": "https://github.com/feeRnt/ps4-linux-12xx", "ref": "refs/heads/x_exp__6.15.4-uvd-engine2",
+   "commit": "434592754dda9094672da7abe0391085e8f18753", "upstream": "v6.15.4", "why": "second UVD attempt"},
+  {"id": "feernt-6.18.21-rmuxnet-clean", "repo": "https://github.com/feeRnt/ps4-linux-12xx", "ref": "refs/heads/6.18.21-rmuxnet-clean",
+   "commit": "1ef5853e15568d0897de907b59bb5d98a6baa63f", "upstream": "v6.18.21", "why": "rmuxnet 6.18 work mirrored in feeRnt"},
+  {"id": "sjd-6.18.21-stable", "repo": "https://github.com/sony-jaguar-devs/ps4-linux", "ref": "refs/heads/6.18.21-Stable",
+   "commit": "f712c121052e18fc6a99c6d585a01d978ad962f7", "upstream": "v6.18.21",
+   "why": "sony-jaguar-devs stable line: SCLK forcing, low-power states, bridge/HDMI audio, PCIe handling (handoff GFX-010/015)"},
+  {"id": "sjd-6.18.21-gpuwork", "repo": "https://github.com/sony-jaguar-devs/ps4-linux", "ref": "refs/heads/6.18.21-Strawberry-GpuWork",
+   "commit": "79d8f7ab38c9649df81106086174b27bc23b9970", "upstream": "v6.18.21", "why": "GPU-specific work branch"},
+  {"id": "sjd-6.18.21-dprework", "repo": "https://github.com/sony-jaguar-devs/ps4-linux", "ref": "refs/heads/6.18.21-DpRework",
+   "commit": "9ce3fe175f73a1ba2c2d9d282eacc5be6fddc004", "upstream": "v6.18.21", "why": "DisplayPort/bridge rework (HDMI path on PS4 goes through the bridge)"},
+  {"id": "sjd-7.0-clean", "repo": "https://github.com/sony-jaguar-devs/ps4-linux", "ref": "refs/heads/7.0-Clean",
+   "commit": "65080953edac51372bda1bc62e762ae46b32172f", "upstream": "v7.0", "why": "newest line; reference for what upstream changes PS4 GPU support needs"}
+ ]
+}

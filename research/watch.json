@@ -1,0 +1,28 @@
+{
+ "schema": 1,
+ "note": "Sources the Nobara-side catalog updater polls (research/catalog_update.py). Repos are polled for issues+PRs (one GitHub endpoint), releases and, for listed branches, commits. Items are kept only if they match a keyword. Nothing is ever applied automatically.",
+ "keywords": ["amdgpu", "radeon", "liverpool", "gladius", "starsha", "1002:992", "mesa", "radv", "radeonsi", "vulkan",
+              "opengl", "gles", "egl", "gbm", "llvmpipe", "drm", "kms", "modeset", "black screen", "blackscreen",
+              "no signal", "hdmi", "edid", "dpcd", "bridge", "mn864729", "ps4_bridge", "vram", "gtt", "uvd", "vce",
+              "va-api", "vaapi", "firmware", "ring", "gpu hang", "gpu reset", "timeout", "sclk", "dpm", "clock",
+              "corrupt", "garbled", "artifact", "xorg", "wayland", "compositor", "rusticl", "opencl", "compute",
+              "proton", "wine", "dxvk", "gpu"],
+ "repos": [
+  {"repo": "feeRnt/ps4-linux-12xx", "why": "Orbis 0.2.0 kernel lineage", "branches": ["6.15.4-aeolia-belize-crashniels", "x_exp__6.15.4-uvd-engine2", "6.18.21-rmuxnet-clean"]},
+  {"repo": "sony-jaguar-devs/ps4-linux", "why": "newer kernel lines (6.18/7.0), clocks, bridge, HDMI audio", "branches": ["6.18.21-Stable", "6.18.21-Strawberry-GpuWork", "7.0-Clean"]},
+  {"repo": "meerzulee/linux-psx", "why": "Mesa patch source (0001/0003/0005), Baikal GPU/UVD experiments", "branches": ["main"]},
+  {"repo": "aday1/ps4-hdmi-blackscreen", "why": "CUH-12xx HDMI black-screen root cause", "branches": []},
+  {"repo": "DionKill/ps4-linux-tutorial", "why": "community issue list and workarounds", "branches": []},
+  {"repo": "DionKill/ps4-video-archlinux", "why": "community Mesa/libdrm/xf86 packaging", "branches": []},
+  {"repo": "Ps3itaTeam/ps4linux-video-drivers", "why": "historic driver packaging", "branches": []},
+  {"repo": "fail0verflow/ps4-radeon-patches", "why": "original Liverpool patch lineage", "branches": []},
+  {"repo": "ps4-linux/ps4-linux-loader", "why": "payload/VRAM/EDID contract", "branches": []},
+  {"repo": "danyboy666/ps4-linux-12xx", "why": "6.15 release notes (app vs GPU bugs)", "branches": []},
+  {"repo": "rmuxnet/ps4-linux-12xx", "why": "named in the handoff; returned an auth prompt to an anonymous clone on 2026-10-26 (private, renamed or deleted); polled so a reappearance is noticed", "branches": []}
+ ],
+ "issues": [
+  {"url": "https://github.com/vinegarhq/sober/issues/2490", "ledger": "GFX-003"},
+  {"url": "https://github.com/feeRnt/ps4-linux-12xx/issues/8", "ledger": "GFX-006"},
+  {"url": "https://github.com/feeRnt/ps4-linux-12xx/discussions/7", "ledger": "GFX-016", "kind": "discussion"}
+ ]
+}
