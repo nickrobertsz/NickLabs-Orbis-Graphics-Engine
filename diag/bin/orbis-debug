@@ -1,0 +1,3 @@
+#!/bin/sh
+# NickLabs Orbis Graphics Engine 2.0 — orbis-debug (library in /usr/lib/orbis-graphics/orbis_engine).
+exec /usr/bin/python3 -I -c 'import sys; sys.path.insert(0, "/usr/lib/orbis-graphics"); from orbis_engine.cli import ENTRY; sys.exit(ENTRY["orbis-debug"](sys.argv[1:]))' "$@"

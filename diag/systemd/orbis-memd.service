@@ -1,0 +1,15 @@
+[Unit]
+Description=NickLabs Orbis unified-memory policy (GTT budget follows mode and memory pressure)
+Documentation=file:///usr/share/doc/orbis-graphics/GRAPHICS-ENGINE-MEMORY.md
+After=systemd-modules-load.service
+ConditionPathExists=/proc/pressure/memory
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/orbis-mem daemon --interval 5
+Restart=on-failure
+RestartSec=10
+Nice=-2
+
+[Install]
+WantedBy=multi-user.target

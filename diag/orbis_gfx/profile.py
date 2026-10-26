@@ -25,16 +25,21 @@ from . import __version__, sysfs
 
 PROFILES = {
     "balanced": {"description": "kernel defaults; no hardware knob is changed (default for PC)",
-                 "gpu_perf_level": None, "cpu_governor": None, "session_env": {}, "vram_mb": None},
-    "performance": {"description": "highest stable clocks the kernel offers, large shader cache (default for GAMING)",
-                    "gpu_perf_level": "high", "cpu_governor": "performance",
+                 "gpu_perf_level": None, "gpu_sclk": None, "fan_threshold_c": None, "cpu_governor": None,
+                 "session_env": {}, "vram_mb": None},
+    "performance": {"description": "full SPLL SCLK, fan reacts earlier, performance governor, large shader cache "
+                                   "(default for GAMING)",
+                    "gpu_perf_level": "high", "gpu_sclk": "max", "fan_threshold_c": 70, "cpu_governor": "performance",
                     "session_env": {"MESA_SHADER_CACHE_MAX_SIZE": "4G"}, "vram_mb": 2048},
-    "quiet": {"description": "lowest clocks the kernel offers",
-              "gpu_perf_level": "low", "cpu_governor": "powersave", "session_env": {}, "vram_mb": None},
-    "compute": {"description": "AI/compute: GPU left to the compute workload, no session changes (default for AI)",
-                "gpu_perf_level": "auto", "cpu_governor": "performance", "session_env": {}, "vram_mb": 1024},
+    "quiet": {"description": "fused startup SCLK divider (lower clock, less heat), powersave governor",
+              "gpu_perf_level": "low", "gpu_sclk": "startup", "fan_threshold_c": None, "cpu_governor": "powersave",
+              "session_env": {}, "vram_mb": None},
+    "compute": {"description": "AI/compute: full SCLK, fan reacts earlier for long runs, no session changes "
+                               "(default for AI)",
+                "gpu_perf_level": "auto", "gpu_sclk": "max", "fan_threshold_c": 72, "cpu_governor": "performance",
+                "session_env": {}, "vram_mb": 1024},
     "diagnostic": {"description": "no tuning; shader cache disabled so measurements are cold and repeatable",
-                   "gpu_perf_level": None, "cpu_governor": None,
+                   "gpu_perf_level": None, "gpu_sclk": None, "fan_threshold_c": None, "cpu_governor": None,
                    "session_env": {"MESA_SHADER_CACHE_DISABLE": "true"}, "vram_mb": None},
 }
 PERSONALITY_DEFAULTS = {"pc": "balanced", "gaming": "performance", "ai": "compute"}
@@ -57,9 +62,19 @@ def _gov_files() -> list[Path]:
     return sorted(sysfs.p("sys/devices/system/cpu").glob("cpu[0-9]*/cpufreq/scaling_governor"))
 
 
+def _fan_crit() -> Path | None:
+    base = sysfs.p("sys/class/hwmon")
+    for h in sorted(base.glob("hwmon*")) if base.is_dir() else []:
+        if sysfs.read(h / "name") == "ps4_fan" and (h / "temp1_crit").exists():
+            return h / "temp1_crit"
+    return None
+
+
 def capabilities() -> dict:
     g = sysfs.primary_gpu()
     perf = g.sysdir / "power_dpm_force_performance_level" if g else None
+    sclk = g.sysdir / "ps4_sclk" if g else None
+    fan = _fan_crit()
     gov = _gov_files()
     avail = sysfs.read(gov[0].parent / "scaling_available_governors") if gov else None
     return {
@@ -67,6 +82,10 @@ def capabilities() -> dict:
                            "reason": None if perf and perf.exists() else "no DPM on this kernel (pm.clocks UNSUPPORTED)"},
         "cpu_governor": {"available": bool(gov), "governors": (avail or "").split(),
                          "reason": None if gov else "no cpufreq driver for the PS4 Jaguar CPU"},
+        "gpu_sclk": {"available": bool(sclk and sclk.exists()),
+                     "reason": None if sclk and sclk.exists() else "kernel without the Graphics Engine clock patch"},
+        "fan_threshold_c": {"available": fan is not None,
+                            "reason": None if fan else "kernel without the Graphics Engine fan driver"},
         "session_env": {"available": True},
         "vram_mb": {"available": True, "note": "applied at the next payload launch (orbis boot set-vram)"},
     }
@@ -95,6 +114,23 @@ def plan(name: str) -> list[dict]:
         else:
             acts.append({"knob": "cpu_governor", "skipped": caps["cpu_governor"]["reason"] or f"governor {gov} not offered",
                          "value": gov})
+    sc = prof.get("gpu_sclk")
+    if sc:
+        if sc not in ("max", "startup"):
+            raise ValueError("refusing a SCLK state other than the two hardware-defined ones")
+        g = sysfs.primary_gpu()
+        if caps["gpu_sclk"]["available"]:
+            acts.append({"knob": "gpu_sclk", "path": str(g.sysdir / "ps4_sclk"), "value": sc})
+        else:
+            acts.append({"knob": "gpu_sclk", "skipped": caps["gpu_sclk"]["reason"], "value": sc})
+    fan = prof.get("fan_threshold_c")
+    if fan:
+        if not 45 <= int(fan) <= 85:
+            raise ValueError("fan threshold outside 45..85 C")
+        if caps["fan_threshold_c"]["available"]:
+            acts.append({"knob": "fan_threshold_c", "path": str(_fan_crit()), "value": str(int(fan) * 1000)})
+        else:
+            acts.append({"knob": "fan_threshold_c", "skipped": caps["fan_threshold_c"]["reason"], "value": fan})
     acts.append({"knob": "session_env", "path": str(_env_file()), "value": prof["session_env"]})
     if prof["vram_mb"]:
         acts.append({"knob": "vram_mb", "recommendation": prof["vram_mb"],
@@ -126,6 +162,9 @@ def apply(name: str, reason: str = "manual", dry_run: bool = False) -> dict:
             prev = sysfs.read(path)
             if a["knob"] == "gpu_perf_level" and prev:
                 prev = prev.split()[0]
+            if a["knob"] == "gpu_sclk":
+                state = dict(t.split("=", 1) for t in (prev or "").split() if "=" in t).get("state")
+                prev = state if state in ("max", "startup") else None
             new = a["value"]
         original.setdefault(a["path"], prev)
         if not dry_run:

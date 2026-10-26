@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""NickLabs Orbis Black Box receiver — runs on the Nobara (or any LAN machine), not on the PS4.
+
+Receives, over the local network only:
+  * kernel netconsole text from the console (UDP, default port 6666) — includes panic output
+    that never reaches the console's own disk;
+  * the Black Box JSON stream (UDP, default port 6667): boot records, kernel events, telemetry.
+Everything is appended (and fsync'd) under --dir, one sub-directory per day, and the important
+lines are printed. Standard library only.
+
+  ./orbis-blackbox-receiver --allow 192.168.1.50
+  firewall (Nobara/Fedora):  sudo firewall-cmd --add-port=6666-6667/udp     (add --permanent to keep)
+On the console:             sudo orbis-debug stream enable --to <this machine's LAN IP>
+"""
+import argparse
+import datetime as dt
+import ipaddress
+import json
+import os
+import selectors
+import socket
+import sys
+from pathlib import Path
+
+
+def _private(ip: str) -> bool:
+    try:
+        a = ipaddress.ip_address(ip)
+        return a.is_private or a.is_link_local or a.is_loopback
+    except ValueError:
+        return False
+
+
+class Sink:
+    def __init__(self, root: Path):
+        self.root = root
+        self.files = {}
+
+    def write(self, name: str, line: str) -> None:
+        day = dt.date.today().isoformat()
+        key = (day, name)
+        fh = self.files.get(key)
+        if fh is None:
+            d = self.root / day
+            d.mkdir(parents=True, exist_ok=True)
+            fh = self.files[key] = open(d / name, "a", encoding="utf-8")
+        fh.write(line if line.endswith("\n") else line + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--bind", default="0.0.0.0")
+    ap.add_argument("--netconsole-port", type=int, default=6666)
+    ap.add_argument("--events-port", type=int, default=6667)
+    ap.add_argument("--dir", default=str(Path.home() / "orbis-blackbox-received"))
+    ap.add_argument("--allow", action="append", default=[], help="only accept these console IPs (repeatable)")
+    ap.add_argument("--quiet-flight", action="store_true", help="do not print telemetry samples")
+    a = ap.parse_args()
+    sink = Sink(Path(a.dir))
+    sel = selectors.DefaultSelector()
+    for port, kind in ((a.netconsole_port, "netconsole"), (a.events_port, "events")):
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind((a.bind, port))
+        sel.register(s, selectors.EVENT_READ, kind)
+    print(f"orbis-blackbox-receiver: netconsole udp/{a.netconsole_port}, events udp/{a.events_port} -> {a.dir}",
+          file=sys.stderr)
+    while True:
+        for key, _ in sel.select():
+            data, (ip, _port) = key.fileobj.recvfrom(65535)
+            if (a.allow and ip not in a.allow) or not _private(ip):
+                continue
+            now = dt.datetime.now().isoformat(timespec="milliseconds")
+            if key.data == "netconsole":
+                text = data.decode("utf-8", "replace")
+                # extended netconsole: "<level>,<seq>,<ts>,<flags>;message"
+                for line in text.splitlines():
+                    sink.write(f"netconsole-{ip}.log", f"{now} {line}")
+                    print(f"[{ip} kernel] {line}")
+                continue
+            try:
+                msg = json.loads(data)
+            except ValueError:
+                sink.write(f"events-{ip}.corrupt", f"{now} {data[:300]!r}")
+                continue
+            sink.write(f"events-{ip}.jsonl", json.dumps({"rx": now, "from": ip, **msg}))
+            k, pl = msg.get("k"), msg.get("p") or {}
+            if k == "event":
+                print(f"[{ip} {pl.get('kind')}] {pl.get('msg') or pl.get('file')}")
+            elif k == "boot":
+                prev = (pl.get("previous_boot") or {})
+                print(f"[{ip} boot] kernel {pl.get('kernel')} seq {pl.get('seq')}; previous boot "
+                      f"{'clean' if prev.get('clean_shutdown') else (prev.get('summary') or {}).get('verdict', 'n/a')}")
+            elif k == "flight" and not a.quiet_flight:
+                print(f"[{ip} flight] apu {pl.get('apu_c')}C sclk {pl.get('sclk')} gpu {pl.get('gpu_busy')} "
+                      f"gtt {pl.get('gtt_used')}/{pl.get('gtt_budget')}")
+            elif k not in ("flight",):
+                print(f"[{ip} {k}] {str(pl)[:200]}")
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(0)

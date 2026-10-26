@@ -1,0 +1,13 @@
+[Unit]
+Description=NickLabs Orbis hardware API (telemetry, profiles, controls; loopback by default, token required)
+Documentation=file:///usr/share/doc/orbis-graphics/GRAPHICS-ENGINE.md
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/orbis-hwd
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

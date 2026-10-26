@@ -1,0 +1,16 @@
+[Unit]
+Description=NickLabs Orbis Black Box: load the crash-capture kernel (EXPERIMENTAL, opt-in)
+Documentation=file:///usr/share/doc/orbis-graphics/GRAPHICS-ENGINE-BLACKBOX.md
+ConditionKernelCommandLine=crashkernel
+ConditionPathExists=/sys/kernel/kexec_crash_loaded
+ConditionKernelCommandLine=!orbis.capture=1
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/orbis-debug kdump load
+ExecStop=/usr/bin/kexec -p -u
+
+[Install]
+WantedBy=multi-user.target
