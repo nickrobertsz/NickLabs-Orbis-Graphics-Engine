@@ -1,0 +1,14 @@
+{
+ "schema": 1,
+ "note": "Licences of everything an ORBIS-GRAPHICS-PACK archive can contain. Arch Linux binary packages carry their own licence texts in /usr/share/licenses/<pkg>/ inside each .pkg.tar.zst; their exact list and versions are in pack-manifest.json.",
+ "components": [
+  {"name": "orbis-graphics (diagnostics, qualification, profiles, integrator, stage-0 overlay, build wiring)", "license": "MIT", "file": "LICENSE.orbis-graphics", "copyright": "2026 NickLabs contributors"},
+  {"name": "mesa-orbis-ps4, opencl-mesa-orbis-ps4, lib32-mesa-orbis-ps4, mesa-orbis-ps4-experimental", "license": "MIT and the per-file licences listed in Mesa's docs/license.rst", "file": "LICENSE.ps4-mesa", "upstream": "https://gitlab.freedesktop.org/mesa/mesa"},
+  {"name": "Mesa PS4 patches 0001/0003/0005", "license": "MIT (Mesa per-file notices)", "provenance": "mesa/stable/patches/provenance.json in the source archive"},
+  {"name": "Mesa RustiCL Rust crates (vendored by meson at build time, hashes pinned by Mesa)", "license": "MIT / Apache-2.0 (per crate)"},
+  {"name": "Arch Linux dependency closure (libdrm, llvm-libs, libclc, spirv-*, vulkan-icd-loader, ocl-icd, tools)", "license": "per package; see /usr/share/licenses inside each package"},
+  {"name": "vendored Orbis 0.2.0 helpers (integrator/vendor/orbis020)", "license": "MIT", "copyright": "2026 NickLabs contributors"}
+ ],
+ "firmware": "The pack contains no PS4 firmware (no GPU microcode, no Marvell Wi-Fi/Bluetooth firmware, no EDID, no keys). Images produced by the integrator keep whatever the Orbis 0.2.0 base image already carries, so integrated images inherit that image's private-use restriction.",
+ "not_affiliated": "NickLabs Orbis is an independent community project; not affiliated with or endorsed by Sony Interactive Entertainment or AMD."
+}

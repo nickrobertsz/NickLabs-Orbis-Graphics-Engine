@@ -1,0 +1,50 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "https://nicklabs.invalid/orbis-graphics/orbis-gfx-report-1.schema.json",
+ "title": "NickLabs Orbis Graphics report (orbis-gfx-report/1)",
+ "description": "Written by `orbis-gpu qualify` (full system and stage-0 mini-root) and by the initramfs fallback of orbis-gfx-stage0. Stable for the Orbis settings UI: fields are only added, never renamed, within schema version 1.",
+ "type": "object",
+ "required": ["schema", "tool", "version", "stage", "overall", "counts", "checks"],
+ "properties": {
+  "schema": {"const": "orbis-gfx-report/1"},
+  "tool": {"type": "string"},
+  "version": {"type": "string"},
+  "stage": {"enum": ["stage0", "full-system"]},
+  "time": {"type": "string"},
+  "host": {"type": "object"},
+  "context": {"type": "object"},
+  "overall": {"enum": ["PASS", "FAIL", "DEGRADED", "UNSUPPORTED", "NOT_RUN", "BLOCKED"]},
+  "counts": {"type": "object", "additionalProperties": {"type": "integer"}},
+  "checks": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "required": ["id", "title", "state"],
+    "properties": {
+     "id": {"type": "string", "pattern": "^[a-z0-9_]+\\.[a-z0-9_.]+$"},
+     "title": {"type": "string"},
+     "state": {"enum": ["PASS", "FAIL", "DEGRADED", "UNSUPPORTED", "NOT_RUN", "BLOCKED"]},
+     "detail": {"type": "string"},
+     "category": {"type": "string"},
+     "required": {"type": "boolean"},
+     "blocker": {"type": ["string", "null"], "description": "mandatory for UNSUPPORTED and BLOCKED"},
+     "duration_s": {"type": ["number", "null"]},
+     "evidence": {"type": "object"}
+    },
+    "allOf": [{"if": {"properties": {"state": {"enum": ["UNSUPPORTED", "BLOCKED"]}}},
+               "then": {"properties": {"blocker": {"type": "string", "minLength": 1}}}}]
+   }
+  }
+ },
+ "x-check-ids": {
+  "kernel": ["gpu.identity", "gpu.driver", "gpu.firmware", "gpu.rings", "gpu.ib_test", "gpu.memory", "health.since_boot", "gpu.recovery"],
+  "display": ["display.connector", "display.edid", "display.link"],
+  "power": ["pm.clocks", "sensors.gpu"],
+  "opengl": ["gl.renderer", "gl.draw", "gl.shader"],
+  "vulkan": ["vk.device", "vk.raster", "vk.compute", "vk.present"],
+  "performance": ["gl.frame_timing", "vk.pipeline_cache", "perf.sustained"],
+  "compute": ["cl.rusticl"],
+  "media": ["video.decode"],
+  "modes": ["modes.transitions"]
+ }
+}

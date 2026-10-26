@@ -1,0 +1,120 @@
+# NickLabs Orbis Graphics Pack 1.0.0 — Mesa (stable line) for the PS4 Liverpool GPU, 64-bit.
+#
+# Same pinned source and reviewed patch series as Orbis 0.2.0 (mesa 26.2.5 + 0001/0003/0005),
+# rebuilt as pkgrel 101 with the full feature set the pack qualifies:
+#   radeonsi (GL/GLES/EGL/GBM), RADV (Vulkan) + device-select + overlay layers, VA-API frontend,
+#   RustiCL (OpenCL) as the separate package opencl-mesa-orbis-ps4.
+# pkgrel 101 > 0.2.0's pkgrel 1, so installing it is an ordinary upgrade of mesa-orbis-ps4
+# (no Orbis package-guard override needed) and `pacman -U` of the 0.2.0 package rolls it back.
+pkgbase=mesa-orbis-ps4
+# opencl first: its package function moves the RustiCL files out of fakeinstall before
+# package_mesa-orbis-ps4 copies the rest (makepkg runs package functions in this order).
+pkgname=('opencl-mesa-orbis-ps4' 'mesa-orbis-ps4')
+_mesaver=26.2.5
+pkgver=${_mesaver}
+pkgrel=101
+pkgdesc="Mesa with NickLabs Orbis PS4 patches (Liverpool/Gladius) — Orbis Graphics Pack 1.0.0"
+arch=('x86_64')
+url="https://www.mesa3d.org"
+license=('MIT' 'custom')
+makedepends=('meson' 'ninja' 'python-mako' 'python-packaging' 'python-yaml' 'python-ply' 'glslang' 'llvm'
+             'clang' 'libclc' 'spirv-llvm-translator' 'spirv-tools' 'rust' 'rust-bindgen' 'cbindgen'
+             'libdrm' 'libva' 'libxshmfence' 'libelf' 'libglvnd' 'wayland' 'wayland-protocols' 'zstd' 'expat'
+             'libx11' 'libxext' 'libxfixes' 'libxxf86vm' 'libxcb' 'xcb-util-keysyms' 'libxrandr' 'xorgproto'
+             'lm_sensors' 'systemd-libs' 'directx-headers' 'byacc' 'flex' 'git')
+options=('!lto' '!debug')
+source=("https://archive.mesa3d.org/mesa-${_mesaver}.tar.xz"
+        "0001-ps4-graphics-families.patch"
+        "0003-addrlib-selected-fmask-entry.patch"
+        "0005-radv-bound-meta-fill-offset.patch"
+        "LICENSE.ps4-mesa")
+sha256sums=('794b3d1729075dae7ebd47c7283b7ca0cdb5dec668f7f11cc0a5d82f6138a0a5'
+            'b3cf0f24fd00f156bbba12be0c270189ad30c274646b5e86298890e4cb4829cc'
+            '10f6369f300bd884290cc812254ee3f66694b3d0fdaeee37451b1f93561ba07c'
+            '92256289369f880d6c8a85c7bec8341c29da6b7d13706bc4120795e99788ae25'
+            '7fdc119cf53c8ca65396ea73f6d10af641ba41ea1dd2bd44a824726e01c8b3f2')
+
+prepare() {
+  cd "mesa-${_mesaver}"
+  for p in 0001-ps4-graphics-families.patch 0003-addrlib-selected-fmask-entry.patch \
+           0005-radv-bound-meta-fill-offset.patch; do
+    echo "applying $p"
+    patch -Np1 -F0 -i "$srcdir/$p"
+  done
+  # RustiCL's crates are pinned by source_hash in subprojects/*-rs.wrap of this exact tarball;
+  # meson downloads and verifies them (network is available in the Nobara build container).
+  local wraps=()
+  for w in subprojects/*-rs.wrap; do wraps+=("$(basename "$w" .wrap)"); done
+  meson subprojects download "${wraps[@]}"
+}
+
+build() {
+  # Jaguar safety: baseline x86-64 code generation tuned for btver2. Never -march=native/v3.
+  export CFLAGS="${CFLAGS/-march=x86-64-v[234]/-march=x86-64} -mtune=btver2"
+  export CXXFLAGS="${CXXFLAGS/-march=x86-64-v[234]/-march=x86-64} -mtune=btver2"
+  export RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=x86-64"
+  arch-meson "mesa-${_mesaver}" build \
+    --wrap-mode=nodownload \
+    -D b_ndebug=true \
+    -D platforms=x11,wayland \
+    -D gallium-drivers=radeonsi,llvmpipe \
+    -D vulkan-drivers=amd \
+    -D vulkan-layers=device-select,overlay \
+    -D video-codecs=all \
+    -D gallium-va=enabled \
+    -D gallium-rusticl=true \
+    -D llvm=enabled \
+    -D shared-llvm=enabled \
+    -D glx=dri \
+    -D egl=enabled \
+    -D gbm=enabled \
+    -D gles1=disabled \
+    -D gles2=enabled \
+    -D glvnd=enabled \
+    -D valgrind=disabled \
+    -D intel-rt=disabled \
+    -D microsoft-clc=disabled
+  meson compile -C build
+  meson install -C build --destdir "$srcdir/fakeinstall"
+}
+
+_pick() {  # _pick <dest-pkgdir> <path relative to fakeinstall>...
+  local dest="$1"; shift
+  local f
+  for f in "$@"; do
+    [ -e "$srcdir/fakeinstall/$f" ] || continue
+    install -d "$dest/$(dirname "$f")"
+    mv "$srcdir/fakeinstall/$f" "$dest/$f"
+  done
+}
+
+package_opencl-mesa-orbis-ps4() {
+  pkgdesc="OpenCL (RustiCL) for the PS4 GPU, from mesa-orbis-ps4 — enable with RUSTICL_ENABLE=radeonsi"
+  depends=("mesa-orbis-ps4=${pkgver}-${pkgrel}" 'clang' 'libclc' 'spirv-llvm-translator' 'spirv-tools'
+           'libdrm' 'libelf' 'llvm-libs' 'expat' 'zstd')
+  optdepends=('ocl-icd: OpenCL ICD loader' 'clinfo: list OpenCL devices')
+  provides=('opencl-driver' "opencl-mesa=${_mesaver}")
+  conflicts=('opencl-mesa')
+  _pick "$pkgdir" usr/lib/libRusticlOpenCL.so usr/lib/libRusticlOpenCL.so.1 usr/lib/libRusticlOpenCL.so.1.0.0 \
+        etc/OpenCL/vendors/rusticl.icd
+  install -Dm644 "mesa-${_mesaver}/docs/license.rst" "$pkgdir/usr/share/licenses/$pkgname/license.rst"
+}
+
+package_mesa-orbis-ps4() {
+  depends=('libdrm>=2.4.133' 'libxshmfence' 'libelf' 'libglvnd' 'wayland' 'zstd' 'expat' 'llvm-libs'
+           'libx11' 'libxext' 'libxfixes' 'libxxf86vm' 'libxcb' 'xcb-util-keysyms' 'libxrandr'
+           'vulkan-icd-loader' 'lm_sensors' 'systemd-libs' 'spirv-tools' 'libva')
+  optdepends=('opencl-mesa-orbis-ps4: OpenCL (RustiCL)' 'vulkan-tools: vulkaninfo, vkcube'
+              'mesa-utils: glxinfo, eglinfo' 'libva-utils: vainfo')
+  provides=("mesa=${_mesaver}" 'opengl-driver' 'vulkan-driver' 'vulkan-radeon' 'mesa-libgl' 'libva-driver'
+            'libva-mesa-driver' 'vulkan-mesa-device-select' 'vulkan-mesa-layers')
+  conflicts=('mesa' 'vulkan-radeon' 'mesa-libgl' 'vulkan-mesa-device-select' 'vulkan-mesa-layers'
+             'mesa-ps4' 'vulkan-swrast' 'libva-mesa-driver' 'mesa-orbis-ps4-experimental')
+  replaces=('mesa-ps4')
+  cp -a "$srcdir/fakeinstall/." "$pkgdir/"
+  install -Dm644 "mesa-${_mesaver}/docs/license.rst" "$pkgdir/usr/share/licenses/$pkgname/license.rst"
+  install -Dm644 LICENSE.ps4-mesa "$pkgdir/usr/share/licenses/$pkgname/LICENSE.ps4-mesa"
+  # Version marker read by orbis-ai-launch / the inference gate (same path as Orbis 0.2.0).
+  install -Dm644 /dev/stdin "$pkgdir/usr/share/orbis/mesa-version" <<<"${_mesaver}-orbis${pkgrel}"
+  install -Dm644 /dev/stdin "$pkgdir/usr/share/orbis-graphics/mesa-line" <<<"stable ${_mesaver} patches 0001,0003,0005"
+}

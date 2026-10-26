@@ -1,0 +1,73 @@
+# NickLabs Orbis Graphics Pack 1.0.0 — EXPERIMENTAL Mesa line (main snapshot) for comparison
+# against the stable 26.2.5 line. Never installed by default.
+#
+# Pinned commit (manifest/sources.json): f7dd61f78f83c9ffb3dc9c980cd9b303a5ce58b1 (main, 2026-10-26).
+# The Orbis patch series was reviewed against 26.2.5; whether it applies to this snapshot is
+# decided in prepare() with -F0 (no fuzz). If any patch does not apply, the build stops with a
+# message and build/build-pack.sh records the experimental line as BLOCKED in the pack manifest.
+#
+# Install (deliberate, logged, reversible):
+#   sudo orbis pkg allow-graphics-change --reason "Mesa experimental A/B"
+#   sudo pacman -S mesa-orbis-ps4-experimental        # replaces mesa-orbis-ps4
+# Back:  sudo orbis pkg allow-graphics-change --reason "back to stable" && sudo pacman -S mesa-orbis-ps4
+pkgname=mesa-orbis-ps4-experimental
+_commit=f7dd61f78f83c9ffb3dc9c980cd9b303a5ce58b1
+pkgver=26.3.0.devel.f7dd61f
+pkgrel=1
+pkgdesc="EXPERIMENTAL Mesa main snapshot with NickLabs Orbis PS4 patches (A/B against the stable line)"
+arch=('x86_64')
+url="https://www.mesa3d.org"
+license=('MIT' 'custom')
+depends=('libdrm>=2.4.133' 'libxshmfence' 'libelf' 'libglvnd' 'wayland' 'zstd' 'expat' 'llvm-libs'
+         'libx11' 'libxext' 'libxfixes' 'libxxf86vm' 'libxcb' 'xcb-util-keysyms' 'libxrandr'
+         'vulkan-icd-loader' 'lm_sensors' 'systemd-libs' 'spirv-tools' 'libva')
+makedepends=('meson' 'ninja' 'python-mako' 'python-packaging' 'python-yaml' 'python-ply' 'glslang' 'llvm'
+             'libdrm' 'libva' 'wayland-protocols' 'xorgproto' 'cbindgen' 'directx-headers' 'byacc' 'flex' 'git')
+provides=("mesa-orbis-ps4=26.3.0" "mesa=26.3.0" 'opengl-driver' 'vulkan-driver' 'vulkan-radeon' 'mesa-libgl'
+          'vulkan-mesa-device-select' 'vulkan-mesa-layers')
+conflicts=('mesa-orbis-ps4' 'mesa' 'vulkan-radeon' 'mesa-libgl' 'vulkan-mesa-device-select' 'vulkan-mesa-layers'
+           'opencl-mesa-orbis-ps4' 'vulkan-swrast')
+options=('!lto' '!debug')
+source=("mesa::git+https://gitlab.freedesktop.org/mesa/mesa.git#commit=${_commit}"
+        "0001-ps4-graphics-families.patch"
+        "0003-addrlib-selected-fmask-entry.patch"
+        "0005-radv-bound-meta-fill-offset.patch"
+        "LICENSE.ps4-mesa")
+sha256sums=('SKIP'   # git source: integrity is the pinned commit id
+            'b3cf0f24fd00f156bbba12be0c270189ad30c274646b5e86298890e4cb4829cc'
+            '10f6369f300bd884290cc812254ee3f66694b3d0fdaeee37451b1f93561ba07c'
+            '92256289369f880d6c8a85c7bec8341c29da6b7d13706bc4120795e99788ae25'
+            '7fdc119cf53c8ca65396ea73f6d10af641ba41ea1dd2bd44a824726e01c8b3f2')
+
+prepare() {
+  cd mesa
+  [ "$(git rev-parse HEAD)" = "$_commit" ] || { echo "mesa checkout is not $_commit" >&2; return 1; }
+  local p
+  for p in 0001-ps4-graphics-families.patch 0003-addrlib-selected-fmask-entry.patch \
+           0005-radv-bound-meta-fill-offset.patch; do
+    if ! patch -Np1 -F0 --dry-run -i "$srcdir/$p" >/dev/null; then
+      echo "ORBIS-EXPERIMENTAL-BLOCKED: $p does not apply to mesa $_commit without fuzz; needs a re-port" >&2
+      return 1
+    fi
+    patch -Np1 -F0 -i "$srcdir/$p"
+  done
+}
+
+build() {
+  export CFLAGS="${CFLAGS/-march=x86-64-v[234]/-march=x86-64} -mtune=btver2"
+  export CXXFLAGS="${CXXFLAGS/-march=x86-64-v[234]/-march=x86-64} -mtune=btver2"
+  arch-meson mesa build \
+    -D b_ndebug=true -D platforms=x11,wayland -D gallium-drivers=radeonsi,llvmpipe \
+    -D vulkan-drivers=amd -D vulkan-layers=device-select,overlay -D video-codecs=all -D gallium-va=enabled \
+    -D gallium-rusticl=false -D llvm=enabled -D shared-llvm=enabled -D glx=dri -D egl=enabled -D gbm=enabled \
+    -D gles1=disabled -D gles2=enabled -D glvnd=enabled -D valgrind=disabled -D intel-rt=disabled
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 mesa/docs/license.rst "$pkgdir/usr/share/licenses/$pkgname/license.rst"
+  install -Dm644 LICENSE.ps4-mesa "$pkgdir/usr/share/licenses/$pkgname/LICENSE.ps4-mesa"
+  install -Dm644 /dev/stdin "$pkgdir/usr/share/orbis/mesa-version" <<<"26.3-devel-${_commit:0:7}-orbis${pkgrel}"
+  install -Dm644 /dev/stdin "$pkgdir/usr/share/orbis-graphics/mesa-line" <<<"experimental ${_commit} patches 0001,0003,0005"
+}

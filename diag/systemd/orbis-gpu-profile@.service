@@ -1,0 +1,10 @@
+[Unit]
+Description=NickLabs Orbis Graphics: apply the %i personality's GPU profile
+Documentation=file:///usr/share/doc/orbis-graphics/GRAPHICS-PERFORMANCE-PLAN.md
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/orbis-gpu profile personality %i
+ExecStop=/usr/bin/orbis-gpu profile reset

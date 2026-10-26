@@ -1,0 +1,11 @@
+# NickLabs Orbis Graphics Pack build container: the Orbis 0.2.0 build container (same Arch snapshot)
+# plus what Mesa's RustiCL/VA-API, the 32-bit Mesa and the probe need.
+ARG BASE=orbis-build:0.2.0
+FROM ${BASE}
+RUN pacman -S --noconfirm --needed rust rust-bindgen clang libclc spirv-llvm-translator spirv-tools \
+      python-ply libva libxshmfence libglvnd wayland libdrm xcb-util-keysyms libxrandr lm_sensors \
+      lib32-llvm lib32-libdrm lib32-libxshmfence lib32-libelf lib32-libglvnd lib32-wayland lib32-zstd \
+      lib32-expat lib32-llvm-libs lib32-libx11 lib32-libxext lib32-libxfixes lib32-libxxf86vm lib32-libxcb \
+      lib32-vulkan-icd-loader lib32-lm_sensors lib32-systemd lib32-spirv-tools \
+      vulkan-headers shaderc arch-install-scripts zstd gnupg cpio
+WORKDIR /src

@@ -1,0 +1,231 @@
+#!/bin/sh
+# NickLabs Orbis Graphics Pack 1.0.0 (MIT) — stage-0 GPU diagnosis, run inside the initramfs.
+#
+# Triggered by orbis.gfxdiag=1 (hook pre_newroot_mount/4-orbis-gfx-stage0, which runs before
+# Orbis 0.2.0's own 5-orbis-stage0 report). Writes, beside the 0.2.0 stage-0 logs on ORBIS-BOOT:
+#   orbis-logs/stage0-NNN-gpu-progress.txt  one line per step, synced as it goes (hang evidence)
+#   orbis-logs/stage0-NNN-gpu-kernel.txt    raw kernel evidence: PCI, driver, firmware, rings,
+#                                           VRAM/GTT, connectors/EDID, PM, sensors, GPU log lines
+#   orbis-logs/stage0-NNN-gpu.json/.txt     the structured report (orbis-gfx-report/1). With the
+#                                           diagnostic mini-root present: produced by
+#                                           `orbis-gpu qualify --stage stage0` running real GL/Vulkan/
+#                                           OpenCL tests; otherwise a kernel-only report with the
+#                                           userspace checks NOT_RUN and the reason.
+# Options on the kernel command line:
+#   orbis.gfxdiag.ibtest=1      also read debugfs amdgpu_test_ib (kernel IB test on every ring)
+#   orbis.gfxdiag.timeout=SECS  watchdog for the mini-root run (default 300)
+# Never reads or writes the PS4 internal drive. Never copies /key.
+#
+# Test hooks: ORBIS_GFX_ROOT (fixture root for /sys,/proc), ORBIS_GFX_KMSG_FILE, ORBIS_GFX_OUT_DIR
+# (write here instead of mounting ORBIS-BOOT), ORBIS_GFX_MINIROOT (mini-root directory).
+R="${ORBIS_GFX_ROOT:-}"
+VER="1.0.0"
+label="${ORBIS_BOOT_LABEL:-ORBIS-BOOT}"
+mnt=/mnt/orbis-boot
+have() { command -v "$1" >/dev/null 2>&1; }
+cmdline="$(cat "$R/proc/cmdline" 2>/dev/null)"
+opt() { for w in $cmdline; do case "$w" in "$1"=*) echo "${w#*=}"; return 0 ;; esac; done; return 1; }
+
+# ---------------------------------------------------------------- output location
+out=""
+if [ -n "${ORBIS_GFX_OUT_DIR:-}" ]; then
+	out="$ORBIS_GFX_OUT_DIR"; mkdir -p "$out"
+else
+	dev=""; n=0
+	while [ "$n" -lt 30 ]; do
+		dev="$(findfs "LABEL=${label}" 2>/dev/null)" && [ -n "$dev" ] && break
+		sleep 1; n=$((n + 1))
+	done
+	if [ -n "$dev" ]; then
+		mkdir -p "$mnt"
+		mountpoint -q "$mnt" || mount -t vfat -o rw,flush "$dev" "$mnt" || dev=""
+	fi
+	[ -n "$dev" ] && out="$mnt/orbis-logs" && mkdir -p "$out"
+fi
+if [ -z "$out" ]; then
+	echo "orbis-gfx-stage0: no ${label} partition; report printed to the screen only" >&2
+	out=/tmp/orbis-gfx; mkdir -p "$out"; screen_only=1
+fi
+i=1
+while [ -e "$out/stage0-$(printf %03d "$i").txt" ] || [ -e "$out/stage0-$(printf %03d "$i")-gpu.json" ]; do i=$((i + 1)); done
+N="stage0-$(printf %03d "$i")"
+P="$out/$N-gpu-progress.txt"; K="$out/$N-gpu-kernel.txt"
+step() { echo "$(cat "$R/proc/uptime" 2>/dev/null | cut -d' ' -f1) $*" >> "$P"; sync; }
+: > "$P"
+step "start orbis-gfx-stage0 $VER"
+
+# debugfs gives amdgpu firmware, ring and PM details
+if [ -z "$R" ] && ! mountpoint -q /sys/kernel/debug 2>/dev/null; then
+	mount -t debugfs none /sys/kernel/debug 2>/dev/null && step "debugfs mounted"
+fi
+klog() { if [ -n "${ORBIS_GFX_KMSG_FILE:-}" ]; then cat "$ORBIS_GFX_KMSG_FILE"; else dmesg 2>/dev/null; fi; }
+
+# ---------------------------------------------------------------- kernel evidence
+card=""; gdev=""
+for c in "$R"/sys/class/drm/card[0-9]*; do
+	case "$c" in *-*) continue ;; esac
+	[ -e "$c/device/vendor" ] || continue
+	v="$(cat "$c/device/vendor")"; d="$(cat "$c/device/device")"
+	if [ "$v" = 0x1002 ]; then card="$c"; gdev="$d"; case "$d" in 0x9920|0x9922|0x9923) break ;; esac; fi
+done
+drv=""; [ -n "$card" ] && [ -L "$card/device/driver" ] && drv="$(basename "$(readlink "$card/device/driver")")"
+cidx="${card##*card}"; dbg="$R/sys/kernel/debug/dri/$cidx"
+{
+	echo "== NickLabs Orbis Graphics stage-0 kernel evidence ($VER)"
+	echo "kernel: $(uname -a)"
+	echo "cmdline: $cmdline"
+	echo; echo "== PCI (all AMD functions, config header)"
+	for f in "$R"/sys/bus/pci/devices/*; do
+		[ "$(cat "$f/vendor" 2>/dev/null)" = 0x1002 ] || continue
+		dd="$(basename "$(readlink "$f/driver" 2>/dev/null)" 2>/dev/null)"
+		echo "$(basename "$f") $(cat "$f/vendor"):$(cat "$f/device") rev $(cat "$f/revision" 2>/dev/null) class $(cat "$f/class" 2>/dev/null) subsys $(cat "$f/subsystem_vendor" 2>/dev/null):$(cat "$f/subsystem_device" 2>/dev/null) driver ${dd:-none}"
+		have hexdump && [ -r "$f/config" ] && hexdump -C -n 64 "$f/config"
+	done
+	echo; echo "== GPU card: ${card:-none} device ${gdev:-?} driver ${drv:-none}"
+	if [ -n "$card" ]; then
+		for a in mem_info_vram_total mem_info_vram_used mem_info_vis_vram_total mem_info_gtt_total mem_info_gtt_used \
+		         power_dpm_state power_dpm_force_performance_level pp_dpm_sclk pp_dpm_mclk gpu_busy_percent; do
+			[ -e "$card/device/$a" ] && echo "$a: $(cat "$card/device/$a" 2>/dev/null | tr '\n' ' ')"
+		done
+		for h in "$card"/device/hwmon/hwmon*/*_input; do [ -e "$h" ] && echo "hwmon $(basename "$(dirname "$h")")/$(basename "$h"): $(cat "$h")"; done
+		echo; echo "== connectors"
+		for cn in "$R"/sys/class/drm/"$(basename "$card")"-*; do
+			[ -e "$cn/status" ] || continue
+			echo "$(basename "$cn"): status=$(cat "$cn/status") enabled=$(cat "$cn/enabled" 2>/dev/null) dpms=$(cat "$cn/dpms" 2>/dev/null)"
+			[ -e "$cn/modes" ] && awk '{print "    mode " $0}' "$cn/modes"
+			[ -s "$cn/edid" ] && have hexdump && hexdump -C "$cn/edid" | sed 's/^/    edid /'
+		done
+	fi
+	echo; echo "== amdgpu module parameters"
+	for f in "$R"/sys/module/amdgpu/parameters/*; do [ -e "$f" ] && echo "$(basename "$f")=$(cat "$f" 2>/dev/null)"; done
+	echo; echo "== debugfs ($dbg)"
+	if [ -d "$dbg" ]; then
+		for f in amdgpu_firmware_info amdgpu_fence_info amdgpu_pm_info amdgpu_gem_info amdgpu_vbios; do
+			[ -e "$dbg/$f" ] && { echo "-- $f"; head -c 8192 "$dbg/$f" 2>&1; echo; }
+		done
+		echo "-- rings: $(cd "$dbg" && ls -d amdgpu_ring_* 2>/dev/null | sed 's/amdgpu_ring_//' | tr '\n' ' ')"
+	else
+		echo "not available"
+	fi
+	echo; echo "== CPU temperature (k10temp)"
+	for h in "$R"/sys/class/hwmon/hwmon*; do
+		[ "$(cat "$h/name" 2>/dev/null)" = k10temp ] && for t in "$h"/temp*_input; do echo "$(basename "$t"): $(cat "$t")"; done
+	done
+	echo; echo "== kernel log: GPU / display / firmware"
+	klog | grep -i -E "amdgpu|drm|radeon|liverpool|gladius|ps4.bridge|hdmi|edid|firmware|ring|fence|vm_|fault|gpu reset|dp_link|clock recovery" | tail -n 600
+} > "$K" 2>&1
+step "kernel evidence written ($(wc -c < "$K" 2>/dev/null) bytes)"
+
+ib=""
+if [ "$(opt orbis.gfxdiag.ibtest)" = 1 ] && [ -e "$dbg/amdgpu_test_ib" ]; then
+	step "IB test start"
+	ib="$(cat "$dbg/amdgpu_test_ib" 2>&1 | head -c 2000)"
+	step "IB test end"
+	{ echo; echo "== amdgpu_test_ib"; echo "$ib"; klog | grep -i -E "ib test" | tail -n 40; } >> "$K"
+fi
+
+# ---------------------------------------------------------------- mini-root: real GPU userspace tests
+mr="${ORBIS_GFX_MINIROOT:-}"
+mr_dev=""; mr_mnt=/mnt/orbis-gfxdiag
+if [ -z "$mr" ] && [ -z "$R" ]; then
+	for lab in ORBIS-GFXDIAG ORBIS-ROOT; do
+		d="$(findfs "LABEL=$lab" 2>/dev/null)" || continue
+		mkdir -p "$mr_mnt"
+		mount -o ro "$d" "$mr_mnt" 2>/dev/null || continue
+		if [ -e "$mr_mnt/orbis-gfxdiag/MINIROOT" ]; then mr="$mr_mnt/orbis-gfxdiag"; mr_dev="$d"; break; fi
+		# a full Orbis system with the Graphics Pack installed serves as the mini-root (read-only)
+		if [ -x "$mr_mnt/usr/bin/orbis-gpu" ] && [ -x "$mr_mnt/usr/lib/orbis-graphics/orbis-gfx-probe" ]; then
+			mr="$mr_mnt"; mr_dev="$d"; echo "full Orbis system root ($lab)" > /tmp/orbis-gfx-mr-kind; break
+		fi
+		umount "$mr_mnt"
+	done
+fi
+qrc=""
+if [ -n "$mr" ] && { [ -e "$mr/MINIROOT" ] || [ -x "$mr/usr/bin/orbis-gpu" ]; }; then
+	step "mini-root found at $mr ($(cat "$mr/MINIROOT" /tmp/orbis-gfx-mr-kind 2>/dev/null | head -1))"
+	klog > "$out/$N-gpu-dmesg-before.txt" 2>&1
+	if [ -z "$R" ]; then
+		for m in dev proc sys sys/kernel/debug; do mount --bind "/$m" "$mr/$m" 2>/dev/null; done
+		mount -t tmpfs -o size=256m tmpfs "$mr/tmp" 2>/dev/null
+		mkdir -p "$mr/tmp/out" && mount --bind "$out" "$mr/tmp/out" 2>/dev/null
+	fi
+	tmo="$(opt orbis.gfxdiag.timeout)"; tmo="${tmo:-300}"
+	step "orbis-gpu qualify start (watchdog ${tmo}s)"
+	if [ -z "$R" ]; then
+		chroot "$mr" /usr/bin/env -i PATH=/usr/bin:/bin HOME=/tmp XDG_RUNTIME_DIR=/tmp \
+			MESA_SHADER_CACHE_DISABLE=true ORBIS_GFX_KMSG_FILE="/tmp/out/$N-gpu-dmesg-before.txt" \
+			/usr/bin/orbis-gpu qualify --stage stage0 --quiet --timeout 120 --frames 60 \
+			--json-out "/tmp/out/$N-gpu.json" --text-out "/tmp/out/$N-gpu.txt" > "$out/$N-gpu-qualify.log" 2>&1 &
+	else
+		"$mr/run-qualify" "$out" "$N" > "$out/$N-gpu-qualify.log" 2>&1 &
+	fi
+	qpid=$!; w=0
+	while kill -0 "$qpid" 2>/dev/null; do
+		sleep 1; w=$((w + 1))
+		if [ "$w" -ge "$tmo" ]; then kill -9 "$qpid" 2>/dev/null; qrc=killed; step "orbis-gpu qualify KILLED after ${tmo}s"; break; fi
+	done
+	if [ -z "$qrc" ]; then wait "$qpid"; qrc=$?; step "orbis-gpu qualify exit $qrc"; fi
+	klog > "$out/$N-gpu-dmesg-after.txt" 2>&1
+	if [ -z "$R" ]; then
+		for m in tmp/out tmp sys/kernel/debug sys proc dev; do umount "$mr/$m" 2>/dev/null; done
+		[ -n "$mr_dev" ] && umount "$mr_mnt" 2>/dev/null
+	fi
+else
+	step "no diagnostic mini-root on this disk; GL/Vulkan/OpenCL tests NOT_RUN"
+fi
+
+# ---------------------------------------------------------------- fallback structured report
+if [ ! -s "$out/$N-gpu.json" ]; then
+	why="no diagnostic mini-root on this USB disk (build the graphics stage-0 image with orbis-graphics stage0)"
+	[ -n "$qrc" ] && why="orbis-gpu qualify did not produce a report (exit/kill: $qrc); see $N-gpu-qualify.log and $N-gpu-progress.txt"
+	ufail=""; [ "$qrc" = killed ] && ufail=1
+	kl="$(klog)"
+	fwfail="$(echo "$kl" | grep -c -i -E "(amdgpu|mwifiex).*(failed to load firmware|Direct firmware load for .* failed)")"
+	faults="$(echo "$kl" | grep -c -i -E "amdgpu.*(GPU fault detected|PROTECTION_FAULT|page fault)|ring \S+ timeout|amdgpu.*GPU reset")"
+	rings="$( [ -d "$dbg" ] && cd "$dbg" && ls -d amdgpu_ring_* 2>/dev/null | sed 's/amdgpu_ring_//' | tr '\n' ' ')"
+	conn=""; modes=""
+	for cn in "$R"/sys/class/drm/"$(basename "${card:-none}")"-*; do
+		[ "$(cat "$cn/status" 2>/dev/null)" = connected ] && { conn="$(basename "$cn")"; modes="$(tr '\n' ' ' < "$cn/modes" 2>/dev/null)"; break; }
+	done
+	awk -v ver="$VER" -v dev="$gdev" -v drv="$drv" -v fwfail="$fwfail" -v faults="$faults" -v rings="$rings" \
+	    -v conn="$conn" -v modes="$modes" -v why="$why" -v ufail="$ufail" -v ib="$ib" -v hasdbg="$( [ -d "$dbg" ] && echo 1)" '
+	function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/[\001-\037]/, " ", s); return s }
+	function ck(id, title, state, detail, cat, req, blocker) {
+		printf "%s{\"id\":\"%s\",\"title\":\"%s\",\"state\":\"%s\",\"detail\":\"%s\",\"category\":\"%s\",\"required\":%s,\"blocker\":%s,\"duration_s\":null,\"evidence\":{}}", \
+		  (n++ ? ",\n  " : "  "), id, esc(title), state, esc(detail), cat, req ? "true" : "false", blocker == "" ? "null" : "\"" esc(blocker) "\""
+		cnt[state]++; if (state == "FAIL") anyfail = 1; if (req && (state == "BLOCKED" || state == "NOT_RUN")) reqmiss = 1
+		if (state == "PASS") anypass = 1; if (state == "DEGRADED") deg = 1
+	}
+	BEGIN {
+		print "{\"schema\":\"orbis-gfx-report/1\",\"tool\":\"orbis-gfx-stage0 (initramfs fallback)\",\"version\":\"" ver "\",\"stage\":\"stage0\",\"checks\":["
+		isps4 = (dev == "0x9920" || dev == "0x9922" || dev == "0x9923")
+		ck("gpu.identity", "Liverpool GPU identified", isps4 ? "PASS" : "FAIL", "AMD device " (dev == "" ? "none" : dev), "kernel", 1, "")
+		ck("gpu.driver", "amdgpu kernel driver bound", drv == "amdgpu" ? "PASS" : "FAIL", "driver: " (drv == "" ? "none" : drv), "kernel", 1, "")
+		ck("gpu.firmware", "GPU firmware loaded", fwfail > 0 ? "FAIL" : "PASS", fwfail " firmware load failures in the kernel log", "kernel", 1, "")
+		if (hasdbg) ck("gpu.rings", "GFX/compute/SDMA rings registered", (rings ~ /gfx/ && rings ~ /sdma0/) ? "PASS" : "FAIL", "rings: " rings, "kernel", 0, "")
+		else ck("gpu.rings", "GFX/compute/SDMA rings registered", "NOT_RUN", "debugfs not available", "kernel", 0, "")
+		if (ib != "") ck("gpu.ib_test", "kernel IB test on every ring", (tolower(ib) ~ /fail/) ? "FAIL" : "PASS", ib, "kernel", 0, "")
+		else ck("gpu.ib_test", "kernel IB test on every ring", "NOT_RUN", "opt-in: orbis.gfxdiag.ibtest=1", "kernel", 0, "")
+		ck("display.connector", "HDMI connector and modes", conn == "" ? "DEGRADED" : (modes ~ /1920x1080/ ? "PASS" : "DEGRADED"), conn == "" ? "no connected connector" : conn ": " modes, "display", 0, "")
+		ck("health.since_boot", "no VM faults, ring timeouts or resets since boot", faults > 0 ? "FAIL" : "PASS", faults " fault/timeout/reset lines", "kernel", 0, "")
+		blocked = (drv != "amdgpu")
+		split("gl.renderer:OpenGL ES renderer is the GPU:opengl|vk.device:Vulkan device is RADV on the GPU:vulkan|vk.raster:Vulkan rasterisation and depth:vulkan|vk.compute:Vulkan compute correctness:vulkan|cl.rusticl:OpenCL (RustiCL) compute correctness:compute", L, "|")
+		for (k = 1; k <= 5; k++) {
+			split(L[k], f, ":")
+			if (blocked) ck(f[1], f[2], "BLOCKED", "", f[3], f[1] ~ /renderer|vk.device/, "amdgpu is not bound to the GPU (gpu.driver)")
+			else if (ufail) ck(f[1], f[2], "FAIL", why, f[3], f[1] ~ /renderer|vk.device/, "")
+			else ck(f[1], f[2], "NOT_RUN", why, f[3], f[1] ~ /renderer|vk.device/, "")
+		}
+		overall = anyfail ? "FAIL" : (reqmiss || deg ? "DEGRADED" : (anypass ? "PASS" : "NOT_RUN"))
+		printf "\n],\"overall\":\"%s\",\"counts\":{\"PASS\":%d,\"FAIL\":%d,\"DEGRADED\":%d,\"UNSUPPORTED\":%d,\"NOT_RUN\":%d,\"BLOCKED\":%d}}\n", \
+		  overall, cnt["PASS"], cnt["FAIL"], cnt["DEGRADED"], cnt["UNSUPPORTED"], cnt["NOT_RUN"], cnt["BLOCKED"]
+	}' > "$out/$N-gpu.json"
+	awk 'BEGIN{print "NickLabs Orbis Graphics stage-0 (initramfs fallback report)"} {print}' "$out/$N-gpu.json" > "$out/$N-gpu.txt"
+	step "fallback report written"
+fi
+step "done"
+sync
+if [ -z "${ORBIS_GFX_OUT_DIR:-}" ] && [ -z "${screen_only:-}" ]; then umount "$mnt" 2>/dev/null; fi
+[ -n "${screen_only:-}" ] && cat "$K"
+echo "orbis-gfx-stage0: wrote $N-gpu*.txt/json"
+exit 0

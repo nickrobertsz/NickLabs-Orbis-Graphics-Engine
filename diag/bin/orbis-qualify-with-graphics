@@ -1,0 +1,29 @@
+#!/bin/sh
+# NickLabs Orbis Graphics Pack: orbis-qualify, extended with the graphics qualification.
+# The integrator points /usr/local/bin/orbis-qualify here (it precedes /usr/bin in PATH), so the
+# Orbis 0.2.0 command and its files stay unchanged; removing the pack removes this extension.
+#   sudo orbis-qualify [--model CUH-1215A] [...0.2.0 options...] [--gfx-sustained SECONDS] [--gfx-transitions]
+set -u
+gfx_args=""
+base_args=""
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--gfx-sustained) gfx_args="$gfx_args --sustained $2"; shift 2 ;;
+		--gfx-transitions) gfx_args="$gfx_args --transitions"; shift ;;
+		--gfx-ring-test) gfx_args="$gfx_args --ring-test"; shift ;;
+		*) base_args="$base_args $1"; shift ;;
+	esac
+done
+rdir="${ORBIS_RECEIPTS_DIR:-/var/lib/orbis/receipts}"
+mkdir -p "$rdir"
+# shellcheck disable=SC2086
+/usr/bin/orbis-qualify $base_args
+base_rc=$?
+stamp="$(date +%Y%m%d-%H%M%S)"
+echo "== graphics qualification (Orbis Graphics Pack)"
+# shellcheck disable=SC2086
+/usr/bin/orbis-gpu qualify $gfx_args --json-out "$rdir/$stamp-graphics.json" --text-out "$rdir/$stamp-graphics.txt"
+gfx_rc=$?
+echo "graphics receipt: $rdir/$stamp-graphics.json"
+[ "$base_rc" -ne 0 ] && exit "$base_rc"
+exit "$gfx_rc"

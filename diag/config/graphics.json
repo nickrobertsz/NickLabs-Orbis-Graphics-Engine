@@ -1,0 +1,5 @@
+{
+ "schema": "orbis-graphics-config/1",
+ "personality_profiles": {"pc": "balanced", "gaming": "performance", "ai": "compute"},
+ "note": "Profiles: balanced, performance, quiet, compute, diagnostic (orbis-gpu profile list). Changes apply at the next personality switch or with: sudo orbis-gpu profile personality <mode>"
+}

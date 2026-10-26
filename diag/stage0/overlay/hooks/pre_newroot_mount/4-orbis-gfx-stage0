@@ -1,0 +1,9 @@
+#!/bin/sh
+# NickLabs Orbis Graphics Pack (MIT): with orbis.gfxdiag=1 on the kernel command line, run the GPU
+# diagnosis (orbis-gfx-stage0) before Orbis 0.2.0's 5-orbis-stage0 hook. This hook never stops the
+# boot by itself: with orbis.stage0=1 the 0.2.0 hook still writes its report and opens the rescue
+# shell; without it the boot continues normally after the GPU report.
+if grep -qw "orbis.gfxdiag=1" /proc/cmdline; then
+	einfo "Orbis graphics stage 0: GPU diagnosis (reports go to orbis-logs/ on ORBIS-BOOT) ..."
+	/bin/orbis-gfx-stage0
+fi

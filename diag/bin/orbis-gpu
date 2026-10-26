@@ -1,0 +1,3 @@
+#!/bin/sh
+# NickLabs Orbis Graphics Pack — CLI entry point (library in /usr/lib/orbis-graphics/orbis_gfx).
+exec /usr/bin/python3 -I -c 'import sys; sys.path.insert(0, "/usr/lib/orbis-graphics"); from orbis_gfx.cli import main; sys.exit(main())' "$@"

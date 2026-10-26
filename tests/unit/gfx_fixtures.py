@@ -17,6 +17,10 @@ def ps4_root(root: Path, *, driver="amdgpu", device="0x9920", connected=True, de
                  "mem_info_vis_vram_total": str(256 << 20), "mem_info_gtt_total": str(3 << 30),
                  "mem_info_gtt_used": str(10 << 20)}.items():
         (pci / k).write_text(v + "\n")
+    (root / "sys/bus/pci/devices").mkdir(parents=True)
+    os.symlink(pci, root / "sys/bus/pci/devices/0000:00:01.0")
+    (pci / "class").write_text("0x030000\n")
+    (pci / "config").write_bytes(bytes.fromhex("0210209907000000") + bytes(56))
     drv = root / "sys/bus/pci/drivers" / driver
     drv.mkdir(parents=True)
     os.symlink(drv, pci / "driver")

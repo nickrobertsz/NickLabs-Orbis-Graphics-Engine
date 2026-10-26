@@ -1,0 +1,24 @@
+{
+ "schema": 1,
+ "from": {
+  "project": "NickLabs Orbis",
+  "version": "0.2.0",
+  "git_tag": "v0.2.0",
+  "git_commit": "d094ebd"
+ },
+ "note": "copied unmodified so the integrator writes images exactly like Orbis 0.2.0; tests/unit/test_integrator.py checks these hashes",
+ "files": {
+  "fat32.py": {
+   "origin": "packaging/image/fat32.py",
+   "sha256": "b7f8e7a13620a615cfbddee14b3fd21337ce077745dda73aa5054b80b71bf395"
+  },
+  "make_usb_image.py": {
+   "origin": "packaging/image/make_usb_image.py",
+   "sha256": "a59addc1f3347b97b2f66b52cea99a8d1b299431b6b983dee979c711367ed011"
+  },
+  "orbis/bzimage.py": {
+   "origin": "platform/orbis/bzimage.py",
+   "sha256": "ba8ded5e9a0f9e3c0856a5ed14ee9e98e869097540a64da3e1cc7c20496067d0"
+  }
+ }
+}

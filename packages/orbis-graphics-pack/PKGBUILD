@@ -1,0 +1,12 @@
+# NickLabs Orbis Graphics Pack 1.0.0 — meta package: everything the pack installs on a CUH-1215A image.
+pkgname=orbis-graphics-pack
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="NickLabs Orbis Graphics Pack 1.0.0 (stable Mesa line, RustiCL, 32-bit Mesa, diagnostics, tools)"
+arch=('any')
+url="https://github.com/nicklabs/orbis-graphics"
+license=('MIT')
+depends=('orbis-graphics=1.0.0'
+         'mesa-orbis-ps4>=26.2.5-101' 'opencl-mesa-orbis-ps4>=26.2.5-101' 'lib32-mesa-orbis-ps4>=26.2.5-101'
+         'xf86-video-amdgpu-orbis-ps4' 'vulkan-icd-loader' 'lib32-vulkan-icd-loader' 'ocl-icd'
+         'vulkan-tools' 'mesa-utils' 'libva-utils' 'clinfo' 'drm_info' 'lm_sensors')

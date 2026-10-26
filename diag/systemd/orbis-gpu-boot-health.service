@@ -1,0 +1,11 @@
+[Unit]
+Description=NickLabs Orbis Graphics: record GPU health after boot (read-only)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/bin/mkdir -p /var/lib/orbis-graphics
+ExecStart=/bin/sh -c '/usr/bin/orbis-gpu health --json > /var/lib/orbis-graphics/boot-health.json || true'
+
+[Install]
+WantedBy=multi-user.target

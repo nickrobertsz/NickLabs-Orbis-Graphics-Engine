@@ -1,0 +1,50 @@
+# NickLabs Orbis Graphics Pack 1.0.0 — diagnostics, qualification, health, profiles, stage-0 overlay.
+# Built from the graphics source tree this PKGBUILD lives in (build/build-pack.sh).
+pkgname=orbis-graphics
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="NickLabs Orbis Graphics Pack tools: orbis-gpu (qualify/health/profile), orbis-gfx-probe, GPU stage-0 diagnosis"
+arch=('x86_64')
+url="https://github.com/nicklabs/orbis-graphics"
+license=('MIT')
+depends=('python>=3.11' 'mesa-orbis-ps4>=26.2.5-101' 'vulkan-icd-loader' 'libglvnd' 'orbis-platform'
+         'vulkan-tools' 'mesa-utils' 'libva-utils' 'clinfo' 'ocl-icd' 'util-linux')
+optdepends=('opencl-mesa-orbis-ps4: OpenCL (RustiCL) test target' 'ffmpeg: video decode checksum test'
+            'drm_info: detailed KMS dump')
+makedepends=('vulkan-headers' 'gcc' 'make' 'shaderc')
+backup=('etc/orbis/graphics.json')
+install=orbis-graphics.install
+
+_root() { echo "${startdir}/../.."; }
+
+build() {
+  local R; R="$(_root)"
+  rm -rf "$srcdir/probe" && cp -a "$R/diag/probe" "$srcdir/probe"
+  make -C "$srcdir/probe" shaders                        # generates shaders_raster_spv.h with glslc
+  make -C "$srcdir/probe" require-raster
+  make -C "$srcdir/probe" ARCHFLAGS="-march=x86-64 -mtune=btver2" VK_INCLUDE=/usr/include orbis-gfx-probe
+}
+
+package() {
+  local R; R="$(_root)"
+  install -Dm755 "$srcdir/probe/orbis-gfx-probe" "$pkgdir/usr/lib/orbis-graphics/orbis-gfx-probe"
+  install -d "$pkgdir/usr/lib/orbis-graphics"
+  cp -r "$R/diag/orbis_gfx" "$pkgdir/usr/lib/orbis-graphics/"
+  find "$pkgdir/usr/lib/orbis-graphics/orbis_gfx" -name __pycache__ -prune -exec rm -rf {} +
+  python -m compileall -q "$pkgdir/usr/lib/orbis-graphics/orbis_gfx"
+  install -Dm755 "$R/diag/bin/orbis-gpu" "$pkgdir/usr/bin/orbis-gpu"
+  install -Dm755 "$R/diag/bin/orbis-qualify-with-graphics" "$pkgdir/usr/lib/orbis-graphics/orbis-qualify-with-graphics"
+  for u in "$R"/diag/systemd/*; do install -Dm644 "$u" "$pkgdir/usr/lib/systemd/system/$(basename "$u")"; done
+  install -Dm644 "$R/diag/config/graphics.json" "$pkgdir/etc/orbis/graphics.json"
+  install -Dm644 "$R/diag/schema/orbis-gfx-report-1.schema.json" "$pkgdir/usr/share/orbis-graphics/schema/orbis-gfx-report-1.schema.json"
+  # initramfs overlay for orbis.gfxdiag=1 (added to the boot initramfs by the integrator)
+  install -Dm755 "$R/diag/stage0/overlay/bin/orbis-gfx-stage0" "$pkgdir/usr/share/orbis-graphics/initramfs-overlay/bin/orbis-gfx-stage0"
+  install -Dm755 "$R/diag/stage0/overlay/hooks/pre_newroot_mount/4-orbis-gfx-stage0" \
+    "$pkgdir/usr/share/orbis-graphics/initramfs-overlay/hooks/pre_newroot_mount/4-orbis-gfx-stage0"
+  # on-console integration/rollback (the same scripts the Nobara integrator runs in its container)
+  install -Dm755 "$R/integrator/root/integrate-root.sh" "$pkgdir/usr/lib/orbis-graphics/integrate-root.sh"
+  install -Dm755 "$R/integrator/root/rollback-root.sh" "$pkgdir/usr/lib/orbis-graphics/rollback-root.sh"
+  install -Dm644 "$R/manifest/sources.json" "$pkgdir/usr/share/orbis-graphics/sources.json"
+  for f in "$R"/docs/*.md; do install -Dm644 "$f" "$pkgdir/usr/share/doc/orbis-graphics/$(basename "$f")"; done
+  install -Dm644 "$R/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
