@@ -1,0 +1,316 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: NickLabs Orbis <orbis@nicklabs.invalid>
+Date: Mon, 26 Oct 2026 13:07:10 -0700
+Subject: [PATCH] Orbis GE 2.0: exact VRAM carve-out MTRRs, validated vram.txt,
+ gtt.txt, boot identity token
+
+---
+ linux/Makefile                      | 10 +++-
+ linux/main-aio.c                    | 91 ++++++++++++++++++++++++++++-
+ linux/ps4-kexec-common/linux_boot.c | 32 ++++++++--
+ linux/ps4-kexec-common/orbis_vram.h | 78 +++++++++++++++++++++++++
+ 4 files changed, 205 insertions(+), 6 deletions(-)
+ create mode 100644 linux/ps4-kexec-common/orbis_vram.h
+
+diff --git a/linux/Makefile b/linux/Makefile
+index 0f85903..b3ec6f8 100644
+--- a/linux/Makefile
++++ b/linux/Makefile
+@@ -10,6 +10,8 @@
+ # ─────────────────────────────────────────────────────────────────────────────
+ 
+ SIZES_MB = 32 64 128 256 512 1024 2048 3072 4096
++# NickLabs Orbis Graphics Engine 2.0 payloads (any orbis_vram_valid() size via vram.txt)
++ORBIS_SIZES_MB = 256 384 512 768 1024 1536 2048
+ 
+ FIRMWARES = 505 672 700 750 800 850 900 903 960 \
+             1000 1050 1100 1102 1150 1200 1250 1300 1302 1350 1352 1400
+@@ -55,6 +57,7 @@ KEXEC_BINS = $(foreach fw,$(FIRMWARES),$(KEXEC_BUILD_DIR)/$(fw)/kexec.bin)
+ # ── AIO target list ───────────────────────────────────────────────────────────
+ 
+ AIO_TARGETS = $(foreach sz,$(SIZES_MB), payloads/linux-$(sz)mb.bin)
++ORBIS_TARGETS = $(foreach sz,$(ORBIS_SIZES_MB), payloads/orbis-ge-$(sz)mb.bin)
+ 
+ # ── Top-level phony targets ───────────────────────────────────────────────────
+ 
+@@ -99,9 +102,14 @@ payloads/linux-$(1)mb.elf: ../lib/lib.a main-aio.c fw_detect.c fw_offsets.h fw_d
+ 	    main-aio.c fw_detect.c \
+ 		sb_detect.h \
+ 	    $(LDFLAGS) -o $$@
++
++payloads/orbis-ge-$(1)mb.elf: payloads/linux-$(1)mb.elf
++	cp $$< $$@
+ endef
+ 
+-$(foreach sz,$(SIZES_MB),$(eval $(call make-aio-rules,$(sz))))
++orbis: $(ORBIS_TARGETS)
++
++$(foreach sz,$(sort $(SIZES_MB) $(ORBIS_SIZES_MB)),$(eval $(call make-aio-rules,$(sz))))
+ 
+ # kexec-diff-check: kexec-bins
+ # 	@sha256sum -c $(KEXEC_HASH_MANIFEST)
+diff --git a/linux/main-aio.c b/linux/main-aio.c
+index 7bd9261..6176a66 100644
+--- a/linux/main-aio.c
++++ b/linux/main-aio.c
+@@ -22,6 +22,7 @@
+ #include "aio_types.h"
+ #include "fw_detect.h"
+ #include "fw_offsets.h"
++#include "ps4-kexec-common/orbis_vram.h"
+ 
+ void* dlopen(const char*, int);
+ void* dlsym(void*, const char*);
+@@ -228,6 +229,77 @@ int my_atoi(const char *s)
+     return neg ? -ret : ret;
+ }
+ 
++
++/* NickLabs Orbis: append " <token>" to dst (bounded); returns 0 or -1 */
++static int orbis_append(char *dst, unsigned long long cap, unsigned long long *len, const char *tok)
++{
++    unsigned long long i;
++
++    if (*len + 1 >= cap)
++        return -1;
++    dst[(*len)++] = ' ';
++    for (i = 0; tok[i]; i++) {
++        if (*len + 1 >= cap)
++            return -1;
++        dst[(*len)++] = tok[i];
++    }
++    dst[*len] = '\0';
++    return 0;
++}
++
++static int orbis_append_num(char *dst, unsigned long long cap, unsigned long long *len,
++                            const char *key, long long val)
++{
++    char buf[64];
++    int n = 0, k = 0;
++    char digits[24];
++
++    while (key[k] && n < 40)
++        buf[n++] = key[k++];
++    if (val < 0) {
++        buf[n++] = '-';
++        val = -val;
++    }
++    k = 0;
++    do {
++        digits[k++] = (char)('0' + val % 10);
++        val /= 10;
++    } while (val && k < 20);
++    while (k)
++        buf[n++] = digits[--k];
++    buf[n] = '\0';
++    return orbis_append(dst, cap, len, buf);
++}
++
++/*
++ * cmdline + " orbis.loader=ge2 orbis.vram_mb=N [orbis.gtt_mb=N ttm.pages_limit=P amdgpu.gttsize=N]"
++ * into dst. The kernel ignores unknown orbis.* parameters; orbis-blackbox reads them from
++ * /proc/cmdline to record the boot memory contract.
++ */
++static int orbis_cmdline_compose(char *dst, unsigned long long cap, const char *src,
++                                 int vram_mb, int gtt_mb)
++{
++    unsigned long long len = 0;
++
++    while (src && src[len] && len + 1 < cap) {
++        dst[len] = src[len];
++        len++;
++    }
++    dst[len] = '\0';
++    if (src && src[len])
++        return -1;
++    if (orbis_append(dst, cap, &len, "orbis.loader=ge2") ||
++        orbis_append_num(dst, cap, &len, "orbis.vram_mb=", vram_mb))
++        return -1;
++    if (gtt_mb > 0) {
++        if (orbis_append_num(dst, cap, &len, "orbis.gtt_mb=", gtt_mb) ||
++            orbis_append_num(dst, cap, &len, "ttm.pages_limit=", (long long)gtt_mb * 256) ||
++            orbis_append_num(dst, cap, &len, "amdgpu.gttsize=", gtt_mb))
++            return -1;
++    }
++    return 0;
++}
++
+ static int pack_kexec_args(int vram_mb, u16 fw_ver, int sb_val)
+ {
+     u32 sb_family = (u32)((sb_val >> 16) & 0xF); 
+@@ -374,6 +446,9 @@ int main(void)
+     char *cmdline = NULL; unsigned long long cmdline_size = 0;
+     char *vramstr = NULL; unsigned long long vramstr_size = 0;
+     int vram_mb = 0;
++    char *gttstr = NULL; unsigned long long gttstr_size = 0;
++    int gtt_mb = 0;
++    static char cmdline_orbis[4096];
+ 
+ #define L(name, where, wheresz, is_fatal) \
+     if (read_file("/mnt/usb0/" name, where, wheresz) \
+@@ -404,12 +479,26 @@ int main(void)
+     L("vram.txt", &vramstr, &vramstr_size, 0);
+     if (vramstr && vramstr_size) {
+         vram_mb = my_atoi(vramstr);
+-        if (vram_mb < VRAM_MB_MIN || vram_mb > VRAM_MB_MAX)
++        if (vram_mb < VRAM_MB_MIN || vram_mb > VRAM_MB_MAX || !orbis_vram_valid(vram_mb)) {
++            alert("Orbis loader: vram.txt is not a valid carve-out size (multiple of 16 MiB,\n"
++                  "64..4096, e.g. 256/384/512/768/1024/1536/2048/3072); using the payload default.");
+             vram_mb = VRAM_MB_DEFAULT;
++        }
+     } else {
+         vram_mb = VRAM_MB_DEFAULT;
+     }
+ 
++    // NickLabs Orbis: gtt.txt (MiB) -> ttm.pages_limit + amdgpu.gttsize, as the community
++    // ps4-linux-payloads loader does, plus a boot-identity token for the Orbis Black Box.
++    L("gtt.txt", &gttstr, &gttstr_size, 0);
++    if (gttstr && gttstr_size) {
++        gtt_mb = my_atoi(gttstr);
++        if (gtt_mb < 256 || gtt_mb > 7680)
++            gtt_mb = 0;
++    }
++    if (orbis_cmdline_compose(cmdline_orbis, sizeof(cmdline_orbis), cmdline, vram_mb, gtt_mb) == 0)
++        cmdline = cmdline_orbis;
++
+     // Launch kernel exploit → kernel_main()
+     kexec(kernel_main, (void *)0);
+ 
+diff --git a/linux/ps4-kexec-common/linux_boot.c b/linux/ps4-kexec-common/linux_boot.c
+index 7ae93a1..e9d1b25 100644
+--- a/linux/ps4-kexec-common/linux_boot.c
++++ b/linux/ps4-kexec-common/linux_boot.c
+@@ -19,10 +19,12 @@
+ 
+ extern u8 sb_id;
+ 
++#include "orbis_vram.h"
++
+ void uart_write_byte(u8 b);
+ 
+ static u64 vram_base = 0x100000000;
+-// Current code assumes it's a power of two.
++// NickLabs Orbis: any size accepted by orbis_vram_valid() (16 MiB multiple, <= 5 MTRR blocks).
+ static u64 vram_size = 1024 * 1024;  /* 1 MB unit - value is now in MB */
+ static int vram_mb = 2048;  /* default 2 GB expressed in MB */
+ 
+@@ -159,9 +161,31 @@ static void setup_mtrr(void)
+     // High memory (8GB-10GB) = WB
+     wrmsr(MTRR_BASE(2), 0x0200000006);
+     wrmsr(MTRR_MASK(2), 0xff80000800);
+-    // VRAM (4GB-4GB+vram_size) = UC
+-    wrmsr(MTRR_BASE(3), 0x0100000000);
+-    wrmsr(MTRR_MASK(3), (0xffffffffff - vram_mb * vram_size + 1) | 0x800);
++    // VRAM (4GB-4GB+vram_size) = UC.
++    // NickLabs Orbis: one MTRR per power-of-two block so that every validated size
++    // (e.g. 768 or 3072 MiB) is covered exactly; unused slots up to 7 are cleared.
++    {
++        struct orbis_vram_block blk[ORBIS_VRAM_MAX_BLOCKS];
++        int n = orbis_vram_split(vram_base, (unsigned long long)vram_mb * vram_size,
++                                 blk, ORBIS_VRAM_MAX_BLOCKS);
++        int vcnt = (int)(rdmsr(0xfe) & 0xff);   /* IA32_MTRRCAP.VCNT */
++        int i;
++
++        if (n < 0 || ORBIS_VRAM_FIRST_MTRR + n > vcnt) {
++            /* cannot happen for sizes accepted by orbis_vram_valid(); keep upstream behaviour */
++            wrmsr(MTRR_BASE(3), 0x0100000000);
++            wrmsr(MTRR_MASK(3), (0xffffffffff - vram_mb * vram_size + 1) | 0x800);
++        } else {
++            for (i = 0; i < n; i++) {
++                wrmsr(MTRR_BASE(ORBIS_VRAM_FIRST_MTRR + i), blk[i].base);   /* type 0 = UC */
++                wrmsr(MTRR_MASK(ORBIS_VRAM_FIRST_MTRR + i), orbis_mtrr_mask(blk[i].size));
++            }
++            for (i = ORBIS_VRAM_FIRST_MTRR + n; i < vcnt && i < 8; i++) {
++                wrmsr(MTRR_BASE(i), 0);
++                wrmsr(MTRR_MASK(i), 0);
++            }
++        }
++    }
+ 
+     wbinvd();
+     cr3_write(cr3_read()); // TLB flush
+diff --git a/linux/ps4-kexec-common/orbis_vram.h b/linux/ps4-kexec-common/orbis_vram.h
+new file mode 100644
+index 0000000..450674a
+--- /dev/null
++++ b/linux/ps4-kexec-common/orbis_vram.h
+@@ -0,0 +1,78 @@
++/*
++ * orbis_vram.h - NickLabs Orbis Graphics Engine 2.0: VRAM carve-out geometry for the PS4
++ * loader (MIT, NickLabs contributors).
++ *
++ * The loader reserves vram_mb at physical 4 GiB (E820), programs MC_VM_FB_LOCATION
++ * (16 MiB granularity) and CONFIG_MEMSIZE, and marks the range uncacheable with MTRRs.
++ * Upstream uses ONE variable MTRR with mask = ~(size - 1), which is only a valid MTRR
++ * for power-of-two sizes: 3072 MiB (offered by the upstream Makefile) or 768 MiB give a
++ * non-contiguous mask and an undefined cache type over part of the carve-out and of
++ * Linux RAM. orbis_vram_split() covers [base, base + size) exactly with power-of-two,
++ * naturally aligned blocks (largest first), one variable MTRR each.
++ *
++ * Header-only and freestanding so that it is unit-tested on the build host.
++ */
++#ifndef ORBIS_VRAM_H
++#define ORBIS_VRAM_H
++
++#define ORBIS_VRAM_GRANULE_MB	16	/* MC_VM_FB_LOCATION granularity */
++#define ORBIS_VRAM_MIN_MB	64
++#define ORBIS_VRAM_MAX_MB	4096
++#define ORBIS_VRAM_FIRST_MTRR	3	/* 0..2 are the WB RAM ranges */
++#define ORBIS_VRAM_MAX_BLOCKS	5	/* variable MTRRs 3..7 */
++
++struct orbis_vram_block {
++	unsigned long long base;
++	unsigned long long size;
++};
++
++/* 1 if vram_mb is a carve-out size the loader can program exactly, else 0 */
++static inline int orbis_vram_valid(int vram_mb)
++{
++	int blocks = 0;
++	unsigned int v;
++
++	if (vram_mb < ORBIS_VRAM_MIN_MB || vram_mb > ORBIS_VRAM_MAX_MB)
++		return 0;
++	if (vram_mb % ORBIS_VRAM_GRANULE_MB)
++		return 0;
++	for (v = (unsigned int)vram_mb; v; v &= v - 1)
++		blocks++;
++	return blocks <= ORBIS_VRAM_MAX_BLOCKS;
++}
++
++/*
++ * Split [base, base + size) into power-of-two blocks, largest first. base must be
++ * aligned to the largest block (the carve-out starts at 4 GiB). Returns the number of
++ * blocks written, or -1 if more than max are needed.
++ */
++static inline int orbis_vram_split(unsigned long long base, unsigned long long size,
++				   struct orbis_vram_block *out, int max)
++{
++	int n = 0;
++	int bit;
++
++	for (bit = 63; bit >= 0; bit--) {
++		unsigned long long blk = 1ULL << bit;
++
++		if (!(size & blk))
++			continue;
++		if (n == max)
++			return -1;
++		if (base & (blk - 1))
++			return -1;	/* not naturally aligned */
++		out[n].base = base;
++		out[n].size = blk;
++		base += blk;
++		n++;
++	}
++	return n;
++}
++
++/* MTRR PHYSMASK value for a power-of-two block on a 40-bit physical address machine */
++static inline unsigned long long orbis_mtrr_mask(unsigned long long size)
++{
++	return ((0xffffffffffULL - size + 1) & 0xfffffff000ULL) | 0x800ULL;
++}
++
++#endif

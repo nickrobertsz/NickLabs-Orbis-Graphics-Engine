@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "note": "Every upstream input of NickLabs Orbis Graphics Pack, pinned to an immutable commit or release-archive SHA-256. The PKGBUILDs verify these hashes; build/build-pack.sh refuses an unpinned experimental build.",
+ "note": "Every upstream input of NickLabs Orbis Graphics Engine 2.0 (and the Graphics Pack 1.0.0 it extends), pinned to an immutable commit or release-archive SHA-256.",
  "mesa": {
   "stable": {
    "version": "26.2.5",
@@ -44,5 +44,63 @@
   "date": "2026/10/20",
   "url": "https://archive.archlinux.org/repos/2026/10/20/",
   "note": "same snapshot as Orbis 0.2.0; libdrm, llvm-libs, libclc, spirv-llvm-translator, clang, rust come from it"
+ },
+ "graphics_engine": {
+  "version": "2.0.0",
+  "extends": {
+   "graphics_pack": "1.0.0",
+   "git_tag": "v1.0.0-src",
+   "git_commit": "024f097"
+  }
+ },
+ "loader": {
+  "repo": "https://github.com/ps4-linux/ps4-linux-loader",
+  "commit": "d0f4d4c0bbc9e8b4870300781b352605ed2bc91d",
+  "patch": "loader/0001-Orbis-GE-2.0-exact-VRAM-carve-out-MTRRs-validated-vr.patch",
+  "note": "same commit Orbis 0.2.0 pins; the patch fixes non-power-of-two VRAM MTRRs, validates vram.txt, adds gtt.txt and a boot-identity token"
+ },
+ "kernel_series": {
+  "base": "feeRnt 6.15.4 crashnt-4.7 108ef97 + Orbis 0.2.0 0001",
+  "series": "kernel/patches/series",
+  "release": "6.15.4-orbis-ps4-ge-g<commit>",
+  "status": "applies cleanly in order (checked); not compiled by NickLabs Orbis"
+ },
+ "community_sources": {
+  "linux-psx": {
+   "repo": "https://github.com/meerzulee/linux-psx",
+   "commit": "2138063970722631aa0a7cb7f034ba3e11b82507",
+   "used": "rmux patches from platforms/ps4/patches/7.2-ps4 (fan, cpufreq, SMU mailbox, HDMI audio DTO/DIG1, bridge robustness, VRAM type, default clocks); docs PS4-DYNAMIC-MEMORY.md, UVD.md, MESA-TESTING.md; Mesa 0002 AVC caps"
+  },
+  "sony-jaguar-devs": {
+   "repo": "https://github.com/sony-jaguar-devs/ps4-linux",
+   "ref": "refs/heads/6.18.21-Strawberry-GpuWork",
+   "commit": "79d8f7ab38c9649df81106086174b27bc23b9970",
+   "used": "liverpool_clk.c (hardened SCLK force + debugfs)"
+  },
+  "feeRnt-uvd-engine2": {
+   "repo": "https://github.com/feeRnt/ps4-linux-12xx",
+   "ref": "refs/heads/x_exp__6.15.4-uvd-engine2",
+   "commit": "434592754dda9094672da7abe0391085e8f18753",
+   "used": "research diff only (kernel/patches/research)"
+  },
+  "aday1": {
+   "repo": "https://github.com/aday1/ps4-hdmi-blackscreen",
+   "commit": "5c1c2fc1416d1aa99da408315c37f45d2ed1d7e9"
+  },
+  "ps4-linux-payloads": {
+   "repo": "https://github.com/chrisripp/ps4-linux-payloads",
+   "commit": "e1387e227c977a749277629f23cae37849317657",
+   "used": "gtt.txt semantics"
+  },
+  "ps4-kexec": {
+   "repo": "https://github.com/fail0verflow/ps4-kexec",
+   "commit": "e79feb87311f79084ee63a354e5646135efc4ac5",
+   "used": "reference for boot handoff"
+  },
+  "ps4-mesa-docs": {
+   "repo": "https://github.com/orbis-ports/ps4-mesa-docs",
+   "commit": "deb190361652acbc3b0ff49fc8edac1820f16842",
+   "used": "reference only (native Orbis OS port, not Linux DRM)"
+  }
  }
 }
