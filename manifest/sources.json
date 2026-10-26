@@ -1,0 +1,44 @@
+{
+ "schema": 1,
+ "note": "Every upstream input of NickLabs Orbis Graphics Pack, pinned to an immutable commit (and a release-archive SHA-256 where one exists). build/check_sources.py refuses anything else.",
+ "mesa": {
+  "stable": {
+   "version": "26.2.5",
+   "repo": "https://github.com/chaotic-cx/mesa-mirror",
+   "upstream": "https://gitlab.freedesktop.org/mesa/mesa",
+   "tag": "mesa-26.2.5",
+   "commit": "ddaf85e353442d9d7f192fdcf1823e652e3f2ee3",
+   "release_archive": "https://archive.mesa3d.org/mesa-26.2.5.tar.xz",
+   "release_archive_sha256": "794b3d1729075dae7ebd47c7283b7ca0cdb5dec668f7f11cc0a5d82f6138a0a5",
+   "dir_suffix": "26.2.5",
+   "patches": "mesa/stable/patches/series"
+  },
+  "experimental": {
+   "version": "26.3-devel (main snapshot)",
+   "repo": "https://github.com/chaotic-cx/mesa-mirror",
+   "upstream": "https://gitlab.freedesktop.org/mesa/mesa",
+   "branch": "main",
+   "commit": null,
+   "dir_suffix": "main",
+   "patches": "mesa/experimental/patches/series"
+  }
+ },
+ "libdrm": {
+  "version": "2.4.125",
+  "repo": "https://github.com/gitlab-freedesktop-mirrors/drm",
+  "upstream": "https://gitlab.freedesktop.org/mesa/drm",
+  "tag": "libdrm-2.4.125",
+  "commit": "76a1e97a9a7c29fa3035bb370d654791bdc23d90"
+ },
+ "meson": {"version": "1.9.2", "repo": "https://github.com/mesonbuild/meson", "tag": "1.9.2", "commit": "d11b8f26f372c844fcd24a82fa745244bb13c6e0"},
+ "mako": {"version": "1.4.3", "repo": "https://github.com/sqlalchemy/mako", "tag": "rel_1_4_3", "commit": "6b833ae06fc8866b89ea7939e5d36dd71699cf05"},
+ "orbis_base": {
+  "version": "0.2.0",
+  "git_tag": "v0.2.0",
+  "git_commit": "d094ebd",
+  "kernel_release": "6.15.4-orbis-ps4-g108ef9764583-dirty",
+  "kernel_bzimage_sha256": "cbc11420cba2ed839a242380361dffe9640b63aea530cb71aacffba46c0ec157",
+  "kernel_source": {"repo": "https://github.com/feeRnt/ps4-linux-12xx", "commit": "108ef9764583076cbff879f581fd598817eb880a"},
+  "profile": "cuh-1215a"
+ }
+}

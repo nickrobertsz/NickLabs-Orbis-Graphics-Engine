@@ -1,0 +1,22 @@
+#version 450
+// Shared-memory tree reduction + one global atomicAdd per workgroup.
+// Exercises barrier(), shared memory and buffer atomics.
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) readonly buffer In { uint v[]; };
+layout(std430, binding = 1) buffer Acc { uint sum_lo; uint groups_done; };
+layout(push_constant) uniform PC { uint count; } pc;
+shared uint s[256];
+void main() {
+    uint gid = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * 256u;
+    uint lid = gl_LocalInvocationID.x;
+    s[lid] = (gid < pc.count) ? v[gid] : 0u;
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1) {
+        if (lid < stride) s[lid] += s[lid + stride];
+        barrier();
+    }
+    if (lid == 0u) {
+        atomicAdd(sum_lo, s[0]);
+        atomicAdd(groups_done, 1u);
+    }
+}
