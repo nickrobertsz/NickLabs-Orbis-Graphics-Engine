@@ -109,6 +109,8 @@ def assemble(staging: Path, outdir: Path, exp_state: str, exp_reason: str | None
     shutil.copytree(R / "diag/stage0/overlay", top / "stage0/overlay-src")
     shutil.copytree(R / "integrator", top / "integrator", ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copy2(R / "orbis-graphics", top / "orbis-graphics")
+    if (R / "tools").is_dir():   # orbis-blackbox-receiver: runs on the Nobara/LAN machine
+        shutil.copytree(R / "tools", top / "tools", ignore=shutil.ignore_patterns("__pycache__"))
     (top / "docs").mkdir()
     for d in sorted((R / "docs").glob("*.md")):
         shutil.copy2(d, top / "docs" / d.name)

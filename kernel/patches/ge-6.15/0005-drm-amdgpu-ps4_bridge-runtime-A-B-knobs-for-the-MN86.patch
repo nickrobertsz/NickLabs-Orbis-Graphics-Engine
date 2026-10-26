@@ -18,7 +18,8 @@ runtime in /sys/module/amdgpu/parameters/ for an A/B test after a black-screen m
   amdgpu.ps4_bridge_fix_hdcpen=1        write HDCPEN_ENC_DIS to HDCPEN (suspected stock typo)
 
 Status: applies to the Orbis kernel tree with patch -F0 (checked); NOT compile-tested by Orbis
-(compile on Nobara with kernel/build-gfx-kernel.sh); NOT boot-tested. Not in the default series.
+(compile on Nobara with kernel/build-ge-kernel.sh); NOT boot-tested. In the Graphics Engine
+series with every knob defaulting to the 0.2.0 behaviour.
 ---
  drivers/gpu/drm/amd/amdgpu/ps4_bridge.c | 91 +++++++++++++++++++++++--
  1 file changed, 87 insertions(+), 4 deletions(-)
