@@ -52,11 +52,19 @@ ORBIS_BUILT = {"mesa-orbis-ps4", "opencl-mesa-orbis-ps4", "lib32-mesa-orbis-ps4"
 
 def git_source_archive(dest: Path, commit: str | None) -> Path:
     out = dest / f"NICKLABS-ORBIS-GRAPHICS-SOURCE-v{VERSION}.tar.gz"
-    rev = commit or "HEAD"
-    r = subprocess.run(["git", "-C", str(R), "archive", "--format=tar.gz", f"--prefix=nicklabs-orbis-graphics-{VERSION}/",
-                        "-o", str(out), rev], capture_output=True, text=True)
+    rev = commit if commit and commit != "worktree" else "HEAD"
+    if (R / ".git").exists():
+        r = subprocess.run(["git", "-C", str(R), "archive", "--format=tar.gz", f"--prefix=nicklabs-orbis-graphics-{VERSION}/",
+                            "-o", str(out), rev], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise SystemExit(f"git archive failed: {r.stderr}")
+        return out
+    # unpacked source archive (no .git): archive the tree itself, deterministically
+    r = subprocess.run(["tar", "--sort=name", "--numeric-owner", "--owner=0", "--group=0", "--mtime=@0",
+                        "--exclude=./out", "--exclude=__pycache__", "--transform", f"s,^\\.,nicklabs-orbis-graphics-{VERSION},",
+                        "-czf", str(out), "-C", str(R), "."], capture_output=True, text=True, env={"GZIP": "-n", "PATH": "/usr/bin:/bin"})
     if r.returncode != 0:
-        raise SystemExit(f"git archive failed: {r.stderr}")
+        raise SystemExit(f"tar of the source tree failed: {r.stderr}")
     return out
 
 
