@@ -1029,10 +1029,16 @@ static VkResult mkbuf_type(struct ctx *c, struct buf *o, VkDeviceSize size, int 
         if (!bits) { *why = "no memory type both importable for this pointer and usable by the buffer"; r = VK_ERROR_FEATURE_NOT_PRESENT; goto fail; }
         if (mr.size > size) { *why = "buffer needs more memory than the imported range"; r = VK_ERROR_FEATURE_NOT_PRESENT; goto fail; }
         type = -1;
-        for (uint32_t i = 0; i < c->mem.memoryTypeCount && type < 0; i++)   /* prefer host-coherent */
-            if ((bits & (1u << i)) && type_coherent(c, (int)i)) type = (int)i;
-        for (uint32_t i = 0; i < c->mem.memoryTypeCount && type < 0; i++)
-            if (bits & (1u << i)) type = (int)i;
+        /* r3.1: host-visible + host-coherent first, then host-visible (synchronized through the
+         * mapping, see zero_copy), then anything (the caller reports it: a non-host-visible
+         * import must not be touched through the host pointer at all) */
+        for (int pass = 0; pass < 3 && type < 0; pass++)
+            for (uint32_t i = 0; i < c->mem.memoryTypeCount && type < 0; i++) {
+                VkMemoryPropertyFlags f = c->mem.memoryTypes[i].propertyFlags;
+                bool hv = f & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, hc = f & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+                if ((bits & (1u << i)) && (pass == 0 ? (hv && hc) : pass == 1 ? hv : true))
+                    type = (int)i;
+            }
         alloc = size;   /* the import covers exactly the host range */
     }
     if (type < 0 || (uint32_t)type >= c->mem.memoryTypeCount || !(bits & (1u << type))) {
@@ -1199,7 +1205,6 @@ static enum mb_res zero_copy(struct ctx *c, VkDeviceSize size, struct pipe *pw, 
     if (posix_memalign(&host, (size_t)align, (size_t)size) || !host) {
         host = NULL; res = MB_ALLOCATION_FAILED; step = "host allocation"; why = "posix_memalign failed"; goto out;
     }
-    memset(host, 0xFF, size);
     int type = -1;
     VkResult r = mkbuf_type(c, &h, size, -1, host, align, hpp, &type, &why);
     if (r) { res = mb_from_vk(r); step = "import host pointer"; j_kstr("vk_result", vkres(r)); goto out; }
@@ -1208,6 +1213,57 @@ static enum mb_res zero_copy(struct ctx *c, VkDeviceSize size, struct pipe *pw, 
     j_kuint("imported_memory_flags", fl);
     j_kstr("imported_kind", mem_label(fl));
     j_kbool("host_coherent", type_coherent(c, type));
+    /*
+     * r3.1 synchronization of the ORIGINAL pointer (audit P1).
+     * - Not host-visible: VK_EXT_external_memory_host forbids the application to access the
+     *   imported range (or any other mapping of the same pages) while the memory exists, so the
+     *   CPU side cannot be checked at all: INCOMPATIBLE_MEMORY_TYPE, and `host` is not touched
+     *   until the memory object is destroyed.
+     * - Host-coherent: CPU accesses through the original pointer need no flush/invalidate.
+     * - Host-visible, not coherent: flush/invalidate are defined for host writes/reads of the
+     *   memory object's ranges and need the object to be host mapped. The object is mapped
+     *   (mkbuf_type) and the mapping must be the original pages: either vkMapMemory returned the
+     *   original pointer, or, on x86-64, a second virtual alias of the same physical pages
+     *   (x86 caches are physically tagged, so cache maintenance through the alias covers the
+     *   original pointer's lines). The alias is verified both ways before use; any other case is
+     *   INCOMPATIBLE_MEMORY_TYPE, never a PASS or FAIL decided by missing synchronization.
+     */
+    const char *sync = "host-coherent (no flush/invalidate needed)";
+    if (!(fl & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
+        res = MB_INCOMPATIBLE_MEMORY_TYPE; step = "imported memory type";
+        why = "the importable memory type is not host-visible: the host pointer must not be accessed while it is imported";
+        goto out;
+    }
+    if (!type_coherent(c, type)) {
+        if (!h.map) { res = MB_INCOMPATIBLE_MEMORY_TYPE; step = "map imported memory"; why = "non-coherent import could not be mapped for flush/invalidate"; goto out; }
+        if (h.map == host) {
+            sync = "flush/invalidate on the mapping, which is the original pointer";
+        } else {
+#if defined(__x86_64__) || defined(__i386__)
+            /* alias check: CPU-only, both directions, on every page (no GPU work in flight) */
+            volatile uint32_t *o = host, *m = h.map;
+            bool alias = true;
+            for (VkDeviceSize off = 0; off < size / 4 && alias; off += 1024) {
+                o[off] = 0xA5A50000u ^ (uint32_t)off;
+                if (m[off] != (0xA5A50000u ^ (uint32_t)off)) alias = false;
+                m[off] = 0x5A5A0000u ^ (uint32_t)off;
+                if (o[off] != (0x5A5A0000u ^ (uint32_t)off)) alias = false;
+            }
+            j_kbool("mapping_aliases_original_pages", alias);
+            if (!alias) { res = MB_INCOMPATIBLE_MEMORY_TYPE; step = "alias check"; why = "vkMapMemory of the import does not alias the original pages"; goto out; }
+            sync = "flush/invalidate on the vkMapMemory alias of the original pages (x86-64: physically tagged caches; alias verified)";
+#else
+            res = MB_INCOMPATIBLE_MEMORY_TYPE; step = "imported memory type";
+            why = "non-coherent import mapped at another address: original-pointer synchronization not guaranteed on this architecture";
+            goto out;
+#endif
+        }
+    }
+    j_kstr("synchronization", sync);
+    /* initial contents written after the import, then made available to the device: dirty lines
+     * left from before the import can never be written back over GPU results */
+    memset(host, 0xFF, size);
+    if ((r = host_flush(c, &h, type))) { res = MB_SYNC_FAILED; step = "flush initial contents"; why = vkres(r); goto out; }
     /* 1. GPU writes, CPU reads the same pages (GPU -> CPU without a copy).
      *    The dispatch ends with a compute->host barrier (HOST_READ); the fence wait orders the
      *    CPU after it; non-coherent memory is also invalidated before the CPU reads. */
