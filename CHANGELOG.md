@@ -1,5 +1,43 @@
 # Changelog
 
+## 2.0.0-r3.1 (source revision, 2026-10-27): independent audit corrections
+
+Confirmed defects corrected:
+- **P0 release verification.** `orbis-ge` fails closed:
+  - a cached output is reused only when its provenance and its SHA-256 still match;
+  - a step whose output is missing fails (exit 7);
+  - `verify` gates the kernel, loader, pack, image and requested stage-0 image. On any failure the
+    receipt is FAILED, no SHA256SUMS is written and `Done` is never printed;
+  - an optional stage-0 image that was not requested is recorded as omitted.
+- **P1 zero-copy probe synchronization.** The original host pointer is synchronized correctly.
+  Non-host-visible or unverifiable non-coherent imports give an explicit
+  INCOMPATIBLE_MEMORY_TYPE. Results and exit codes are unchanged.
+- **P1 kernel ge-0017.**
+  - The GTT runtime budget is its own synchronized value: `ttm_resource_manager.size` is no
+    longer written at runtime.
+  - Stores are guarded against reset, suspend and unplug.
+  - The budget mutex is torn down last.
+  - `orbis-mem` clamps to the capacity.
+- **P1 admission protocol.**
+  - Requests are read by file descriptor, without following links; the PID is bound to the
+    process start time.
+  - The scope must be owned by the requester, with the requester as its only member.
+  - Replies are private and named with the nonce, and temporary files are created exclusively.
+  - New explicit states: NOT_IN_SCOPE, REQUEST_FAILED and SCOPE_FAILED. Exit 75 is retained.
+- **P2.** The base image must carry a 0.2.0 profile that serves the target (exit 8; the decision
+  is recorded). `RELEASE-MANIFEST.json` separates the current run from history. Step fingerprints
+  are precise.
+- **Found while fixing (GE-B40).** Package cache keys missed inputs, which allowed stale reuse.
+  The keys now match exactly what each PKGBUILD reads, and documentation moved to the new
+  `orbis-graphics-docs` package. Changed packages are rebuilt at pkgrel 2.
+
+Reviewed, no defect found: the GPU eviction path of ge-0014/0016 (see UNIFIED-MEMORY-ARCHITECTURE.md
+§2c).
+
+Unchanged: the Porting Kit (only the 0.2.0 profile map was added to the registry for base-image
+identity), every r3 feature, Orbis 0.2.0, Graphics Pack 1.0.0, LAN-only networking. The production
+target remains CUH-1215A.
+
 ## 2.0.0-r3 (source revision, 2026-10-27): audit corrections + Universal PS4 Hardware Porting Kit
 
 Kernel (Source-checked: the full series of 18 patches applies in order; Awaiting Nobara compilation):

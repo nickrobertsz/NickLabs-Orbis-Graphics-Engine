@@ -1,6 +1,6 @@
 # NickLabs Orbis — development catalog
 
-Updated 2026-10-27, for source release 2.0.0-r3. The catalog tracks five directives:
+Updated 2026-10-27, for source release 2.0.0-r3.1. The catalog tracks five directives:
 
 * **D1** Graphics Engine 2.0
 * **D2** Gaming, RTC and Nobara/CachyOS performance
@@ -29,12 +29,12 @@ with evidence.
 | Alternative implemented | the goal is met another way |
 | Pending | not done |
 
-Tests: 130 Python host tests and 40 Rust tests, all passing.
+Tests: 148 Python host tests and 42 Rust tests, all passing.
 - The Rust binaries were compiled here for btver2 and pass the Jaguar ISA gate.
 - `orbis-gfx-probe` (C, `--membench` reworked in r3) was compiled here with `-Wall -Wextra`
   (no warnings) against the Vulkan headers, and passes the ISA gate. It was **not run on a GPU**:
   this host has no Vulkan driver.
-- The kernel series (18 patches) applies in order on the pinned base. No kernel code was compiled
+- The kernel series (19 patches) applies in order on the pinned base. No kernel code was compiled
   here.
 
 ---
@@ -116,6 +116,20 @@ Full table with evidence: `UNIFIED-MEMORY-ARCHITECTURE.md`.
 | GE-A08 results | one result vocabulary and exit codes shared by the probe, JSON and `orbis-mem bench`; NOT_RUN distinct | Implemented, Host-tested |
 | GE-A09 GTT region | `orbis_gtt_cgroup` status with reason; surfaced in orbis-mem, doctor and admission | Source-checked (kernel); Host-tested (userspace) |
 
+## D5 r3.1 audit corrections
+
+| Finding | Resolution | Status |
+|---|---|---|
+| P0 false-success image verification | provenance+checksum reuse; failing step outputs; fail-closed `release-status` gate for kernel, loader, pack, image, requested stage-0; FAILED receipts; no Done | **Confirmed defect corrected**; Host-tested (real `orbis-ge` on a tree copy, 7 scenarios) |
+| P1 zero-copy synchronization | host-visible required; alias verified or INCOMPATIBLE; fill after import | **Confirmed defect corrected**; compiled here; **requires console qualification** |
+| P1 eviction correctness | reviewed: reservation, fences, VM invalidation, eviction lists, revalidation, interruptions, cursor, concurrency, lifetime | **Reviewed, no defect found**; remains **awaiting kernel compilation** and qualification |
+| P1 dynamic GTT budget | ge-0017: separate atomic budget, constant capacity, reporting, device-state guards | **Confirmed defect corrected**; **awaiting kernel compilation** |
+| P1 teardown order | ge-0017 | **Confirmed defect corrected** (lifetime hygiene); awaiting kernel compilation |
+| P1 admission protocol | fd-based reads, start-time binding, private replies, safe temporaries, scope ownership/membership, failure states | **Confirmed defects corrected**; Host-tested; **requires console qualification** (systemd user scopes) |
+| P2 base-image target identity | `build/target_identity.py`, exit 8, receipt evidence, recorded override | Corrected; Host-tested |
+| P2 release-manifest lifecycle | run id, `current_run` vs `history` | Corrected; Host-tested |
+| P2 fingerprint precision | `build/fingerprint.py`, exact package cache keys, `orbis-graphics-docs` | Corrected (+ stale-cache defect GE-B40); Host-tested |
+
 ## D5 Porting Kit
 
 | Item | Status |
@@ -153,4 +167,5 @@ Orbis v0.2.0, Graphics Pack v1.0.0, `orbis-pre-gaming-rtc-nobara-20261026`,
 `orbis-pre-rust-20261026`, `orbis-ckpt-catalog-20261026`, `orbis-ckpt-native-memory-20261026`,
 `orbis-pre-architecture-20261026` (state as delivered in 2.0.0),
 `orbis-ckpt-architecture-r2-20261027` (2.0.0-r2), `orbis-pre-r3-20261027` (r2 before this work),
-and `orbis-ckpt-r3-porting-kit-20261027` (this release).
+and `orbis-ckpt-r3-porting-kit-20261027` (2.0.0-r3), `orbis-pre-r3.1-audit-fixes-20261027` (r3 before
+the r3.1 corrections) and `orbis-ckpt-ge-r3.1-audit-corrected-20261027` (this release).

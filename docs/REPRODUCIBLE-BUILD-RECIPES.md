@@ -44,13 +44,19 @@ Each receipt records the image ids, so two builds can be compared input by input
   - research kernels never.
   An artifact is selected only when its provenance matches the current inputs and its file still
   has the recorded checksum.
-- `out/targets/<id>/ORBIS-GE-RELEASE-RECEIPT.json` (schema 3) is the per-target receipt. It holds:
+- `out/targets/<id>/ORBIS-GE-RELEASE-RECEIPT.json` (schema 4 since r3.1) is the per-target receipt. Its
+  `result` is COMPLETE only when the fail-closed gate verified every required and requested
+  artifact; otherwise FAILED, with the failures and no released image. It holds:
   - the target as resolved from the registry, and how it was chosen;
   - the selected artifacts, and those left out with the reason;
   - all input hashes;
   - the image and stage-0 hashes with their provenance;
   - the rollback steps.
-- `out/RELEASE-MANIFEST.json` lists every target of the run with its receipt and image hashes.
+- `out/RELEASE-MANIFEST.json` (schema 2): `current_run` lists only the targets of this run id, with
+  their receipts and image hashes; earlier runs move to `history`.
+- `build/fingerprint.py list <step>` prints exactly which files a step's fingerprint covers.
+- `out/targets/<id>/base-target-check.json`: the base image's 0.2.0 profile and the decision
+  (match, compatible, override, or the reason it was rejected).
 
 ## Guarantees checked by the build
 

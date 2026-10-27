@@ -230,6 +230,60 @@ Nobara compilation.
 - The exit codes are identical in the probe and in `orbis-mem bench`: 0 / 1 / 4 / 4 / 5 / 5 / 3 /
   3 / 2. A probe whose exit code contradicts its own JSON is reported as FAIL.
 
+## 2c. r3.1 corrections (independent audit of r3)
+
+Kernel (ge-0017; Source-checked, Awaiting Nobara compilation):
+- **Runtime budget as its own value.** r2/r3 wrote `ttm_resource_manager.size` at runtime.
+  TTM documents that field as constant, and amdgpu also reads it in `amdgpu_bo_validate_size()`,
+  the info ioctl and sysfs. The budget is now `amdgpu_gtt_mgr.orbis_budget` (atomic64):
+  - written only under `orbis_budget_lock`;
+  - read without locks by `amdgpu_gtt_mgr_new()` through `amdgpu_gtt_mgr_limit()`.
+- **Capacity.** On PS4, `manager.size` is the constant capacity: max(boot GTT size, TTM page
+  limit at init), the same capacity the `gtt` dmem region is registered with. The budget starts
+  at the boot GTT size, so default behaviour is unchanged. Writes are bounded by the smaller of the
+  capacity and the current TTM page limit; `orbis-mem` clamps to the capacity before writing.
+- **Reporting.** The info ioctl (`gtt.total_heap_size`) and `mem_info_gtt_total` report the
+  effective budget, as before, so Mesa still sees dynamic GTT sizing.
+- **Device state.** Budget and reclaim stores run inside `drm_dev_enter()` and refuse during a GPU
+  reset or suspend.
+- **Teardown.** The budget mutex is now destroyed last, on every path. It used to be destroyed
+  before `ttm_resource_manager_evict_all()` and skipped when eviction failed. The sysfs files go
+  first (`cik_common_hw_fini`; removal waits for running stores), then the shrinker (start of
+  `amdgpu_ttm_fini`), then the manager.
+
+Eviction path, reviewed with **no defect found**. `amdgpu_ttm_orbis_evict_to_system()` and its two
+callers were checked as follows:
+- the reservation is held, from the trylock LRU cursor, which also holds a reference;
+- the fences are waited (`ttm_bo_wait_ctx` in the TT→SYSTEM move before the GART unbind;
+  `no_wait_gpu` turns a busy buffer into a skip);
+- the VM is invalidated (move_notify, then `amdgpu_vm_bo_invalidate(bo, true)`, so always-valid
+  buffers go to `vm->evicted` under the shared VM reservation);
+- page-table BOs are excluded through `eviction_valuable`;
+- revalidation and repopulation happen on the next CS or CPU fault;
+- interrupts and allocation failures leave the old placement;
+- concurrent trim and reclaim cannot touch the same buffer: trylock, plus the budget mutex
+  between trims.
+
+One upstream-equivalent risk remains: the shrinker validates to SYSTEM in reclaim context, as
+`ttm_bo_shrink(.allow_move=true)` does upstream. That is why reclaim stays off by default.
+
+Zero-copy probe (compiled here, Awaiting PS4 qualification):
+- **Non-host-visible imports** are never touched (VK_EXT_external_memory_host forbids access) and
+  report INCOMPATIBLE_MEMORY_TYPE.
+- **Coherent imports** are used directly.
+- **Non-coherent imports** are flushed or invalidated through a mapping that is either the
+  original pointer or a verified x86-64 alias of the same pages. Anything else is INCOMPATIBLE.
+- The initial fill now happens after the import and is flushed, so stale dirty lines cannot
+  overwrite GPU results (a false FAIL).
+- Results and exit codes are unchanged.
+
+Admission (Host-tested):
+- requests are opened without following links and decided on the open file;
+- the PID is bound to the process start time, before and after the limits are written;
+- only an `orbis-game` scope of the user's own systemd manager, owned by that user, is limited;
+- replies are 0600 and owned by the requester, in a 0711 root directory;
+- `NOT_IN_SCOPE`, `REQUEST_FAILED` and `SCOPE_FAILED` are reported instead of silent states.
+
 ### Per-target assessment
 
 See `HARDWARE-SUPPORT-MATRIX.md` for the full table.

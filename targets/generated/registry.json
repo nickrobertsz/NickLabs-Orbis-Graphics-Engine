@@ -84,7 +84,7 @@
      "implemented_by": [
       "ge-0014 shrinker/trim",
       "ge-0015 GTT dmem region",
-      "ge-0016 corrections",
+      "ge-0016/0017 corrections",
       "stable-6.15/0001-0002 TTM fixes",
       "orbis-memd",
       "orbis-run admission"
@@ -320,7 +320,7 @@
      "implemented_by": [
       "ge-0014 shrinker/trim",
       "ge-0015 GTT dmem region",
-      "ge-0016 corrections",
+      "ge-0016/0017 corrections",
       "stable-6.15/0001-0002 TTM fixes",
       "orbis-memd",
       "orbis-run admission"
@@ -556,7 +556,7 @@
      "implemented_by": [
       "ge-0014 shrinker/trim",
       "ge-0015 GTT dmem region",
-      "ge-0016 corrections",
+      "ge-0016/0017 corrections",
       "stable-6.15/0001-0002 TTM fixes",
       "orbis-memd",
       "orbis-run admission"
@@ -792,7 +792,7 @@
      "implemented_by": [
       "ge-0014 shrinker/trim",
       "ge-0015 GTT dmem region",
-      "ge-0016 corrections",
+      "ge-0016/0017 corrections",
       "stable-6.15/0001-0002 TTM fixes",
       "orbis-memd",
       "orbis-run admission"
@@ -1023,7 +1023,7 @@
      "implemented_by": [
       "ge-0014 shrinker/trim",
       "ge-0015 GTT dmem region",
-      "ge-0016 corrections",
+      "ge-0016/0017 corrections",
       "stable-6.15/0001-0002 TTM fixes",
       "orbis-memd",
       "orbis-run admission"
@@ -1100,7 +1100,7 @@
      "aeolia-belize-6.15": "the only GE kernel flavor that exists"
     },
     "reason": "Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
-    "series": "kernel/patches/series (stable-6.15/0001-0002, ge-6.15/0001-0016)",
+    "series": "kernel/patches/series (stable-6.15/0001-0002, ge-6.15/0001-0017)",
     "state": "unsupported"
    },
    "kind": "model",
@@ -1280,7 +1280,7 @@
      "implemented_by": [
       "ge-0014 shrinker/trim",
       "ge-0015 GTT dmem region",
-      "ge-0016 corrections",
+      "ge-0016/0017 corrections",
       "stable-6.15/0001-0002 TTM fixes",
       "orbis-memd",
       "orbis-run admission"
@@ -1514,7 +1514,7 @@
      "implemented_by": [
       "ge-0014 shrinker/trim",
       "ge-0015 GTT dmem region",
-      "ge-0016 corrections",
+      "ge-0016/0017 corrections",
       "stable-6.15/0001-0002 TTM fixes",
       "orbis-memd",
       "orbis-run admission"
@@ -1591,7 +1591,7 @@
      "aeolia-belize-6.15": "the only GE kernel flavor that exists"
     },
     "reason": "Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
-    "series": "kernel/patches/series (stable-6.15/0001-0002, ge-6.15/0001-0016)",
+    "series": "kernel/patches/series (stable-6.15/0001-0002, ge-6.15/0001-0017)",
     "state": "unsupported"
    },
    "kind": "model",
@@ -1772,7 +1772,7 @@
      "implemented_by": [
       "ge-0014 shrinker/trim",
       "ge-0015 GTT dmem region",
-      "ge-0016 corrections",
+      "ge-0016/0017 corrections",
       "stable-6.15/0001-0002 TTM fixes",
       "orbis-memd",
       "orbis-run admission"
@@ -1996,7 +1996,7 @@
      "implemented_by": [
       "ge-0014 shrinker/trim",
       "ge-0015 GTT dmem region",
-      "ge-0016 corrections",
+      "ge-0016/0017 corrections",
       "stable-6.15/0001-0002 TTM fixes",
       "orbis-memd",
       "orbis-run admission"
@@ -2073,7 +2073,7 @@
      "aeolia-belize-6.15": "the only GE kernel flavor that exists"
     },
     "reason": "Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
-    "series": "kernel/patches/series (stable-6.15/0001-0002, ge-6.15/0001-0016)",
+    "series": "kernel/patches/series (stable-6.15/0001-0002, ge-6.15/0001-0017)",
     "state": "unsupported"
    },
    "kind": "model",
@@ -2256,7 +2256,7 @@
      "implemented_by": [
       "ge-0014 shrinker/trim",
       "ge-0015 GTT dmem region",
-      "ge-0016 corrections",
+      "ge-0016/0017 corrections",
       "stable-6.15/0001-0002 TTM fixes",
       "orbis-memd",
       "orbis-run admission"
@@ -2484,7 +2484,7 @@
      "implemented_by": [
       "ge-0014 shrinker/trim",
       "ge-0015 GTT dmem region",
-      "ge-0016 corrections",
+      "ge-0016/0017 corrections",
       "stable-6.15/0001-0002 TTM fixes",
       "orbis-memd",
       "orbis-run admission"
@@ -2717,7 +2717,7 @@
      "implemented_by": [
       "ge-0014 shrinker/trim",
       "ge-0015 GTT dmem region",
-      "ge-0016 corrections",
+      "ge-0016/0017 corrections",
       "stable-6.15/0001-0002 TTM fixes",
       "orbis-memd",
       "orbis-run admission"
@@ -2794,7 +2794,7 @@
      "aeolia-belize-6.15": "the only GE kernel flavor that exists"
     },
     "reason": "Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
-    "series": "kernel/patches/series (stable-6.15/0001-0002, ge-6.15/0001-0016)",
+    "series": "kernel/patches/series (stable-6.15/0001-0002, ge-6.15/0001-0017)",
     "state": "unsupported"
    },
    "kind": "model",
@@ -2976,7 +2976,7 @@
      "implemented_by": [
       "ge-0014 shrinker/trim",
       "ge-0015 GTT dmem region",
-      "ge-0016 corrections",
+      "ge-0016/0017 corrections",
       "stable-6.15/0001-0002 TTM fixes",
       "orbis-memd",
       "orbis-run admission"
@@ -3203,7 +3203,7 @@
      "implemented_by": [
       "ge-0014 shrinker/trim",
       "ge-0015 GTT dmem region",
-      "ge-0016 corrections",
+      "ge-0016/0017 corrections",
       "stable-6.15/0001-0002 TTM fixes",
       "orbis-memd",
       "orbis-run admission"
@@ -3280,7 +3280,7 @@
      "aeolia-belize-6.15": "the only GE kernel flavor that exists"
     },
     "reason": "Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
-    "series": "kernel/patches/series (stable-6.15/0001-0002, ge-6.15/0001-0016)",
+    "series": "kernel/patches/series (stable-6.15/0001-0002, ge-6.15/0001-0017)",
     "state": "unsupported"
    },
    "kind": "model",
@@ -3464,7 +3464,7 @@
      "implemented_by": [
       "ge-0014 shrinker/trim",
       "ge-0015 GTT dmem region",
-      "ge-0016 corrections",
+      "ge-0016/0017 corrections",
       "stable-6.15/0001-0002 TTM fixes",
       "orbis-memd",
       "orbis-run admission"

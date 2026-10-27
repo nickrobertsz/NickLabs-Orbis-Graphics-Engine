@@ -1,4 +1,4 @@
-# NickLabs Orbis Graphics Engine 2.0.0-r3 on Nobara: exact commands
+# NickLabs Orbis Graphics Engine 2.0.0-r3.1 on Nobara: exact commands
 
 Everything below runs on the Nobara machine, except section 3 onward, which runs on the console.
 Nothing touches:
@@ -22,8 +22,8 @@ sudo dnf install -y podman git zstd python3               # once
 ```sh
 mkdir -p ~/orbis-release && cd ~/orbis-release          # put the delivered files here
 sha256sum -c SHA256SUMS                                   # every delivered file must say OK
-git clone -b engine-2.0 nicklabs-orbis-graphics-engine-2.0.0-r3.bundle nicklabs-orbis-graphics-engine
-#   (or: tar -xzf NICKLABS-ORBIS-GRAPHICS-ENGINE-SOURCE-2.0.0-r3.tar.gz && mv nicklabs-orbis-graphics-engine-2.0.0-r3 nicklabs-orbis-graphics-engine)
+git clone -b engine-2.0 nicklabs-orbis-graphics-engine-2.0.0-r3.1.bundle nicklabs-orbis-graphics-engine
+#   (or: tar -xzf NICKLABS-ORBIS-GRAPHICS-ENGINE-SOURCE-2.0.0-r3.1.tar.gz && mv nicklabs-orbis-graphics-engine-2.0.0-r3.1 nicklabs-orbis-graphics-engine)
 cd nicklabs-orbis-graphics-engine
 ./orbis-ge check        # Python tests, target registry check, Rust tests when cargo is installed (a failure stops here)
 ./orbis-ge target list  # the board-support registry; cuh-1215a is the reference target
@@ -36,30 +36,42 @@ cd nicklabs-orbis-graphics-engine
 ```
 
 How the steps run:
-* A step is skipped only when its output exists **and** its input fingerprint is unchanged. The
-  fingerprint covers: sources, patches, config fragments, locks, the 0.2.0 checkout, the build
-  containers, the options and the target. `--rebuild` forces a step.
+* A step is skipped only when its output exists, its provenance records the current input
+  fingerprint **and** the file still has the recorded SHA-256 (r3.1). The fingerprint covers the
+  files the step is built from (`build/fingerprint.py list <step>`): sources, the patches in the
+  series, config fragments, locks, the 0.2.0 checkout, the build containers, the options and the
+  target. Research, tests and documentation never invalidate the kernel or a compiled package.
+  `--rebuild` forces a step.
 * Inside the pack step every package has its own cache (`out/pkgcache/`), so changing a document
   does not rebuild Mesa.
 * Every step writes `out/logs/<step>.log`; the pack's per-package logs are in `out/pack/logs/`. A
   failing step stops the run with its exit code.
 * Every output gets a `<file>.provenance.json`. The pack takes only the artifacts selected for this
   run (`out/artifact-selection.json`).
+* Fail-closed: `verify` re-checks the kernel, loader, pack, image and (when requested) stage-0
+  image against their provenance. Any failure gives exit **7**, a receipt with `"result":
+  "FAILED"`, no `SHA256SUMS` and no `Done.`. A stage-0 image you did not ask for is recorded as
+  omitted, not failed.
+* The base image must be an Orbis 0.2.0 image for the target: its profile (from
+  `orbis-boot.json` inside the image) must serve that target, or the image step stops with exit
+  **8** (`out/targets/<id>/base-target-check.json` says why). Only for a deliberate exception:
+  `--base-profile-override <profile>`, which the receipt records as an operator decision.
 * `./orbis-ge status --target cuh-1215a` shows which outputs are current and which are stale.
 
 | Step | Command alone | Output | Time |
 |---|---|---|---|
-| kernel | `./orbis-ge kernel --orbis-src $ORBIS` | `out/kernel-ge/` (6.15.4-orbis-ps4-ge: 2 stable TTM backports + 16 GE patches, Rust-for-Linux, sched_ext/BTF, RTC, CachyOS subset) | 20-60 min |
+| kernel | `./orbis-ge kernel --orbis-src $ORBIS` | `out/kernel-ge/` (6.15.4-orbis-ps4-ge: 2 stable TTM backports + 17 GE patches, Rust-for-Linux, sched_ext/BTF, RTC, CachyOS subset) | 20-60 min |
 | loader | `./orbis-ge loader` | `out/loader-ge/` (payloads with the memory contract and time handoff) | 1 min |
 | pack | `./orbis-ge pack --orbis-src $ORBIS` | `out/release/ORBIS-GRAPHICS-ENGINE-v2.0.0.tar.zst` | 1-3 h |
 | image | `./orbis-ge image --target cuh-1215a --base-image $BASE` | `out/targets/cuh-1215a/images/orbis-0.2.0+ge-2.0.0-cuh-1215a.img` (a copy; the base is unchanged) | 5-10 min |
 | stage0 | `./orbis-ge stage0 --target cuh-1215a --base-stage0-image $BASE0` | `out/targets/cuh-1215a/images/orbis-0.2.0-stage0+ge-2.0.0-cuh-1215a.img` | 2 min |
-| verify | `./orbis-ge verify --target cuh-1215a --base-image $BASE` | `out/targets/cuh-1215a/images/SHA256SUMS`, `out/targets/cuh-1215a/ORBIS-GE-RELEASE-RECEIPT.json`, `out/RELEASE-MANIFEST.json` | 1 min |
+| verify | `./orbis-ge verify --orbis-src $ORBIS --target cuh-1215a --base-image $BASE` | `out/targets/cuh-1215a/images/SHA256SUMS`, `out/targets/cuh-1215a/ORBIS-GE-RELEASE-RECEIPT.json`, `out/RELEASE-MANIFEST.json` (`current_run` = this run only) | 1 min |
 
 The pack contains:
 - Mesa 26.2.5-201 (+lib32);
-- orbis-graphics;
-- orbis-graphics-engine (now with the target registry and `orbis-hw identify`);
+- orbis-graphics and orbis-graphics-docs (r3.1: documentation is its own package, so a document
+  change never recompiles the tools);
+- orbis-graphics-engine (with the target registry and `orbis-hw identify`);
 - **orbis-native**: Rust, btver2 + LTO, ISA-gated;
 - **orbis-gaming**;
 - the GE kernel package.
@@ -84,6 +96,13 @@ If a step fails:
 - **exit 5 (pack refuses):** an artifact is stale or missing. The selection output above it names
   which one.
 - **exit 9:** the 0.2.0 checkout changed during the build. Send `out/logs/` to NickLabs.
+- **exit 7:** an output did not verify (missing, modified, or its provenance does not match). The
+  lines starting `FAILED` name it; `./orbis-ge status --orbis-src $ORBIS --target cuh-1215a`
+  shows every artifact, and running the step again rebuilds what is not reusable.
+- **exit 8:** the base image is not a 0.2.0 image for the target (see
+  `out/targets/<id>/base-target-check.json`).
+- **Kernel compile errors:** `out/logs/kernel.log` (and `out/kernel-ge-work/` for the tree). Send
+  that log to NickLabs; nothing of the kernel has been compiled outside the Nobara.
 
 ## 3. First boot on the CUH-1215A
 
@@ -122,7 +141,8 @@ Per-game memory limits live in the game profile:
 - `memory.require_limits: true` makes them mandatory.
 
 `orbis-run` applies these limits to the game's own scope before the game starts. When required
-limits cannot be applied, the game is not started (exit 75), and `orbis-games last` shows why.
+limits cannot be applied, the game is not started (exit 75), and `orbis-games last` shows why
+(`NO_REPLY`, `REJECTED`, `INCOMPLETE`, `NOT_IN_SCOPE`, `REQUEST_FAILED` or `SCOPE_FAILED`).
 
 Steam itself needs the internet once; see `GAMING.md` §6 and `orbis-games network`. The PS4 stays
 LAN-only. External gaming access waits for Nick's decision.

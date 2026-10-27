@@ -16,11 +16,12 @@ Fat, Slim and Pro family; see `docs/HARDWARE-SUPPORT-MATRIX.md`. It contains:
 Orbis 0.2.0 and the Graphics Pack 1.0.0 are not changed. The release installs into a *copy* of a
 0.2.0 image, and everything it changes can be rolled back.
 
-**Status (2.0.0-r3): source complete for the current scope, not yet built on Nobara, nothing run
-on a PS4. No target is verified; Baikal boards are unsupported (no 6.15 Baikal kernel).**
-* The kernel series (2 stable backports, including CVE-2026-52949, plus 16 GE patches) is proven
+**Status (2.0.0-r3.1): source complete for the current scope, not yet built on Nobara, nothing run
+on a PS4. No target is verified; the production target is the CUH-1215A; Baikal boards are
+unsupported (no 6.15 Baikal kernel).**
+* The kernel series (2 stable backports, including CVE-2026-52949, plus 17 GE patches) is proven
   to apply but not compiled. Kernel compilation was refused in the authoring environment.
-* Python and Rust userspace is tested on a host with fixtures: 130 + 40 tests.
+* Python and Rust userspace is tested on a host with fixtures: 148 + 42 tests.
 * The Rust binaries and orbis-gfx-probe were built here for btver2 and passed the Jaguar ISA gate.
 
 See `docs/DEVELOPMENT-CATALOG.md` for every item's state and evidence.
@@ -29,13 +30,13 @@ See `docs/DEVELOPMENT-CATALOG.md` for every item's state and evidence.
 
 | Area | Where | What |
 |---|---|---|
-| Kernel | `kernel/` | 0.2.0 kernel + 2 stable TTM backports (CVE-2026-52949) + 16 patches: ge-0016 reclaim corrections, fan/thermal, SCLK restore, GDDR5, HDMI audio, bridge, cpufreq, telemetry + runtime GTT budget, SMU, loader wall clock, Aeolia RTC, CachyOS subset, Jaguar build, GPU-buffer shrinker + active GTT trim (ge-0014), GTT dmem cgroup region (ge-0015). Plus perf/GE config fragments, Rust-for-Linux, optional BORE kernel, and a research-only UVD kernel |
+| Kernel | `kernel/` | 0.2.0 kernel + 2 stable TTM backports (CVE-2026-52949) + 17 patches: ge-0017 GTT runtime budget, ge-0016 reclaim corrections, fan/thermal, SCLK restore, GDDR5, HDMI audio, bridge, cpufreq, telemetry + runtime GTT budget, SMU, loader wall clock, Aeolia RTC, CachyOS subset, Jaguar build, GPU-buffer shrinker + active GTT trim (ge-0014), GTT dmem cgroup region (ge-0015). Plus perf/GE config fragments, Rust-for-Linux, optional BORE kernel, and a research-only UVD kernel |
 | Loader | `loader/` | exact VRAM MTRR split, `vram.txt`/`gtt.txt`, boot identity, time handoff |
 | Mesa | `mesa/` | 26.2.5-201 (+lib32), PS4 patches |
 | Engine (Python) | `diag/` | memory policy (orbis-memd), hardware API, Black Box + orbis-debug, video, AI tuning, qualify, stage-0 |
 | Native (Rust) | `rust/`, `packages/orbis-native` | `orbis-perf` (one performance controller, sched_ext, game sessions, doctor), `orbis-time` (RTC/loader/last-good/LAN NTP), `orbis-games` + `orbis-run` (Vulkan capabilities → DXVK/VKD3D, runners, launcher, diagnosis) |
 | Gaming | `packages/orbis-gaming`, `gaming/` | Lutris, Gamescope, MangoHud, scx-scheds; pinned GE-Proton/DXVK/VKD3D catalog + lock |
-| Integration | `build/`, `integrator/`, `./orbis-ge` | pack build, image integration, stage-0, rollback, provenance, artifact selection, receipts per target |
+| Integration | `build/`, `integrator/`, `./orbis-ge` | pack build, image integration, stage-0, rollback, provenance, fail-closed release gate, base-image target identity, receipts per target |
 | Porting Kit | `targets/`, `diag/orbis_targets/` | board-support registry, safe probe, deterministic matching, qualification records, PortForge |
 
 ## Commands (on Nobara)
@@ -55,7 +56,7 @@ Step by step, including first boot and rollback: `docs/GRAPHICS-ENGINE-NOBARA.md
 - `docs/GRAPHICS-ENGINE-NOBARA.md`: exact Nobara and console commands
 - `docs/UNIFIED-MEMORY-ARCHITECTURE.md`, `docs/GRAPHICS-ENGINE-MEMORY.md`: shared GDDR5
 - `docs/PERFORMANCE.md`, `docs/GAMING.md`, `docs/TIME.md`, `docs/RUST.md`
-- `docs/GRAPHICS-ENGINE-BUG-LEDGER.md`: findings GE-B01…B32
+- `docs/GRAPHICS-ENGINE-BUG-LEDGER.md`: findings GE-B01…B40
 - `docs/HARDWARE-SUPPORT-MATRIX.md`, `docs/TARGET-PORTING-GUIDE.md`, `docs/PORTFORGE-ARCHITECTURE.md`,
   `docs/REPRODUCIBLE-BUILD-RECIPES.md`: Porting Kit and reproducible builds
 - Graphics Pack 1.0.0 documents (`GRAPHICS-*.md`) are kept for reference

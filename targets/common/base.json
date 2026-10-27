@@ -5,7 +5,7 @@
  "name": "Shared software for every PS4 target",
  "kernel": {
   "base": "feeRnt 6.15.4 crashnt-4.7 @108ef97 + Orbis 0001",
-  "series": "kernel/patches/series (stable-6.15/0001-0002, ge-6.15/0001-0016)",
+  "series": "kernel/patches/series (stable-6.15/0001-0002, ge-6.15/0001-0017)",
   "flavors": {
    "aeolia-belize-6.15": "the only GE kernel flavor that exists"
   }
@@ -91,7 +91,7 @@
    "implemented_by": [
     "ge-0014 shrinker/trim",
     "ge-0015 GTT dmem region",
-    "ge-0016 corrections",
+    "ge-0016/0017 corrections",
     "stable-6.15/0001-0002 TTM fixes",
     "orbis-memd",
     "orbis-run admission"

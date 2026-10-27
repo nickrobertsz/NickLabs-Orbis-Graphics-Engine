@@ -61,9 +61,9 @@
  },
  "kernel_series": {
   "base": "feeRnt 6.15.4 crashnt-4.7 108ef97 + Orbis 0.2.0 0001",
-  "series": "kernel/patches/series (stable-6.15/0001-0002 first, then ge-6.15/0001-0016)",
+  "series": "kernel/patches/series (stable-6.15/0001-0002 first, then ge-6.15/0001-0017)",
   "release": "6.15.4-orbis-ps4-ge-g<commit>",
-  "status": "all 18 patches apply cleanly in order on fa3154abb (checked in a clean worktree, identical tree to the authoring branch); not compiled by NickLabs Orbis",
+  "status": "all 19 patches apply cleanly in order on fa3154abb (checked in a clean worktree, identical tree to the authoring branch orbis-ge-6.15-r3.1); not compiled by NickLabs Orbis",
   "stable_backports": [
    {
     "patch": "stable-6.15/0001",
