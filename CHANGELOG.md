@@ -1,5 +1,55 @@
 # Changelog
 
+## 2.0.0-r3 (source revision, 2026-10-27): audit corrections + Universal PS4 Hardware Porting Kit
+
+Kernel (Source-checked: the full series of 18 patches applies in order; Awaiting Nobara compilation):
+- **stable-6.15/0001-0002**: TTM LRU-walk fixes, including **CVE-2026-52949** (`ttm_bo_shrink()`
+  infinite walk on backup failure). They now come first in the series.
+- **ge-0016** PS4 GTT reclaim corrections:
+  - buffers moved out of GTT are evicted *as evictions* (per-VM buffers are revalidated);
+  - honest active trim with an account and -EBUSY;
+  - requested vs effective budget;
+  - `orbis_gtt_cgroup` status.
+  GPU reclaim stays off by default.
+
+Userspace:
+- orbis-run / orbis-perf: **pre-launch admission**. Per-game VRAM/GTT limits are in force before
+  the game starts. Required limits refuse the launch (exit 75). The dmem controller is now enabled
+  down to the scope.
+- orbis-mem:
+  - `set-budget` reports applied vs enforced (exit 3);
+  - `bench` exit codes match the probe;
+  - unique DRM clients with PID sets;
+  - a device-counter consistency check;
+  - GTT region status.
+- orbis-gfx-probe `--membench`: validated host imports, coherent/non-coherent synchronization,
+  cleanup, categorized results.
+- orbis-perf doctor: dmem regions and the GTT unavailability reason.
+
+Porting Kit (new):
+- `targets/` registry with 15 targets: Fat, Slim and Pro; Aeolia, Belize, Belize 2 and Baikal.
+- `orbis-hw probe | identify | compatibility | qualify`.
+- `orbis-debug collect --hardware`.
+- PortForge.
+- `./orbis-ge --target`, `target`, `port`, and multi-target runs with per-target receipts.
+
+Build system:
+- the 0.2.0 checkout is guarded and never written to (private copies for make and gpg);
+- provenance next to every output;
+- explicit artifact selection: no stale BORE kernel or stage-0 image;
+- receipt schema 3 and `out/RELEASE-MANIFEST.json`.
+
+Output paths changed:
+- images: `out/targets/<id>/images/`;
+- receipts: `out/targets/<id>/ORBIS-GE-RELEASE-RECEIPT.json`.
+
+Docs:
+- new: HARDWARE-SUPPORT-MATRIX, TARGET-PORTING-GUIDE, PORTFORGE-ARCHITECTURE,
+  REPRODUCIBLE-BUILD-RECIPES;
+- updated: Nobara commands, unified memory §2b, catalog D5, ledger GE-B25…B32.
+
+Unchanged: Orbis 0.2.0, Graphics Pack 1.0.0, the LAN-only network policy.
+
 ## 2.0.0-r2 (source revision, 2026-10-27): only new or changed components
 
 Kernel (all Source-checked, Awaiting Nobara compilation):

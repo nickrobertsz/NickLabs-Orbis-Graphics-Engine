@@ -1,11 +1,12 @@
 # NickLabs Orbis — development catalog
 
-Updated 2026-10-27, for source release 2.0.0-r2. The catalog tracks four directives:
+Updated 2026-10-27, for source release 2.0.0-r3. The catalog tracks five directives:
 
 * **D1** Graphics Engine 2.0
 * **D2** Gaming, RTC and Nobara/CachyOS performance
 * **D3** Rust
 * **D4** Complete unified-memory architecture (mandatory)
+* **D5** r3 audit corrections (GE-A01…A10) and the Universal PS4 Hardware Porting Kit
 
 The complete-architecture directive (2026-10-26) splits the work in two:
 * this environment authors and integrates the source and does only cheap checks;
@@ -28,9 +29,13 @@ with evidence.
 | Alternative implemented | the goal is met another way |
 | Pending | not done |
 
-Tests: 94 Python host tests and 33 Rust tests, all passing. The Rust binaries were compiled here
-for btver2 and pass the Jaguar ISA gate. `orbis-gfx-probe` (C, with the new `--membench`) was
-compiled here against the Vulkan headers. No kernel code was compiled here.
+Tests: 130 Python host tests and 40 Rust tests, all passing.
+- The Rust binaries were compiled here for btver2 and pass the Jaguar ISA gate.
+- `orbis-gfx-probe` (C, `--membench` reworked in r3) was compiled here with `-Wall -Wextra`
+  (no warnings) against the Vulkan headers, and passes the ISA gate. It was **not run on a GPU**:
+  this host has no Vulkan driver.
+- The kernel series (18 patches) applies in order on the pinned base. No kernel code was compiled
+  here.
 
 ---
 
@@ -82,9 +87,9 @@ Full table with evidence: `UNIFIED-MEMORY-ARCHITECTURE.md`.
 |---|---|
 | U1–U5, U10–U14, U16, U17 upstream mechanisms | Integrated |
 | U3 runtime GTT budget | Implemented, Integrated; kernel Awaiting Nobara compilation |
-| **U25 amdgpu TTM shrinker** (ge-0014) | Implemented, Integrated (orbis-mem reclaim, orbis-memd), Source-checked; Awaiting Nobara compilation and PS4 qualification |
-| **U26 active GTT trim** (ge-0014) | Implemented, Integrated; Awaiting Nobara compilation |
-| **U9 per-game GTT ceiling** (ge-0015 dmem region `gtt` + `memory.gtt_max_mb`) | Implemented, Integrated, Host-tested (policy); kernel Awaiting Nobara compilation |
+| **U25 amdgpu TTM shrinker** (ge-0014 + ge-0016 eviction fix + CVE-2026-52949 backports) | Implemented, Integrated (orbis-mem reclaim, orbis-memd), Source-checked; off by default; Awaiting Nobara compilation and PS4 qualification |
+| **U26 active GTT trim** (ge-0014, reworked in ge-0016: requested vs effective budget, honest -EBUSY, trim account) | Implemented, Integrated, Source-checked (kernel), Host-tested (orbis-mem); Awaiting Nobara compilation |
+| **U9 per-game GTT ceiling** (ge-0015 dmem region `gtt`, ge-0016 status, `memory.gtt_max_mb`, pre-launch admission) | Implemented, Integrated, Host-tested (admission ordering, refusal, server trust checks); kernel Awaiting Nobara compilation |
 | U8 per-game VRAM protection/ceiling | Implemented, Integrated, Host-tested |
 | U6 zero-copy CPU/GPU sharing: interface | Integrated (kernel + Mesa) |
 | U6 end-to-end verification and contract | Implemented (`orbis-mem bench`, probe `--membench`), compiled here; Awaiting PS4 qualification |
@@ -97,6 +102,31 @@ Full table with evidence: `UNIFIED-MEMORY-ARCHITECTURE.md`.
 | U24 boot memory-layout profiles | Implemented, Integrated, Host-tested |
 | U28 static VRAM swap tier | Rejected with reasoning |
 
+## D5 r3 audit corrections
+
+| Finding | Resolution | Status |
+|---|---|---|
+| GE-A01 CVE-2026-52949 | stable-6.15/0001-0002 backports first in the series. ge-0016: shrink evicts as an eviction (VM revalidation), then `ttm_bo_shrink(.allow_move=false)`. Reclaim off by default | Source-checked (apply + checkpatch); Awaiting Nobara compilation |
+| GE-A02 active trim | ge-0016: trylock LRU cursor, skip/count failures, cap, signals; requested vs effective budget; -EBUSY when not enforced; orbis-mem `enforced`/exit 3 | Source-checked (kernel); Host-tested (userspace) |
+| GE-A03 pre-launch admission | orbis-run stage 2 inside a fresh scope; orbis-perf admission server (owner, scope and exclusivity checks, dmem enabled down the path, read-back); exec only after verification; exit 75 for required limits; retroactive path only on exclusive cgroups | Implemented, Integrated, Host-tested (ordering test: the game starts only after the limit is in force) |
+| GE-A04/A10 probe | memory requirements, alignment, type bits, external-buffer capability, coherent preference, flush/invalidate, cleanup on every path | Implemented; compiled here; Awaiting PS4 qualification |
+| GE-A05 0.2.0 immutability | private copy for `make container`, private key workspace, before/after guard (exit 9) | Implemented, Host-tested |
+| GE-A06 stale artifacts | provenance per output, explicit selection (BORE only with --bore, research never), images checked against provenance, receipt v3, release manifest | Implemented, Host-tested |
+| GE-A07 accounting | (drm-pdev, client id) with PID sets; device-counter check; RSS kept apart | Implemented, Host-tested |
+| GE-A08 results | one result vocabulary and exit codes shared by the probe, JSON and `orbis-mem bench`; NOT_RUN distinct | Implemented, Host-tested |
+| GE-A09 GTT region | `orbis_gtt_cgroup` status with reason; surfaced in orbis-mem, doctor and admission | Source-checked (kernel); Host-tested (userspace) |
+
+## D5 Porting Kit
+
+| Item | Status |
+|---|---|
+| Target registry: 15 targets (Fat/Slim/Pro; Aeolia, Belize, Belize 2, Baikal); schema; generated view; three-state capabilities | Implemented, Host-tested. **No target verified.** Baikal unsupported (no 6.15 flavor) |
+| `orbis-hw probe` (read-only, redacting) / `identify` (confirmed, probable, conflicting, unknown) / `compatibility` / `qualify` (record + proposed registry patch, never applied) | Implemented, Integrated (orbis-graphics-engine package), Host-tested |
+| `orbis-debug collect --hardware`, recovery assets per target | Implemented |
+| PortForge (new, candidate, diff-trees, assist, check, review, report, promote) with provenance and review gates | Implemented, Host-tested (scenarios: 1215A, Belize Slim, Baikal Slim, unknown, conflicting, missing patch, stale artifact) |
+| `./orbis-ge --target`, multi-target runs, per-target images and receipts, shared kernel/Mesa/userspace | Implemented; Awaiting Nobara run |
+| CUH-2215B Baikal gap analysis (simulated inventory, real community diff) | Done: unreviewed candidate + merge notes in `research/portforge/cuh-2215b-nicklabs/` |
+
 ## Build and release system
 
 | Item | Status |
@@ -104,7 +134,7 @@ Full table with evidence: `UNIFIED-MEMORY-ARCHITECTURE.md`.
 | `./orbis-ge all`: check → kernel → loader → pack → image → stage-0 (optional) → verify | Implemented, Source-checked; runs on Nobara |
 | Dependency-aware fingerprints per step and per package (`out/.fp`, `out/pkgcache`) | Implemented (cache logic Host-tested with a fake builder) |
 | Logs per step, failures keep their exit code, no masked tests | Implemented |
-| Build receipt v2: source commit/dirty, fingerprints, patch hashes, configs, locks, toolchain containers, package list, outputs, rollback | Implemented; Awaiting Nobara run |
+| Build receipt v3 per target + `out/RELEASE-MANIFEST.json`; provenance per output; explicit artifact selection; 0.2.0 checkout guard | Implemented, Host-tested (selection, guard); Awaiting Nobara run |
 | Rollback: original images untouched, rollback-root, kernel rollback, `orbis-perf restore` | Integrated |
 
 ## Next actions
@@ -112,7 +142,8 @@ Full table with evidence: `UNIFIED-MEMORY-ARCHITECTURE.md`.
 | Owner | Action |
 |---|---|
 | Nobara | `./orbis-ge all …`, then send `out/logs/*.log` for any failure (kernel compile errors in `out/logs/kernel.log`) |
-| PS4 | `orbis-gpu qualify`, `orbis-perf doctor`, `orbis-mem bench`, `orbis-time rtc-probe` (with `ps4_rtc.hw_probe=1`), the ge-0014 test in `UNIFIED-MEMORY-ARCHITECTURE.md` §2, then `orbis-debug collect` |
+| PS4 | `orbis-hw identify`, `orbis-gpu qualify`, `orbis-mem bench`, `orbis-hw qualify --target cuh-1215a`, `orbis-perf doctor`, `orbis-time rtc-probe` (with `ps4_rtc.hw_probe=1`), the ge-0014 test in `UNIFIED-MEMORY-ARCHITECTURE.md` §2, then `orbis-debug collect --hardware` |
+| CUH-2215B | `orbis-hw probe --json` (or `lspci -nn` under the 5.4.247 Baikal kernel) to replace the simulated inventory; review PortForge candidate c001 |
 | Nick | decision on outbound gaming network access |
 | Jaleco | fix whatever the logs show; then measured defaults (scheduler, heap policy, KSM) from the PS4 numbers |
 
@@ -120,5 +151,6 @@ Full table with evidence: `UNIFIED-MEMORY-ARCHITECTURE.md`.
 
 Orbis v0.2.0, Graphics Pack v1.0.0, `orbis-pre-gaming-rtc-nobara-20261026`,
 `orbis-pre-rust-20261026`, `orbis-ckpt-catalog-20261026`, `orbis-ckpt-native-memory-20261026`,
-`orbis-pre-architecture-20261026` (state as delivered in 2.0.0), and
-`orbis-ckpt-architecture-r2-20261027` (this release).
+`orbis-pre-architecture-20261026` (state as delivered in 2.0.0),
+`orbis-ckpt-architecture-r2-20261027` (2.0.0-r2), `orbis-pre-r3-20261027` (r2 before this work),
+and `orbis-ckpt-r3-porting-kit-20261027` (this release).

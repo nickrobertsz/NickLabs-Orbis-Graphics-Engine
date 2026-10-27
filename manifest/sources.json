@@ -61,9 +61,26 @@
  },
  "kernel_series": {
   "base": "feeRnt 6.15.4 crashnt-4.7 108ef97 + Orbis 0.2.0 0001",
-  "series": "kernel/patches/series",
+  "series": "kernel/patches/series (stable-6.15/0001-0002 first, then ge-6.15/0001-0016)",
   "release": "6.15.4-orbis-ps4-ge-g<commit>",
-  "status": "applies cleanly in order (checked); not compiled by NickLabs Orbis"
+  "status": "all 18 patches apply cleanly in order on fa3154abb (checked in a clean worktree, identical tree to the authoring branch); not compiled by NickLabs Orbis",
+  "stable_backports": [
+   {
+    "patch": "stable-6.15/0001",
+    "subject": "drm/ttm: Fix ttm_bo_swapout() infinite LRU walk on swapout failure",
+    "upstream": "b2ed01e7ad3de80333e9b962a44024b094bc0b2b",
+    "stable_6_18": "060f8f3020516d71bc4d6159d4d0beef85606a74",
+    "source": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git (fetched from the github.com/gregkh/linux mirror by commit id)"
+   },
+   {
+    "patch": "stable-6.15/0002",
+    "subject": "drm/ttm: Fix ttm_bo_shrink() infinite LRU walk on backup failure",
+    "cve": "CVE-2026-52949",
+    "upstream": "1d59f36e95f7f7134db0e313c9d787cb0adb2153",
+    "stable_6_18": "d0ce7b07dafe43d78150f90894027746576d7cb7",
+    "source": "same"
+   }
+  ]
  },
  "community_sources": {
   "linux-psx": {
@@ -101,6 +118,20 @@
    "repo": "https://github.com/orbis-ports/ps4-mesa-docs",
    "commit": "deb190361652acbc3b0ff49fc8edac1820f16842",
    "used": "reference only (native Orbis OS port, not Linux DRM)"
+  },
+  "sony-jaguar-devs-baikal": {
+   "repo": "https://github.com/sony-jaguar-devs/ps4-linux",
+   "branch": "5.4.247-baikal-dfaus",
+   "commit": "7f796666a956bdc40e6178e874907e96dc28ca01",
+   "use": "PortForge reference for the Baikal port (research/portforge/cuh-2215b-nicklabs); nothing from it is in the kernel series"
+  },
+  "psdevwiki-southbridge": {
+   "url": "https://www.psdevwiki.com/ps4/Southbridge",
+   "use": "targets/ southbridge and board data"
+  },
+  "ps4-which-southbridge": {
+   "repo": "https://github.com/tomfitzhenry/ps4-which-southbridge",
+   "use": "hw.sce_subsys_subid values in targets/southbridge"
   }
  }
 }

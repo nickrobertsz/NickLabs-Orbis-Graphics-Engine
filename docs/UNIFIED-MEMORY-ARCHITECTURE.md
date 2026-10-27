@@ -52,7 +52,7 @@ and LLVM's AMDGPU target table.
 | U6 | GPU access to process memory without copies (userptr + HMM mirror, `VK_EXT_external_memory_host`) | upstream | `CONFIG_HMM_MIRROR=y`, `CONFIG_DRM_AMDGPU_USERPTR=y`; RADV exposes the extension when `has_userptr` | Interface Integrated. End-to-end check `orbis-mem bench` / `orbis-gfx-probe --membench` implemented (compiled here against Vulkan headers; Awaiting PS4 qualification). The contract is in §3 |
 | U7 | Vulkan heap presentation | upstream, configurable | RADV APU path: 2/3 device-local + 1/3 host, or one unified heap (driconf) | Integrated per game (`memory.vulkan_heaps`). The default stays RADV's split until U27 numbers exist |
 | U8 | Per-game VRAM protection and ceiling | upstream (dmem) | amdgpu registers region `vram` | Implemented + Integrated (`dmem.low` 75 %, `memory.dmem_max_mb`); Host-tested. `dmem.low` is best-effort protection |
-| U9 | Per-game **GTT** ceiling (enforced, not only monitored) | custom kernel (ge-0015) | 6.15 charges no cgroup for GTT; registering the GTT manager as dmem region `gtt` lets TTM's cgroup-aware eviction enforce `dmem.max` | Implemented: ge-0015 + `memory.gtt_max_mb` in orbis-perf (Host-tested); kernel Awaiting Nobara compilation. Charged to the allocating task, so shared buffers count once |
+| U9 | Per-game **GTT** ceiling (enforced, not only monitored) | custom kernel (ge-0015) | 6.15 charges no cgroup for GTT; registering the GTT manager as dmem region `gtt` lets TTM's cgroup-aware eviction enforce `dmem.max` | Implemented: ge-0015 + ge-0016 status (`orbis_gtt_cgroup`) + `memory.gtt_max_mb`. r3: applied **before launch** by orbis-run admission (Host-tested); kernel Awaiting Nobara compilation. Charged to the allocating task, so shared buffers count once |
 | U10 | PSI memory pressure | upstream | GE kernel `CONFIG_PSI` | Integrated (orbis-memd, orbis-perf) |
 | U11 | MGLRU + working-set protection | upstream + CachyOS | `CONFIG_LRU_GEN`, le9 (ge-0012) | Integrated |
 | U12 | Compaction | upstream | `CONFIG_COMPACTION=y` | Integrated: proactiveness PC 20 / GAMING 0 / AI 40 (Host-tested) |
@@ -69,7 +69,7 @@ and LLVM's AMDGPU target table.
 | U23 | Runtime carve-out resize | hardware + loader | MC FB aperture programmed before Linux; DCE scans out of it; VRAM manager sized once | Hardware-limited at runtime. Alternative implemented: U24 + U3 + U25 |
 | U24 | Boot-time memory-layout profiles | loader (done) | GE loader: any 16 MiB multiple, ≤5 MTRR blocks | Implemented + Integrated (Host-tested) |
 | U25 | **Reclaimable idle GPU buffers (amdgpu TTM shrinker)** | custom kernel (ge-0014) | 6.15 TTM shrink helpers exist; only xe used them | Implemented (§2), Integrated (orbis-mem/orbis-memd); Source-checked; Awaiting Nobara compilation + PS4 qualification |
-| U26 | Active GTT trim when the budget drops | custom kernel (ge-0014) | ge-0008 applied budgets lazily | Implemented: a lower `orbis_gtt_budget` evicts in LRU order at once; orbis-memd may go below usage only when U25 is enabled |
+| U26 | Active GTT trim when the budget drops | custom kernel (ge-0014, reworked in ge-0016) | ge-0008 applied budgets lazily | Implemented: a lower `orbis_gtt_budget` evicts in LRU order at once (trylock cursor, skips what cannot move, capped); requested vs effective budget and the trim account are readable; an incomplete trim returns -EBUSY and orbis-mem reports applied-but-not-enforced (exit 3) |
 | U27 | Bandwidth per memory path (VRAM / GTT write-combined / GTT snooped, copies) | to measure | same DRAM through non-coherent and coherent paths | Tool implemented (`orbis-mem bench`, probe `--membench`); Awaiting PS4 qualification |
 | U28 | Static free-carve-out swap tier | evaluated | strictly worse than a smaller carve-out | Rejected; its dynamic form is U25/U26 |
 
@@ -139,6 +139,102 @@ stress-ng --vm 2 --vm-bytes 75% --timeout 60s               # real pressure: shr
 orbis-mem status --json | jq '.reclaim, .compressed'          # compare backed_up_bytes with zram orig_data_bytes
 sudo dmesg | grep -i "orbis\|ttm\|amdgpu" | tail -50          # send back with orbis-debug collect
 ```
+
+## 2b. r3 corrections (audit GE-A01, A02, A03, A07–A10)
+
+The kernel changes are Source-checked: they apply in order and pass checkpatch. They are Awaiting
+Nobara compilation.
+
+**GE-A01: CVE-2026-52949, and an eviction bug that came with it**
+- The series now starts with two stable backports:
+  - stable-6.15/0001, the `ttm_bo_swapout()` LRU-walk fix (upstream b2ed01e7ad);
+  - stable-6.15/0002, the `ttm_bo_shrink()` LRU-walk fix (upstream 1d59f36e95f7, CVE-2026-52949).
+  Without 0002, a failed backup put the buffer back in front of the walk cursor, and the shrinker
+  scan could loop forever.
+- Reconciling ge-0014 with these fixes exposed a second bug, fixed in ge-0016 (ledger GE-B25):
+  - ge-0014 let `ttm_bo_shrink()` move buffers out of GTT through `ttm_bo_validate()`, which
+    notifies the VM with `evict=false`;
+  - per-VM ("always valid") buffers were therefore only marked *moved* and never revalidated, so
+    the GPU could reach an unpopulated buffer.
+- ge-0016 changes the shrink path:
+  - it first calls `amdgpu_ttm_orbis_evict_to_system()`, which validates to SYSTEM and then calls
+    `amdgpu_vm_bo_invalidate(bo, true)`, as TTM's own eviction does;
+  - only after that does it call `ttm_bo_shrink(.allow_move = false)`.
+- GPU reclaim stays off by default (`amdgpu.orbis_shrinker=0`).
+
+**GE-A02: honest active trim (ge-0016)**
+- `amdgpu_orbis_gtt_trim()` walks the GTT LRU with the trylock cursor, in at most two passes.
+  - It skips TTM ghosts and buffers that are not eviction-valuable, which keeps KFD-fenced buffers
+    in place.
+  - It counts failed moves and records the first errno.
+  - It stops at 8192 evictions per call and on signals.
+  - It returns 0 only when usage is at or below the target.
+- Pinned buffers are not on the LRU. Their size stays in the usage the trim reports.
+- `orbis_gtt_budget`:
+  - writes are serialized by a mutex;
+  - reading it shows the effective `budget`, the `requested` value, `usage`, `state`
+    (enforced, over_budget, incomplete or interrupted) and a `last_trim` line with the full
+    account;
+  - a write whose trim did not fit returns `-EBUSY` (or `-EINTR`), while the new limit stays
+    applied to new allocations.
+- `orbis-mem set-budget` reports `applied`, `enforced`, `state`, `trim` and `error`. Exit codes:
+  1 = refused, 3 = applied but not enforced.
+
+**GE-A09: GTT region status (ge-0016)**
+- `orbis_gtt_cgroup` (read-only) reports one of:
+  - `registered region=gtt capacity=N`;
+  - `unavailable reason=param_off`;
+  - `unavailable reason=no_cgroup_dmem`;
+  - `unavailable reason=register_failed error=E`;
+  - `unavailable reason=not_ps4`.
+- It is surfaced in `orbis-mem status` (dmem.gtt_status, gtt_unavailable_reason), in
+  `orbis-perf doctor` (memory.dmem_region_gtt) and in admission replies. A profile that requires
+  limits refuses to start when the region is missing.
+
+**GE-A03: limits before the game's first allocation**
+- Launch through `orbis-run`, with limits in the profile:
+  - orbis-run starts `systemd-run --user --scope` around a second copy of itself (stage 2);
+  - stage 2 asks orbis-perf, through `/run/orbis/admit/<pid>.req`, to limit the scope;
+  - orbis-perf (root) trusts only the limits in the request. It reads the cgroup from `/proc`,
+    checks the request file's owner against the process owner, and accepts only a `.scope` of
+    that user that holds nothing but stage 2;
+  - it enables the dmem controller on every ancestor (systemd does not manage dmem; ledger
+    GE-B28), writes `dmem.max` and reads it back;
+  - stage 2 verifies `dmem.max` itself and only then `exec`s the game (Steam reaper, Proton, Wine,
+    Gamescope or a native binary).
+  - With `memory.require_limits: true`, any missing limit means the game is not started (exit 75).
+- Games outside orbis-run get limits retroactively: only later allocations are held to them. These
+  limits are applied only when the game's cgroup holds nothing but the game's process tree.
+  Otherwise the action is `SKIPPED` with the reason (ledger GE-B29).
+
+**GE-A07: accounting**
+- One entry per DRM client, keyed by (drm-pdev, drm-client-id), with the PIDs and names that hold
+  it.
+- `accounting_check` compares the client sums with the device counters. It reports unattributed
+  memory (kernel buffers) as a range and flags violations.
+- Process RSS (physical RAM) is kept apart from GPU accounting.
+
+**GE-A04, A08, A10: probe `--membench`**
+- Host-pointer import is validated before allocation:
+  - `vkGetPhysicalDeviceExternalBufferProperties` must report the import as supported;
+  - pointer and size must be aligned to `minImportedHostPointerAlignment`;
+  - the memory type must be allowed both by the host pointer's type bits and by the buffer's
+    `VkMemoryRequirements`, with host-coherent types preferred;
+  - the buffer's required size must fit in the imported range.
+- Non-coherent types are mapped, and flushed or invalidated around CPU access.
+- Every failure path frees what it created. After a device loss or timeout, the buffers are leaked
+  on purpose.
+- Results: PASS, FAIL, UNSUPPORTED_EXTENSION, INCOMPATIBLE_MEMORY_TYPE, ALLOCATION_FAILED,
+  SYNC_FAILED, DEVICE_LOST, TIMEOUT, NOT_RUN.
+- The exit codes are identical in the probe and in `orbis-mem bench`: 0 / 1 / 4 / 4 / 5 / 5 / 3 /
+  3 / 2. A probe whose exit code contradicts its own JSON is reported as FAIL.
+
+### Per-target assessment
+
+See `HARDWARE-SUPPORT-MATRIX.md` for the full table.
+- Fat and Slim (Liverpool, 18 CUs) and Pro (Gladius, 36 CUs) share the 8 GiB pool and every
+  mechanism above. The Pro's default carve-out is to be set from its own qualification run.
+- Baikal boards get none of the kernel mechanisms until a 6.15 Baikal flavor exists.
 
 ## 3. U6 — CPU/GPU sharing contract (GFX7, no fault replay)
 
