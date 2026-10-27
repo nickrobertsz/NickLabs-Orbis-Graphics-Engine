@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.0.0 (NickLabs Orbis Graphics Engine, source release, 2026-10-26)
+
+Separate release on top of Orbis 0.2.0; Graphics Pack 1.0.0 is left as published.
+
+- Kernel series of 13 patches:
+  - ge-0001…0009: Graphics Engine (fan/thermal, SCLK restore, GDDR5 info, HDMI audio DTO,
+    bridge knobs, cpufreq, engine telemetry + runtime GTT budget, SMU mailbox);
+  - ge-0010: wall clock from the loader;
+  - ge-0011: Aeolia RTC `/dev/rtc0`;
+  - ge-0012: CachyOS subset;
+  - ge-0013: Jaguar build option.
+- Kernel extras:
+  - perf config fragment (sched_ext/BTF, NTSYNC, MGLRU, PSI, dmem, cpusets, RTC);
+  - Rust-for-Linux;
+  - optional BORE kernel `linux-orbis-ps4-ge-bore`.
+- Loader: exact VRAM MTRR split, `vram.txt`/`gtt.txt`, boot identity, time handoff.
+- Mesa 26.2.5-201 (+lib32) with the UVD caps patch (fail-closed).
+- Engine (Python): orbis-memd, orbis-hwd, Black Box + orbis-debug (now with the time source and
+  native reports), video, AI tuning, GE qualify, stage-0.
+- Native (Rust, std only, btver2 + LTO, ISA-gated) in `orbis-native`:
+  - `orbis-perf`: one controller, sched_ext management, game sessions, dmem protection and
+    ceilings, compaction per mode, doctor;
+  - `orbis-time`;
+  - `orbis-games` + `orbis-run`: Vulkan capabilities → DXVK 3.x/2.x/1.10/WineD3D, VKD3D-Proton,
+    a pinned runner catalog with an offline bundle and lock, profiles, frame-time telemetry and
+    failure classification.
+- `orbis-gaming` meta package; `./orbis-ge` one-command Nobara build (+ `runners`).
+- Unified-memory architecture classified with evidence (docs/UNIFIED-MEMORY-ARCHITECTURE.md).
+- Fixes found during integration:
+  - GE-B17: the 0.2.0 ISA audit flags AVX1 permutes;
+  - GE-B19: the 1.0 profile units fight orbis-perf;
+  - GE-B20: lock-file lookup.
+
+Nothing has been built on Nobara or run on a PS4 yet; see docs/DEVELOPMENT-CATALOG.md.
+
 ## 1.0.0 (source release, 2026-10-26)
 
 First release of the NickLabs Orbis Graphics Pack for Orbis 0.2.0 on the CUH-1215A.

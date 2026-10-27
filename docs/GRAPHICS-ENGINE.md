@@ -9,7 +9,7 @@ a new bootable image made from a copy of the 0.2.0 image, and a new stage-0 imag
 
 **Proof level.** Every kernel patch applies in order to the pinned 0.2.0 kernel tree. None was
 compiled here: compiling third-party kernel code was refused in this build environment, and that
-refusal was respected. All userspace code runs under 92 host unit tests on fixture trees (the
+refusal was respected. All userspace code runs under 92 Python and 30 Rust host tests on fixture trees (the
 loader patch's C helpers are compiled and run from the patch text). Nothing has run on a PS4.
 The first boot on the CUH-1215A is the qualification, using the commands in
 [GRAPHICS-ENGINE-NOBARA.md](GRAPHICS-ENGINE-NOBARA.md).
@@ -18,12 +18,14 @@ The first boot on the CUH-1215A is the qualification, using the commands in
 
 | Layer | Component | Where | State |
 |---|---|---|---|
-| Kernel | `linux-orbis-ps4-ge` = 0.2.0 kernel + 9 patches + config fragment | `kernel/` | applies; build on Nobara |
+| Kernel | `linux-orbis-ps4-ge` = 0.2.0 kernel + 13 patches + 2 config fragments (+ optional `-bore`) | `kernel/` | applies; build on Nobara |
 | Loader | ps4-linux-loader d0f4d4c + memory-contract patch | `loader/` | C helpers tested; payloads built on Nobara |
 | Mesa | 26.2.5 + linux-psx 0001/0002/0003/0005, pkgrel 201 | `mesa/stable`, `mesa/lib32` | 0002 dry-run applied to the pinned source |
 | Tools | `orbis-graphics` 2.0.0 (qualify, health, profiles, stage-0) | `diag/orbis_gfx` | tested |
 | Engine | `orbis-graphics-engine` 2.0.0 (memory policy, hardware API, Black Box, video, AI) | `diag/orbis_engine` | tested |
 | Integration | pack builder, image integrator, rollback, stage-0 composer, `./orbis-ge` | `build/`, `integrator/` | tested with fixtures; image steps run on Nobara |
+| Native (Rust) | `orbis-native`: orbis-perf, orbis-time, orbis-games, orbis-run (btver2 + LTO, ISA-gated) | `rust/`, `packages/orbis-native` | built + host-tested here; package built on Nobara |
+| Gaming | `orbis-gaming` meta + pinned runner catalog | `packages/orbis-gaming`, `gaming/` | recipes; runners fetched on Nobara |
 
 ### The kernel series (`kernel/patches/series`)
 
@@ -180,3 +182,15 @@ SHA-256 in `manifest/sources.json` and `mesa/stable/patches/provenance.json`. Th
 from Nick's own console). GPL source correspondence: the pack includes the complete source
 archive of this tree. The kernel is built from the pinned feeRnt commit plus the patches listed
 here, and the build manifest records exactly that.
+
+## 13. Gaming, time, performance, Rust and unified memory (added 2026-10-26)
+
+| Topic | Document |
+|---|---|
+| Performance architecture (Nobara/CachyOS mapping, one controller, sched_ext) | [PERFORMANCE.md](PERFORMANCE.md) |
+| Windows gaming (capabilities → DXVK/VKD3D, runners, orbis-run, diagnosis, offline bundle) | [GAMING.md](GAMING.md) |
+| PS4 time and RTC | [TIME.md](TIME.md) |
+| Rust components and toolchain | [RUST.md](RUST.md) |
+| Complete unified-memory architecture (classification with evidence) | [UNIFIED-MEMORY-ARCHITECTURE.md](UNIFIED-MEMORY-ARCHITECTURE.md) |
+| Implemented vs pending, status per directive | [DEVELOPMENT-CATALOG.md](DEVELOPMENT-CATALOG.md) |
+

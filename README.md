@@ -1,50 +1,63 @@
-# NickLabs Orbis Graphics Pack 1.0.0
+# NickLabs Orbis Graphics Engine 2.0.0
 
-A separate graphics layer for **NickLabs Orbis Linux 0.2.0** on the PS4 **CUH-1215A** (Belize
-southbridge, Liverpool GPU). Orbis 0.2.0 is not changed: the pack installs into a *copy* of an
-Orbis 0.2.0 image, and everything it changes is recorded and can be rolled back.
+A separate release for **NickLabs Orbis Linux 0.2.0** on the PS4 **CUH-1215A** (Belize southbridge,
+Liverpool GPU). It contains:
 
-**Status: built and tested on Nobara and the PS4 by Nick, not by the author.** The code here was
-tested on a Linux host with synthetic inputs only (see `docs/GRAPHICS-RELEASE-STATUS.md`).
-Nothing in this repository has run on a PS4.
+* a GE kernel;
+* a loader memory contract;
+* Mesa 26.2.5;
+* unified-memory policy;
+* hardware management and the Black Box recorder;
+* native Rust services for performance, time and gaming;
+* a Windows-gaming stack.
+
+Orbis 0.2.0 and the Graphics Pack 1.0.0 are not changed. The release installs into a *copy* of a
+0.2.0 image, and everything it changes can be rolled back.
+
+**Status: source complete for the current scope, not yet built on Nobara, nothing run on a PS4.**
+* Kernel patches are proven to apply but not compiled; kernel compilation was refused in the
+  authoring environment.
+* Python and Rust userspace is tested on a host with fixtures: 92 + 30 tests.
+* The Rust binaries were built here for btver2 and passed the Jaguar ISA gate.
+
+See `docs/DEVELOPMENT-CATALOG.md` for every item's state and evidence.
 
 ## What is in it
 
 | Area | Where | What |
 |---|---|---|
-| Mesa, stable line | `mesa/stable`, `mesa/lib32` | Mesa 26.2.5 (radeonsi, RADV, EGL/GBM/GLES, VA-API, RustiCL OpenCL) + 3 pinned PS4 patches; 32-bit Mesa from the same source |
-| Mesa, experimental line | `mesa/experimental` | Mesa main at a pinned commit; recorded as BLOCKED when the patches stop applying |
-| Diagnostics | `diag/` | `orbis-gpu qualify / health / profile / capabilities`, `orbis-gfx-probe` (GL, Vulkan raster/compute, pipeline cache, OpenCL, all with numeric or pixel checks), JSON schema |
-| Stage-0 GPU diagnosis | `diag/stage0`, `diag/miniroot` | initramfs overlay (`orbis.gfxdiag=1`) + a mini-root on the USB stick that runs the real GPU tests before a full install |
-| Kernel | `kernel/` | no replacement kernel by default; scripts to review community GPU kernel work and build an optional `linux-orbis-ps4-gfx` |
-| Nobara integrator | `orbis-graphics`, `integrator/` | `verify`, `inspect`, `integrate` (image or staging rootfs), `stage0`, `rollback`, with receipts |
-| Pack build | `build/` | one command on Nobara: packages, dependency closure, mini-root, `ORBIS-GRAPHICS-PACK-v1.0.0.tar.zst` |
-| Bug intelligence | `research/` | catalog of known PS4 GPU issues + a GitHub updater that runs on Nobara and never applies anything |
+| Kernel | `kernel/` | 0.2.0 kernel + 13 patches: fan/thermal, SCLK restore, GDDR5, HDMI audio, bridge, cpufreq, telemetry + runtime GTT budget, SMU, loader wall clock, Aeolia RTC, CachyOS subset, Jaguar build. Plus perf/GE config fragments, Rust-for-Linux, optional BORE kernel, and a research-only UVD kernel |
+| Loader | `loader/` | exact VRAM MTRR split, `vram.txt`/`gtt.txt`, boot identity, time handoff |
+| Mesa | `mesa/` | 26.2.5-201 (+lib32), PS4 patches |
+| Engine (Python) | `diag/` | memory policy (orbis-memd), hardware API, Black Box + orbis-debug, video, AI tuning, qualify, stage-0 |
+| Native (Rust) | `rust/`, `packages/orbis-native` | `orbis-perf` (one performance controller, sched_ext, game sessions, doctor), `orbis-time` (RTC/loader/last-good/LAN NTP), `orbis-games` + `orbis-run` (Vulkan capabilities → DXVK/VKD3D, runners, launcher, diagnosis) |
+| Gaming | `packages/orbis-gaming`, `gaming/` | Lutris, Gamescope, MangoHud, scx-scheds; pinned GE-Proton/DXVK/VKD3D catalog + lock |
+| Integration | `build/`, `integrator/`, `./orbis-ge` | pack build, image integration, stage-0, rollback, receipts |
 
 ## Commands (on Nobara)
 
 ```sh
-build/build-pack.sh --orbis-src ~/orbis-release/nicklabs-ps4-orbis-linux
-./orbis-graphics verify --pack out/release/ORBIS-GRAPHICS-PACK-v1.0.0.tar.zst
-./orbis-graphics integrate --base-image <orbis-0.2.0 image> --pack out/release/ORBIS-GRAPHICS-PACK-v1.0.0.tar.zst --output <new image>
-./orbis-graphics stage0 --base-stage0-image <orbis-0.2.0 stage-0 image> --pack out/release/ORBIS-GRAPHICS-PACK-v1.0.0.tar.zst --output <new image>
+./orbis-ge all --orbis-src ~/orbis-release/nicklabs-ps4-orbis-linux --base-image <0.2.0 image> [--base-stage0-image <0.2.0 stage-0 image>]
+./orbis-ge runners        # optional: offline Proton/DXVK bundle
 ```
 
-The full step-by-step is `docs/GRAPHICS-INTEGRATION-NOBARA.md`.
+Step by step, including first boot and rollback: `docs/GRAPHICS-ENGINE-NOBARA.md`.
 
 ## Documents
 
-- `docs/GRAPHICS-RELEASE-STATUS.md`: what is built, tested, wired or blocked
-- `docs/GRAPHICS-INTEGRATION-NOBARA.md`: exact Nobara commands
-- `docs/GRAPHICS-HARDWARE-QUALIFICATION.md`: what to run on the PS4 and what to send back
-- `docs/GRAPHICS-KERNEL-MESA-COMPATIBILITY.md`: kernel / libdrm / Mesa contract
-- `docs/GRAPHICS-PERFORMANCE-PLAN.md`: profiles, measurements, what is not possible on this kernel
-- `docs/GRAPHICS-RESEARCH-AND-BUG-LEDGER.md`: the ledger and how it is kept current
-- `docs/GRAPHICS-CHECKPOINT.md`: where the project stands, for the next session
+- `docs/DEVELOPMENT-CATALOG.md`: implemented vs pending, state + evidence per directive
+- `docs/GRAPHICS-ENGINE.md`: engineering report
+- `docs/GRAPHICS-ENGINE-NOBARA.md`: exact Nobara and console commands
+- `docs/UNIFIED-MEMORY-ARCHITECTURE.md`, `docs/GRAPHICS-ENGINE-MEMORY.md`: shared GDDR5
+- `docs/PERFORMANCE.md`, `docs/GAMING.md`, `docs/TIME.md`, `docs/RUST.md`
+- `docs/GRAPHICS-ENGINE-BUG-LEDGER.md`: findings GE-B01…B20
+- Graphics Pack 1.0.0 documents (`GRAPHICS-*.md`) are kept for reference
 
 ## Licence and firmware
 
-MIT for the Orbis-authored code (`LICENSE`). Mesa and the Arch packages keep their own licences
-(`manifest/licenses.json`). **The pack contains no PS4 firmware.** An image built from it keeps
-whatever firmware the Orbis 0.2.0 base image already has, so it stays private like that image.
+* MIT covers the Orbis-authored code (`LICENSE`).
+* The kernel patches are GPL-2.0 (with source correspondence kept via the pinned trees).
+* Mesa and the Arch packages keep their own licences.
+* **No PS4 firmware is redistributed.**
+
 NickLabs Orbis is an independent community project, not affiliated with Sony or AMD.
