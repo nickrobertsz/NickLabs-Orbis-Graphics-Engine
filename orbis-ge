@@ -3,95 +3,195 @@
 #
 #   ./orbis-ge all --orbis-src ~/orbis-release/nicklabs-ps4-orbis-linux \
 #                  --base-image ~/orbis-release/orbis-0.2.0-cuh1215a.img \
-#                  [--base-stage0-image ~/orbis-release/orbis-0.2.0-stage0.img] [--jobs N] [--research-uvd]
+#                  [--base-stage0-image ~/orbis-release/orbis-0.2.0-stage0.img] [--jobs N]
+#                  [--bore] [--research-uvd] [--research-sgdisplay]
 #
-#   ./orbis-ge kernel | loader | pack | image | stage0 | verify | status   (single steps, same options)
+#   ./orbis-ge check | kernel | loader | pack | image | stage0 | verify | status   (single steps, same options)
 #   ./orbis-ge runners [--only GE-Proton10-34,dxvk-2.7.1]   download + verify the pinned Proton/DXVK/VKD3D
 #              runners into out/runners/ (offline bundle; several GB; not part of 'all')
 #
-# Steps (each skipped when its output already exists; --rebuild redoes it):
-#   1 kernel   kernel/build-ge-kernel.sh   -> out/kernel-ge/          (GE kernel, 20-60 min)
+# Steps (each is skipped only when its output exists AND its input fingerprint is unchanged:
+# sources, patches, configs, locks, toolchain container and options; --rebuild forces it):
+#   0 check    host tests (Python always; Rust when cargo is installed)    -> out/logs/check.log
+#   1 kernel   kernel/build-ge-kernel.sh   -> out/kernel-ge/          (GE kernel, 20-60 min; --bore adds out/kernel-ge-bore/)
 #   2 loader   loader/build-loader.sh      -> out/loader-ge/          (GE loader payloads, 1 min)
-#   3 pack     build/build-pack.sh         -> out/release/ORBIS-GRAPHICS-ENGINE-v2.0.0.tar.zst (Mesa 1-3 h)
+#   3 pack     build/build-pack.sh         -> out/release/ORBIS-GRAPHICS-ENGINE-v2.0.0.tar.zst (Mesa 1-3 h; cached per package)
 #   4 image    orbis-graphics integrate    -> out/images/orbis-0.2.0+ge-2.0.0.img (a COPY of --base-image)
-#   5 stage0   orbis-graphics stage0       -> out/images/orbis-0.2.0-stage0+ge-2.0.0.img (if a stage-0 base is given)
-#   6 verify   checksums of everything     -> out/images/SHA256SUMS, out/ORBIS-GE-RELEASE-RECEIPT.json
+#   5 stage0   orbis-graphics stage0       -> out/images/orbis-0.2.0-stage0+ge-2.0.0.img (only with --base-stage0-image)
+#   6 verify   checksums + build receipt   -> out/images/SHA256SUMS, out/ORBIS-GE-RELEASE-RECEIPT.json
 #
-# Never modified: the Orbis 0.2.0 checkout, its images (--base-image is copied first), the Graphics
-# Pack 1.0.0 release, the Nobara system outside this folder (sudo is used only for podman), any PS4.
-# --research-uvd additionally builds the community UVD research kernel into out/kernel-ge-uvd/; it is
-# never put into the pack or the images (see docs/GRAPHICS-ENGINE-VIDEO.md).
+# Every step logs to out/logs/<step>.log (also shown on screen); a failing step stops the run with
+# its exit code. Never modified: the Orbis 0.2.0 checkout, its images (--base-image is copied
+# first), the Graphics Pack 1.0.0 release, the Nobara system outside this folder (sudo is used only
+# for podman), any PS4. Research kernels (--research-uvd, --research-sgdisplay) are never packed.
 set -euo pipefail
 R="$(cd "$(dirname "$0")" && pwd)"
 cd "$R"
 cmd="${1:-help}"; [ $# -gt 0 ] && shift
-orbis_src=""; base=""; base0=""; jobs=""; uvd=0; rebuild=0; only=""
+orbis_src=""; base=""; base0=""; jobs=""; uvd=0; sgd=0; bore=0; rebuild=0; only=""
+abspath() { realpath -m -- "$1"; }
 while [ $# -gt 0 ]; do
   case "$1" in
-    --orbis-src) orbis_src="$(realpath "$2")"; shift 2 ;;
-    --base-image) base="$(realpath "$2")"; shift 2 ;;
-    --base-stage0-image) base0="$(realpath "$2")"; shift 2 ;;
+    --orbis-src) orbis_src="$(abspath "$2")"; shift 2 ;;
+    --base-image) base="$(abspath "$2")"; shift 2 ;;
+    --base-stage0-image) base0="$(abspath "$2")"; shift 2 ;;
     --jobs) jobs="$2"; shift 2 ;;
     --research-uvd) uvd=1; shift ;;
+    --research-sgdisplay) sgd=1; shift ;;
+    --bore) bore=1; shift ;;
     --rebuild) rebuild=1; shift ;;
     --only) only="$2"; shift 2 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
+# an optional input that was named must exist; leaving it out is how it is skipped
+if [ -n "$base0" ] && [ ! -f "$base0" ]; then
+  echo "--base-stage0-image $base0 does not exist (leave the option out to skip the stage-0 image)" >&2; exit 2
+fi
 ver="$(python3 -c "import json; print(json.load(open('manifest/release.json'))['version'])")"
 pfx="$(python3 -c "import json; print(json.load(open('manifest/release.json'))['archive_prefix'])")"
 PACK="out/release/$pfx-v$ver.tar.zst"
 IMG="out/images/orbis-0.2.0+ge-$ver.img"
 IMG0="out/images/orbis-0.2.0-stage0+ge-$ver.img"
+mkdir -p out/logs out/.fp
 say() { echo; echo "######## $*"; }
 need_src() { [ -n "$orbis_src" ] && [ -f "$orbis_src/kernel/build-kernel.sh" ] || {
   echo "--orbis-src <Orbis 0.2.0 checkout> is required for '$cmd'" >&2; exit 2; }; }
-done_or() { [ "$rebuild" = 0 ] && [ -e "$1" ] && { echo "   already built: $1 (--rebuild to redo)"; return 0; }; return 1; }
 
+# ---------------------------------------------------------------- fingerprints
+# sha256 over the names and contents of the given files/directories (out/, .git, target/ and
+# __pycache__ are skipped). Directories outside this tree (the Orbis 0.2.0 checkout) work too.
+fp_files() {
+  python3 - "$@" <<'PY'
+import hashlib, os, sys
+h = hashlib.sha256()
+for root in sys.argv[1:]:
+    files = []
+    if os.path.isfile(root):
+        files = [root]
+    elif os.path.isdir(root):
+        for d, dirs, fs in os.walk(root):
+            dirs[:] = sorted(x for x in dirs if x not in (".git", "__pycache__", "target", "out"))
+            files += [os.path.join(d, f) for f in fs]
+    else:
+        h.update(b"missing:" + root.encode())
+    for f in sorted(files):
+        h.update(f.encode() + b"\0")
+        try:
+            with open(f, "rb") as fh:
+                for c in iter(lambda: fh.read(1 << 20), b""):
+                    h.update(c)
+        except OSError as e:
+            h.update(b"unreadable:" + str(e).encode())
+print(h.hexdigest())
+PY
+}
+fp_str() { printf '%s' "$*" | sha256sum | cut -d' ' -f1; }
+image_id() { $SUDO "${ENGINE:-podman}" image inspect --format '{{.Id}}' "$1" 2>/dev/null || echo "absent:$1"; }
+SUDO=""; [ "$(id -u)" = 0 ] || SUDO="sudo"
+fp_of() {   # fp_of <step>  (the fingerprint the step would have now)
+  case "$1" in
+    kernel*) fp_str "$(fp_files kernel manifest/sources.json)" "$(fp_files "$orbis_src/kernel")" "$(image_id orbis-build:0.2.0)" \
+                    "variant=$1" "rust=${RUST_KERNEL_TOOLCHAIN:-1.87.0}" "jobs-independent" ;;
+    loader) fp_str "$(fp_files loader manifest/sources.json)" "$(image_id orbis-build:0.2.0)" ;;
+    pack) fp_str "$(fp_files . )" "$(cat out/.fp/kernel 2>/dev/null)" "$(cat out/.fp/kernel-bore 2>/dev/null)" \
+                 "$(cat out/.fp/loader 2>/dev/null)" "$(fp_files "$orbis_src/platform" "$orbis_src/out/repo/orbis.db.tar.zst")" \
+                 "$(image_id orbis-build:0.2.0)" "$(image_id "orbis-gfx-build:$ver")" ;;
+    image) fp_str "$(cat "$PACK.sha256" 2>/dev/null)" "$(stat -c '%s %Y %i' "$base" 2>/dev/null)" "$(fp_files integrator orbis-graphics)" ;;
+    stage0) fp_str "$(cat "$PACK.sha256" 2>/dev/null)" "$(stat -c '%s %Y %i' "$base0" 2>/dev/null)" "$(fp_files integrator orbis-graphics diag/stage0 diag/miniroot)" ;;
+  esac
+}
+# fresh <step> <output>: true when the output exists and was built from the current inputs
+fresh() {
+  [ "$rebuild" = 0 ] && [ -e "$2" ] || return 1
+  local want have; want="$(fp_of "$1")"; have="$(cat "out/.fp/$1" 2>/dev/null || true)"
+  if [ "$want" = "$have" ]; then echo "   up to date: $2 (inputs unchanged; --rebuild to redo)"; return 0; fi
+  [ -n "$have" ] && echo "   inputs changed since $2 was built: rebuilding" || echo "   no fingerprint for $2: rebuilding"
+  return 1
+}
+mark() { fp_of "$1" > "out/.fp/$1"; }
+# run <step> <cmd...>: run with a log; the step's own exit code is kept
+run() {
+  local step="$1"; shift
+  local log="out/logs/$step.log"
+  echo "   log: $R/$log"
+  { echo "### $(date -Is) $*"; } > "$log"
+  set +e
+  "$@" 2>&1 | tee -a "$log"
+  local rc="${PIPESTATUS[0]}"
+  set -e
+  if [ "$rc" != 0 ]; then echo "!!! step '$step' failed (exit $rc); see $R/$log" >&2; exit "$rc"; fi
+}
+
+# ---------------------------------------------------------------- steps
+step_check() {
+  say "0 host checks (fast; no kernel/Mesa build)"
+  run check-python python3 -m unittest discover -s tests/unit -q
+  if command -v cargo >/dev/null; then
+    run check-rust bash -c "cd rust && cargo test --offline --locked -q"
+  else
+    echo "   cargo not installed on this machine: Rust tests run inside the pack build (makepkg check of orbis-native)"
+  fi
+}
+kernel_variant() {   # kernel_variant <step-name> <outdir> [flag]
+  if fresh "$1" "$2/build-manifest.json"; then return 0; fi
+  run "$1" kernel/build-ge-kernel.sh --orbis-src "$orbis_src" ${jobs:+--jobs "$jobs"} ${3:+"$3"}
+  mark "$1"
+}
 step_kernel() {
   say "1 kernel: Orbis 0.2.0 kernel + Graphics Engine series"
   need_src
-  done_or out/kernel-ge/build-manifest.json || kernel/build-ge-kernel.sh --orbis-src "$orbis_src" ${jobs:+--jobs "$jobs"}
-  if [ "$uvd" = 1 ]; then
-    say "1b research UVD kernel (separate; not packed)"
-    done_or out/kernel-ge-uvd/build-manifest.json || \
-      kernel/build-ge-kernel.sh --orbis-src "$orbis_src" ${jobs:+--jobs "$jobs"} --research-uvd || \
-      echo "   research UVD kernel did not build: recorded as BLOCKED in docs; the release does not depend on it"
-  fi
+  kernel_variant kernel out/kernel-ge
+  if [ "$bore" = 1 ]; then say "1b BORE kernel (optional package linux-orbis-ps4-ge-bore)"; kernel_variant kernel-bore out/kernel-ge-bore --bore; fi
+  if [ "$uvd" = 1 ]; then say "1c research UVD kernel (separate; never packed)"; kernel_variant kernel-uvd out/kernel-ge-uvd --research-uvd; fi
+  if [ "$sgd" = 1 ]; then say "1d research GTT-scanout kernel (separate; never packed)"; kernel_variant kernel-sg out/kernel-ge-sg --research-sgdisplay; fi
 }
 step_loader() {
-  say "2 loader payloads (ps4-linux-loader + GE memory-contract patch)"
-  done_or out/loader-ge/build.json || loader/build-loader.sh || {
-    echo "   loader build failed: the pack is built without GE payloads (the stock loader keeps working)" >&2; }
+  say "2 loader payloads (ps4-linux-loader + GE memory-contract + time patch)"
+  if fresh loader out/loader-ge/build.json; then return 0; fi
+  run loader loader/build-loader.sh
+  mark loader
 }
 step_pack() {
   say "3 packages + pack"
   need_src
-  done_or "$PACK" || build/build-pack.sh --orbis-src "$orbis_src"
+  if fresh pack "$PACK"; then return 0; fi
+  run pack build/build-pack.sh --orbis-src "$orbis_src"
+  mark pack
 }
 step_image() {
   say "4 bootable image (copy of the base, GE integrated)"
   [ -n "$base" ] && [ -f "$base" ] || { echo "--base-image <Orbis 0.2.0 .img> is required" >&2; exit 2; }
   mkdir -p out/images
-  if [ "$rebuild" = 1 ] && [ -e "$IMG" ]; then rm -f "$IMG" "$IMG".*; fi
-  done_or "$IMG" || ./orbis-graphics integrate --base-image "$base" --pack "$PACK" --output "$IMG"
+  if fresh image "$IMG"; then return 0; fi
+  rm -f "$IMG" "$IMG".*   # never the base image: it is only read
+  run image ./orbis-graphics integrate --base-image "$base" --pack "$PACK" --output "$IMG"
+  mark image
 }
 step_stage0() {
   say "5 stage-0 diagnostic image"
-  if [ -z "$base0" ]; then echo "   no --base-stage0-image given: skipped"; return 0; fi
+  if [ -z "$base0" ]; then echo "   no --base-stage0-image given: skipped (optional)"; return 0; fi
   mkdir -p out/images
-  if [ "$rebuild" = 1 ] && [ -e "$IMG0" ]; then rm -f "$IMG0" "$IMG0".*; fi
-  done_or "$IMG0" || ./orbis-graphics stage0 --base-stage0-image "$base0" --pack "$PACK" --output "$IMG0"
+  if fresh stage0 "$IMG0"; then return 0; fi
+  rm -f "$IMG0" "$IMG0".*
+  run stage0 ./orbis-graphics stage0 --base-stage0-image "$base0" --pack "$PACK" --output "$IMG0"
+  mark stage0
 }
 step_verify() {
   say "6 verify + receipt"
-  ./orbis-graphics verify --pack "$PACK" > out/pack-verify.json
+  run verify-pack bash -c "./orbis-graphics verify --pack '$PACK' > out/pack-verify.json"
   ( cd out/release && sha256sum -c "$(basename "$PACK").sha256" )
-  for f in "$IMG" "$IMG0"; do [ -f "$f" ] && ./orbis-graphics inspect --image "$f" --json > "$f.inspect.json"; done
-  ( cd out/images && sha256sum -- *.img > SHA256SUMS && cat SHA256SUMS )
-  python3 - "$PACK" "$IMG" "$IMG0" "${base:-}" <<'PY'
-import hashlib, json, os, sys, time
-pack, img, img0, base = sys.argv[1:5]
+  for f in "$IMG" "$IMG0"; do
+    if [ -f "$f" ]; then ./orbis-graphics inspect --image "$f" --json > "$f.inspect.json"; fi
+  done
+  if compgen -G "out/images/*.img" >/dev/null; then ( cd out/images && sha256sum -- *.img > SHA256SUMS && cat SHA256SUMS ); fi
+  local toolchain
+  toolchain="$(printf '{"orbis-build:0.2.0": "%s", "orbis-gfx-build:%s": "%s", "engine": "%s", "host": "%s"}' \
+    "$(image_id orbis-build:0.2.0)" "$ver" "$(image_id "orbis-gfx-build:$ver")" \
+    "$(${ENGINE:-podman} --version 2>/dev/null || echo unknown)" "$(uname -srm)")"
+  python3 - "$PACK" "$IMG" "$IMG0" "${base:-}" "${base0:-}" "$toolchain" "${orbis_src:-}" <<'PY'
+import glob, hashlib, json, os, subprocess, sys, time
+pack, img, img0, base, base0, toolchain, orbis_src = sys.argv[1:8]
 def h(p):
     if not p or not os.path.isfile(p):
         return None
@@ -105,22 +205,50 @@ def j(p):
         return json.load(open(p))
     except (OSError, ValueError):
         return None
-km = j("out/kernel-ge/build-manifest.json") or {}
-rec = {"schema": "orbis-ge-release-receipt/1", "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+def git(*a, cwd="."):
+    r = subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else None
+def fp(step):
+    try:
+        return open(f"out/.fp/{step}").read().strip()
+    except OSError:
+        return None
+series = [l.strip() for l in open("kernel/patches/series") if l.strip() and not l.startswith("#")]
+kernels = {}
+for name in ("kernel-ge", "kernel-ge-bore", "kernel-ge-uvd", "kernel-ge-sg"):
+    m = j(f"out/{name}/build-manifest.json")
+    if m:
+        kernels[name] = {"release": m.get("kernel_release"), "bzImage_sha256": h(f"out/{name}/bzImage"),
+                         "packed": name in ("kernel-ge", "kernel-ge-bore"), "boot_tested": False,
+                         "orbis": m.get("orbis_graphics_engine")}
+repo_pkgs = [{"file": os.path.basename(f), "sha256": h(f)} for f in sorted(glob.glob("out/pack/repo/*.pkg.tar.zst"))]
+rec = {"schema": "orbis-ge-release-receipt/2", "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
        "release": json.load(open("manifest/release.json")),
-       "source_commit": os.popen("git rev-parse HEAD 2>/dev/null").read().strip() or None,
-       "kernel": {"release": km.get("kernel_release"), "bzImage_sha256": h("out/kernel-ge/bzImage"), "boot_tested": False},
-       "kernel_research_uvd": j("out/kernel-ge-uvd/build-manifest.json") and "built (not packed)",
+       "source": {"commit": git("rev-parse", "HEAD"), "dirty": bool(git("status", "--porcelain")),
+                  "orbis_0_2_0_commit": git("rev-parse", "HEAD", cwd=orbis_src) if orbis_src else None},
+       "inputs": {"fingerprints": {s: fp(s) for s in ("kernel", "kernel-bore", "loader", "pack", "image", "stage0")},
+                  "kernel_patch_series": [{"patch": p, "sha256": h("kernel/patches/" + p)} for p in series],
+                  "kernel_config_fragments": {f: h(f) for f in sorted(glob.glob("kernel/config/*.fragment"))},
+                  "loader_patches": {f: h(f) for f in sorted(glob.glob("loader/*.patch"))},
+                  "locks": {f: h(f) for f in ("rust/Cargo.lock", "gaming/runners.lock.json", "gaming/runners.json",
+                                              "manifest/sources.json", "manifest/release.json")}},
+       "toolchain": json.loads(toolchain),
+       "kernels": kernels,
        "loader": j("out/loader-ge/build.json"),
-       "pack": {"file": pack, "sha256": h(pack)},
-       "image": {"file": img, "sha256": h(img), "base_image": base or None, "base_sha256_unchanged_check": h(base) if base else None,
-                 "receipt": j(img + ".integration.json") and j(img + ".integration.json").get("result")},
-       "stage0_image": {"file": img0, "sha256": h(img0), "receipt": j(img0 + ".integration.json") and j(img0 + ".integration.json").get("result")},
+       "pack": {"file": pack, "sha256": h(pack), "packages": repo_pkgs, "verify": (j("out/pack-verify.json") or {}).get("result")},
+       "image": {"file": img, "sha256": h(img), "base_image": base or None, "base_sha256": h(base) if base else None,
+                 "receipt": (j(img + ".integration.json") or {}).get("result")},
+       "stage0_image": ({"file": img0, "sha256": h(img0), "base_image": base0, "base_sha256": h(base0),
+                         "receipt": (j(img0 + ".integration.json") or {}).get("result")} if base0 else
+                        {"skipped": "no --base-stage0-image given"}),
+       "rollback": {"base_image_unchanged": "compare image.base_sha256 with the hash you recorded before",
+                    "console": "sudo /usr/lib/orbis-graphics/rollback-root.sh --root / --boot /boot/ps4",
+                    "kernel_only": "sudo orbis boot rollback-kernel",
+                    "image": "./orbis-graphics rollback --image <ge image> --output <restored image>"},
        "next": ["write the image to the USB drive (Fedora Media Writer, or dd to the WHOLE USB device, never a PS4 drive)",
-                "boot it; on the console run: sudo orbis-gpu qualify && sudo orbis-debug collect",
-                "rollback: keep using the original 0.2.0 image, or ./orbis-graphics rollback --image <ge image> --output <restored image>"]}
+                "boot it; on the console: sudo orbis-gpu qualify && sudo orbis-perf doctor && sudo orbis-debug collect"]}
 json.dump(rec, open("out/ORBIS-GE-RELEASE-RECEIPT.json", "w"), indent=1)
-print(json.dumps({k: rec[k] for k in ("kernel", "pack", "image", "stage0_image")}, indent=1))
+print(json.dumps({k: rec[k] for k in ("source", "kernels", "pack", "image", "stage0_image")}, indent=1)[:4000])
 PY
 }
 step_runners() {
@@ -128,12 +256,12 @@ step_runners() {
   mkdir -p out/runners out/native-host
   local fetch=(orbis-games fetch --dest out/runners --lock gaming/runners.lock.json ${only:+--only "$only"})
   if command -v cargo >/dev/null; then
-    ( cd rust && CARGO_TARGET_DIR="$R/out/native-host" cargo build --release --offline --locked -p orbis-games )
-    ORBIS_GAMES_CATALOG="$R/gaming/runners.json" "out/native-host/release/${fetch[0]}" "${fetch[@]:1}"
+    run runners-build bash -c "cd rust && CARGO_TARGET_DIR='$R/out/native-host' cargo build --release --offline --locked -p orbis-games"
+    run runners env ORBIS_GAMES_CATALOG="$R/gaming/runners.json" "out/native-host/release/${fetch[0]}" "${fetch[@]:1}"
   else
     # no Rust on the Nobara: build and fetch inside the graphics build container (made by './orbis-ge pack')
     local engine; engine="$(command -v podman || command -v docker)" || { echo "need cargo or podman" >&2; exit 2; }
-    sudo "$engine" run --rm -v "$R":/src:z -w /src "orbis-gfx-build:$ver" bash -c \
+    run runners sudo "$engine" run --rm -v "$R":/src:z -w /src "orbis-gfx-build:$ver" bash -c \
       "cd rust && CARGO_TARGET_DIR=/src/out/native-host cargo build --release --offline --locked -p orbis-games && cd /src && \
        ORBIS_GAMES_CATALOG=/src/gaming/runners.json out/native-host/release/${fetch[*]}"
     sudo chown -R "$(id -u):$(id -g)" out/runners out/native-host gaming/runners.lock.json
@@ -142,8 +270,17 @@ step_runners() {
   echo "   console: scp -r out/runners <user>@<ps4-ip>:~/runners && ssh <user>@<ps4-ip> orbis-games install --bundle ~/runners"
 }
 step_status() {
-  for f in out/kernel-ge/build-manifest.json out/kernel-ge-uvd/build-manifest.json out/loader-ge/build.json "$PACK" "$IMG" "$IMG0"; do
-    printf '%-60s %s\n' "$f" "$([ -e "$f" ] && echo present || echo missing)"
+  for pair in kernel:out/kernel-ge/build-manifest.json kernel-bore:out/kernel-ge-bore/build-manifest.json \
+              kernel-uvd:out/kernel-ge-uvd/build-manifest.json kernel-sg:out/kernel-ge-sg/build-manifest.json \
+              loader:out/loader-ge/build.json pack:"$PACK" image:"$IMG" stage0:"$IMG0"; do
+    local s="${pair%%:*}" f="${pair#*:}" st=missing
+    if [ -e "$f" ]; then
+      st=present
+      if [ -n "$orbis_src" ] || [ "$s" = loader ]; then
+        [ "$(fp_of "$s")" = "$(cat "out/.fp/$s" 2>/dev/null || true)" ] && st="present, current" || st="present, STALE (inputs changed)"
+      fi
+    fi
+    printf '%-12s %-60s %s\n' "$s" "$f" "$st"
   done
 }
 
@@ -152,8 +289,11 @@ case "$cmd" in
     command -v podman >/dev/null || { echo "need podman: sudo dnf install podman" >&2; exit 2; }
     need_src
     [ -n "$base" ] && [ -f "$base" ] || { echo "--base-image <Orbis 0.2.0 .img> is required for 'all'" >&2; exit 2; }
-    step_kernel; step_loader; step_pack; step_image; step_stage0; step_verify
-    echo; echo "Done. Image: $R/$IMG"; [ -f "$IMG0" ] && echo "Stage-0: $R/$IMG0"; echo "Receipt: $R/out/ORBIS-GE-RELEASE-RECEIPT.json" ;;
+    step_check; step_kernel; step_loader; step_pack; step_image; step_stage0; step_verify
+    echo; echo "Done. Image: $R/$IMG"
+    if [ -f "$IMG0" ]; then echo "Stage-0: $R/$IMG0"; fi
+    echo "Receipt: $R/out/ORBIS-GE-RELEASE-RECEIPT.json" ;;
+  check) step_check ;;
   kernel) step_kernel ;;
   loader) step_loader ;;
   pack) step_pack ;;
@@ -162,5 +302,5 @@ case "$cmd" in
   verify) step_verify ;;
   status) step_status ;;
   runners) step_runners ;;
-  *) sed -n 2,24p "$0"; [ "$cmd" = help ] || exit 2 ;;
+  *) sed -n 2,27p "$0"; [ "$cmd" = help ] || exit 2 ;;
 esac

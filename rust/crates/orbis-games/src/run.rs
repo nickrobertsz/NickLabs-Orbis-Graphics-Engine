@@ -299,6 +299,27 @@ pub fn plan(cmd: &[String], prof: &Profile, title_opt: Option<&str>, runner_opt:
             }
         }
     }
+    // Gamescope (profile "gamescope": {"enabled": true, "args": ["-W","1920","-H","1080","-r","60"]}):
+    // a nested compositor for games with broken fullscreen/resolution handling. Only when it is
+    // installed and we are not already inside a gamescope session.
+    if prof.doc.at("gamescope.enabled").and_then(Value::as_bool).unwrap_or(false) {
+        let inside = std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some();
+        let have = Command::new("gamescope").arg("--help").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok();
+        if inside {
+            notes.push("gamescope: already inside a gamescope session, not nested".into());
+        } else if !have {
+            notes.push("gamescope: requested by the profile but not installed (orbis-gaming package)".into());
+        } else {
+            let mut g = vec!["gamescope".to_string()];
+            if let Some(a) = prof.doc.at("gamescope.args").and_then(Value::as_arr) {
+                g.extend(a.iter().filter_map(|x| x.as_str().map(str::to_string)));
+            }
+            g.push("--".into());
+            g.extend(argv);
+            argv = g;
+            notes.push("gamescope: game runs in a nested gamescope".into());
+        }
+    }
     Ok(Plan { argv, env, notes, runner, d3d, title, logdir: state })
 }
 

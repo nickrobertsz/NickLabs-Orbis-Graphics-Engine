@@ -7,7 +7,8 @@ only for podman and loop devices.
 ```sh
 ORBIS=~/orbis-release/nicklabs-ps4-orbis-linux          # the 0.2.0 checkout you built 0.2.0 from
 BASE=$ORBIS/out/release/orbis-0.2.0-cuh-1215a.img        # your 0.2.0 full image (name as you have it)
-BASE0=$ORBIS/out/release/orbis-0.2.0-stage0.img          # optional: the 0.2.0 stage-0 image
+BASE0=$ORBIS/out/release/orbis-0.2.0-stage0.img          # optional: the 0.2.0 stage-0 image (if you have one)
+STAGE0=(); [ -f "$BASE0" ] && STAGE0=(--base-stage0-image "$BASE0")   # passed only when the file exists
 sudo dnf install -y podman git zstd python3               # once
 ```
 
@@ -18,17 +19,24 @@ mkdir -p ~/orbis-release && cd ~/orbis-release
 git clone nicklabs-orbis-graphics-engine-2.0.0.bundle nicklabs-orbis-graphics-engine   # or unpack the source archive
 cd nicklabs-orbis-graphics-engine
 sha256sum -c ../SHA256SUMS --ignore-missing               # the delivered manifest
-python3 -m unittest discover -s tests/unit -q             # 92 host tests, about 1-2 min
-( cd rust && cargo test --offline -q ) || true             # only if Rust is installed on the Nobara (not required)
+./orbis-ge check        # Python host tests; Rust tests too when cargo is installed (a failure stops here)
 ```
 
 ## 2. Everything in one command
 
 ```sh
-./orbis-ge all --orbis-src $ORBIS --base-image $BASE --base-stage0-image $BASE0
+./orbis-ge all --orbis-src $ORBIS --base-image $BASE "${STAGE0[@]}"      # add --bore for the BORE kernel package
 ```
 
-These steps run in order. A step whose output already exists is skipped; `--rebuild` forces it.
+These steps run in order:
+* A step is skipped only when its output exists **and** its input fingerprint is unchanged:
+  sources, patches, config fragments, locks, the 0.2.0 checkout, the build containers and the
+  options. `--rebuild` forces a step.
+* Inside the pack step every package has its own cache (`out/pkgcache/`), so changing a document
+  does not rebuild Mesa.
+* Every step writes `out/logs/<step>.log` (the pack's per-package logs are in `out/pack/logs/`).
+  A failing step stops the run with its exit code.
+* `./orbis-ge status` shows which outputs are current and which are stale.
 
 | Step | Command alone | Output | Time |
 |---|---|---|---|
@@ -42,8 +50,9 @@ These steps run in order. A step whose output already exists is skipped; `--rebu
 Optional extras:
 
 ```sh
-kernel/build-ge-kernel.sh --orbis-src $ORBIS --bore          # BORE kernel -> out/kernel-ge-bore/ (packed as linux-orbis-ps4-ge-bore, not installed by default)
+./orbis-ge kernel --orbis-src $ORBIS --bore                  # BORE kernel -> out/kernel-ge-bore/ (packed as linux-orbis-ps4-ge-bore, not installed by default)
 ./orbis-ge kernel --orbis-src $ORBIS --research-uvd          # research UVD kernel, never packed
+./orbis-ge kernel --orbis-src $ORBIS --research-sgdisplay    # research GTT-scanout kernel (R-M1), never packed
 ./orbis-ge runners                                           # Proton/DXVK/VKD3D offline bundle -> out/runners/ (several GB)
 git add gaming/runners.lock.json && git commit -m "runner checksums"   # after reviewing the new SHA-256 lines
 ```

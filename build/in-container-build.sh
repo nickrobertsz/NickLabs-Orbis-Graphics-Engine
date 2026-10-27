@@ -41,6 +41,46 @@ mk() {  # mk <recipe dir relative to the tree> <log name> [deps|nodeps]
   fi
 }
 
+# Per-package build cache in the host's out/pkgcache: a package is rebuilt only when its recipe,
+# its declared inputs or the toolchain in this container changed (Mesa alone takes 1-3 h).
+toolstamp="snapshot=$snapshot $(pacman -Q gcc clang llvm rust meson ninja python glslang shaderc 2>/dev/null | tr '\n' ' ')"
+fp_paths() {
+  python3 - "$@" <<'PYFP'
+import hashlib, os, sys
+h = hashlib.sha256()
+for root in sys.argv[1:]:
+    files = [root] if os.path.isfile(root) else []
+    if os.path.isdir(root):
+        for d, dirs, fs in os.walk(root):
+            dirs[:] = sorted(x for x in dirs if x not in (".git", "__pycache__", "target", "out", "src", "pkg"))
+            files += [os.path.join(d, f) for f in fs if not f.endswith((".pkg.tar.zst", ".log"))]
+    if not files:
+        h.update(b"missing:" + root.encode())
+    for f in sorted(files):
+        h.update(f.encode() + b"\0")
+        with open(f, "rb") as fh:
+            for c in iter(lambda: fh.read(1 << 20), b""):
+                h.update(c)
+print(h.hexdigest())
+PYFP
+}
+mkc() {  # mkc <recipe> <log name> <deps|nodeps> <input paths...>
+  local recipe="$1" log="$2" mode="$3"; shift 3
+  local fp; fp="$( { fp_paths "$R/$recipe" "$@"; echo "$toolstamp"; } | sha256sum | cut -c1-24)"
+  local c="$R/out/pkgcache/$log/$fp"
+  if compgen -G "$c/*.pkg.tar.zst" >/dev/null; then
+    echo "    cached: $log ($fp) - recipe, inputs and toolchain unchanged"
+    cp "$c"/*.pkg.tar.zst "$repo/"
+    return 0
+  fi
+  local before; before="$(ls "$repo")"
+  mk "$recipe" "$log" "$mode" || return 1
+  rm -rf "$c.tmp" && mkdir -p "$c.tmp"
+  for f in "$repo"/*.pkg.tar.zst; do grep -qxF "$(basename "$f")" <<<"$before" || cp "$f" "$c.tmp/"; done
+  find "$R/out/pkgcache/$log" -mindepth 1 -maxdepth 1 ! -name "$fp" ! -name "$fp.tmp" -exec rm -rf {} +
+  rm -rf "$c" && mv "$c.tmp" "$c"
+}
+
 step "libdrm requirement (Mesa 26.2.5 needs libdrm_amdgpu >= 2.4.133)"
 v="$(pacman -Si libdrm | awk '/^Version/ {print $3; exit}')"
 python3 - "$v" <<'PY'
@@ -52,18 +92,18 @@ sys.exit(0 if parts >= (2, 4, 133) else "libdrm too old for Mesa 26.2.5")
 PY
 
 step "Mesa stable 26.2.5 (mesa-orbis-ps4 + opencl-mesa-orbis-ps4), ~1-2 h"
-mk mesa/stable mesa-stable
+mkc mesa/stable mesa-stable deps "$R/mesa"
 step "32-bit Mesa (build deps preinstalled by Containerfile.gfx; mesa-orbis-ps4 is a runtime dep only)"
-mk mesa/lib32 mesa-lib32 nodeps
+mkc mesa/lib32 mesa-lib32 nodeps "$R/mesa"
 step "orbis-graphics tools + meta package"
-mk packages/orbis-graphics orbis-graphics nodeps
-mk packages/orbis-graphics-engine orbis-graphics-engine nodeps
+mkc packages/orbis-graphics orbis-graphics nodeps "$R/diag" "$R/docs" "$R/LICENSE"
+mkc packages/orbis-graphics-engine orbis-graphics-engine nodeps "$R/diag" "$R/tools" "$R/LICENSE"
 step "orbis-native (Rust, btver2 + fat LTO, gated by the Orbis 0.2.0 ISA audit)"
 [ -f /orbis/platform/orbis/isa_audit.py ] || { echo "/orbis/platform (Orbis 0.2.0 platform/) is not mounted: build-pack.sh mounts it" >&2; exit 6; }
 cp -a /orbis/platform "$B/packages/orbis-native/orbis-platform" && chown -R builder "$B/packages/orbis-native/orbis-platform"
-mk packages/orbis-native orbis-native nodeps
-mk packages/orbis-gaming orbis-gaming nodeps
-mk packages/orbis-graphics-pack orbis-graphics-pack nodeps
+mkc packages/orbis-native orbis-native nodeps "$R/rust" "$R/gaming" "$R/LICENSE" /orbis/platform
+mkc packages/orbis-gaming orbis-gaming nodeps
+mkc packages/orbis-graphics-pack orbis-graphics-pack nodeps
 
 exp_state=NOT_BUILT; exp_reason="not requested (build-pack.sh --experimental)"
 if [ "$experimental" = 1 ]; then
@@ -83,10 +123,10 @@ if grep -qv '^[[:space:]]*\(#\|$\)' "$R/kernel/patches/series" 2>/dev/null; then
   step "graphics kernel package (kernel/patches/series lists reviewed patches)"
   [ -f "$R/out/kernel-ge/build-manifest.json" ] || {
     echo "kernel/patches/series is not empty but out/kernel-ge is missing: run kernel/build-ge-kernel.sh first" >&2; exit 5; }
-  mk kernel/package linux-orbis-ps4-ge nodeps
+  mkc kernel/package linux-orbis-ps4-ge nodeps "$R/out/kernel-ge/build-manifest.json" "$R/out/kernel-ge/bzImage" "$R/integrator/vendor/orbis020"
   if [ -f "$R/out/kernel-ge-bore/build-manifest.json" ]; then
     step "BORE variant kernel package (optional; not a dependency of the pack meta package)"
-    mk kernel/package-bore linux-orbis-ps4-ge-bore nodeps
+    mkc kernel/package-bore linux-orbis-ps4-ge-bore nodeps "$R/kernel/package" "$R/out/kernel-ge-bore/build-manifest.json" "$R/out/kernel-ge-bore/bzImage" "$R/integrator/vendor/orbis020"
   fi
 else
   step "kernel: no reviewed graphics patches in kernel/patches/series; the Orbis 0.2.0 kernel is kept"
@@ -150,5 +190,5 @@ repo-add -q -n -R "${sign[@]}" "$repo/orbis-graphics.db.tar.zst" "$repo"/*.pkg.t
 
 step "stage-0 GPU diagnostic mini-root"
 "$R/diag/miniroot/build-miniroot.sh" --snapshot "$snapshot" --repo "$repo" --out "$staging/miniroot"
-chown -R "${HOST_UID:-0}:${HOST_GID:-0}" "$staging" 2>/dev/null || true
+chown -R "${HOST_UID:-0}:${HOST_GID:-0}" "$staging" "$R/out/pkgcache" 2>/dev/null || true
 echo; echo "=== in-container build complete"

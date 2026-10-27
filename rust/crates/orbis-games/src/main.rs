@@ -86,6 +86,8 @@ fn main() {
                 "scheduler" => "auto", "governor" => "performance", "gpu_sclk" => "max", "nice" => -4i64,
                 "memory" => jobj! {"dmem_low_mb" => Value::Null, "dmem_max_mb" => Value::Null, "vulkan_heaps" => "auto"},
                 "telemetry" => jobj! {"frametimes" => false}, "shader_cache" => jobj! {"max_mb" => 2048i64},
+                "gamescope" => jobj! {"enabled" => false, "args" => vec!["-W".to_string(), "1920".into(), "-H".into(), "1080".into()]},
+                "coordination" => "auto",
                 "audio" => jobj! {"pulse_latency_msec" => Value::Null}, "controller" => jobj! {"sdl_mapping" => Value::Null},
                 "env" => Value::obj(), "log" => jobj! {"dxvk" => "warn", "proton" => false}};
             let f = catalog::home().join(".config/orbis/games.d").join(format!("{}.json", run::slug(name)));
