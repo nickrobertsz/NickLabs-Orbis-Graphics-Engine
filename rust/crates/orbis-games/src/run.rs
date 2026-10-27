@@ -524,7 +524,13 @@ pub fn main_run(argv: Vec<String>) -> i32 {
     let _ = std::fs::remove_file(&admit_file);
     let refused = code == Some(orbis_core::admit::EXIT_ADMISSION)
         && admission.as_ref().and_then(|a| a.get("game_started")).and_then(Value::as_bool) == Some(false);
-    let mut rep = if refused {
+    // stage 2 always records its decision before exec: no record means the scope (systemd-run)
+    // or stage 2 itself failed, so the game never ran (r3.1: reported, never "UNKNOWN")
+    let scope_failed = wants_limits && scope && admission.is_none();
+    let mut rep = if scope_failed {
+        jobj! {"result" => "NOT_STARTED", "category" => "admission",
+               "findings" => vec![jobj! {"hint" => format!("systemd-run --user --scope or orbis-run stage 2 failed (exit {:?}); the game did not start", code)}]}
+    } else if refused {
         jobj! {"result" => "NOT_STARTED", "category" => "admission",
                "findings" => vec![jobj! {"hint" => "required memory limits could not be applied; see admission"}]}
     } else {
@@ -534,7 +540,8 @@ pub fn main_run(argv: Vec<String>) -> i32 {
     if let Some(a) = admission {
         rep.set("admission", a);
     } else if wants_limits {
-        rep.set("admission", jobj! {"state" => if scope { "UNKNOWN" } else { "RETROACTIVE" }});
+        rep.set("admission", jobj! {"state" => if scope { "SCOPE_FAILED" } else { "RETROACTIVE" }, "required" => require,
+                                    "game_started" => !scope});
     }
     if let Some(ft) = newest_mangohud_csv(&pl.logdir, started).and_then(|f| fsx::read_raw(&f)).and_then(|t| frametime_summary(&t)) {
         rep.set("frametimes", ft);
@@ -547,6 +554,9 @@ pub fn main_run(argv: Vec<String>) -> i32 {
         if let Some(f) = rep.get("findings").and_then(Value::as_arr).and_then(|a| a.first()) {
             eprintln!("orbis-run: hint: {}", f.get("hint").and_then(Value::as_str).unwrap_or(""));
         }
+    }
+    if scope_failed && require {
+        return orbis_core::admit::EXIT_ADMISSION;
     }
     code.unwrap_or(128 + sig.unwrap_or(0))
 }

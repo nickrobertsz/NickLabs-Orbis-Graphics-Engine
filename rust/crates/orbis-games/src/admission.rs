@@ -31,9 +31,19 @@ pub fn profile_limits(doc: &Value) -> (Option<u64>, Option<u64>, bool) {
 
 /// Outcome of stage 2 before exec: whether to start the game and the record kept in the log dir.
 pub fn decide(reply: Option<&Value>, checks: &[(String, bool, String)], require: bool) -> (bool, Value) {
-    let verified = !checks.is_empty() && checks.iter().all(|(_, ok, _)| *ok);
-    let failed: Vec<Value> = checks.iter().filter(|(_, ok, _)| !ok).map(|(k, _, d)| jobj! {"kind" => k.clone(), "detail" => d.clone()}).collect();
-    let state = if verified {
+    decide_state(None, reply, checks, require)
+}
+
+/// `forced`: a state decided before any check could run (NOT_IN_SCOPE, REQUEST_FAILED)
+pub fn decide_state(forced: Option<(&str, String)>, reply: Option<&Value>, checks: &[(String, bool, String)], require: bool) -> (bool, Value) {
+    let verified = forced.is_none() && !checks.is_empty() && checks.iter().all(|(_, ok, _)| *ok);
+    let mut failed: Vec<Value> = checks.iter().filter(|(_, ok, _)| !ok).map(|(k, _, d)| jobj! {"kind" => k.clone(), "detail" => d.clone()}).collect();
+    if let Some((st, why)) = &forced {
+        failed.push(jobj! {"kind" => "admission", "detail" => format!("{st}: {why}")});
+    }
+    let state = if let Some((st, _)) = &forced {
+        st
+    } else if verified {
         "ADMITTED"
     } else if reply.is_none() {
         "NO_REPLY"
@@ -53,23 +63,25 @@ pub fn decide(reply: Option<&Value>, checks: &[(String, bool, String)], require:
     (start, rec)
 }
 
-/// Send the request for `pid` and wait for orbis-perf's reply (None after the timeout).
-pub fn request(req: &Request, timeout: Duration) -> Option<Value> {
-    let rp = admit::reply_path(req.pid);
-    fsx::atomic_write(&admit::req_path(req.pid), req.to_json().to_string_compact().as_bytes()).ok()?;
+/// Send the request and wait for orbis-perf's reply: Ok(None) after the timeout, Err when the
+/// request could not even be written (the reason is reported, never a silent NO_REPLY).
+pub fn request(req: &Request, timeout: Duration) -> Result<Option<Value>, String> {
+    let rp = admit::reply_path(req.pid, &req.nonce);
+    let rq = admit::write_request(req).map_err(|e| format!("cannot write {}: {e}", admit::req_path(req.pid, &req.nonce).display()))?;
     let t0 = Instant::now();
     while t0.elapsed() < timeout {
         // only the reply to this request: a leftover reply for a recycled PID has another nonce
         if let Some(v) = fsx::read_raw(&rp).and_then(|t| json::parse(&t).ok()) {
             if v.get("nonce").and_then(Value::as_str) == Some(req.nonce.as_str()) {
-                return Some(v);
+                let _ = std::fs::remove_file(&rp);
+                return Ok(Some(v));
             }
         }
         std::thread::sleep(Duration::from_millis(25));
     }
-    // nobody answered: withdraw the request so a late daemon does not act on a dead PID
-    let _ = std::fs::remove_file(admit::req_path(req.pid));
-    None
+    // nobody answered: withdraw the request so a late daemon does not act on it
+    let _ = std::fs::remove_file(&rq);
+    Ok(None)
 }
 
 /// Stage 2: runs inside the fresh scope. Admits, verifies, then calls `exec` (which replaces
@@ -83,6 +95,7 @@ pub fn stage2(exec: impl FnOnce() -> i32, timeout: Duration) -> i32 {
         require: std::env::var(ENV_REQUIRE).map(|v| v == "1").unwrap_or(false),
         title: std::env::var(ENV_TITLE).unwrap_or_default(),
         nonce: admit::new_nonce(),
+        starttime: admit::proc_starttime(std::process::id()).unwrap_or(0),
     };
     let result_file = std::env::var(ENV_RESULT).ok();
     for k in [ENV_VRAM, ENV_GTT, ENV_REQUIRE, ENV_RESULT, ENV_TITLE] {
@@ -91,12 +104,22 @@ pub fn stage2(exec: impl FnOnce() -> i32, timeout: Duration) -> i32 {
     let (start, rec) = if req.limits().is_empty() {
         (true, jobj! {"schema" => "orbis-run-admission/1", "state" => "NOT_REQUESTED", "game_started" => true})
     } else {
-        let reply = request(&req, timeout);
-        let checks = match admit::cgroup_of(req.pid) {
-            Some(cg) => admit::verify(&cg, &req),
-            None => req.limits().iter().map(|(k, _)| (k.to_string(), false, "own cgroup unknown".to_string())).collect(),
-        };
-        decide(reply.as_ref(), &checks, req.require)
+        // systemd-run must have put us in our own orbis-game scope; otherwise do not even ask
+        let cg = admit::cgroup_of(req.pid);
+        let in_scope = cg.as_deref().map(|c| c.ends_with(".scope") && c.contains("/orbis-game.slice/")).unwrap_or(false);
+        if !in_scope {
+            decide_state(Some(("NOT_IN_SCOPE", format!("own cgroup {cg:?} is not an orbis-game scope (systemd-run --user --scope)"))), None, &[], req.require)
+        } else if req.starttime == 0 {
+            decide_state(Some(("REQUEST_FAILED", "own process start time unreadable".into())), None, &[], req.require)
+        } else {
+            match request(&req, timeout) {
+                Err(e) => decide_state(Some(("REQUEST_FAILED", e)), None, &[], req.require),
+                Ok(reply) => {
+                    let checks = admit::verify(cg.as_deref().unwrap_or("/"), &req);
+                    decide(reply.as_ref(), &checks, req.require)
+                }
+            }
+        }
     };
     if let Some(f) = &result_file {
         let _ = fsx::atomic_write(Path::new(f), rec.to_string_pretty().as_bytes());
@@ -119,8 +142,9 @@ mod tests {
 
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     const VR: &str = "drm/0000:00:01.0/vram";
+    const SCOPE: &str = "user.slice/user-1000.slice/user@1000.service/orbis-game.slice/orbis-game-1.scope";
 
-    fn fixture(tag: &str) -> std::path::PathBuf {
+    fn fixture(tag: &str, cgroup: &str) -> std::path::PathBuf {
         let r = std::env::temp_dir().join(format!("orbis-run-admit-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&r);
         let me = std::process::id();
@@ -130,10 +154,19 @@ mod tests {
             fs::write(f, c).unwrap();
         };
         w("sys/fs/cgroup/dmem.capacity", &format!("{VR} 1073741824\n"));
-        w(&format!("proc/{me}/cgroup"), "0::/user.slice/user-1000.slice/orbis-game-1.scope\n");
-        w("sys/fs/cgroup/user.slice/user-1000.slice/orbis-game-1.scope/dmem.max", &format!("{VR} max\n"));
+        w(&format!("proc/{me}/cgroup"), &format!("0::/{cgroup}\n"));
+        // comm with spaces and parentheses: the start time is field 22 counted after the last ')'
+        w(&format!("proc/{me}/stat"), &format!("{me} (orbis run (x)) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 424242 0 0\n"));
+        w(&format!("sys/fs/cgroup/{SCOPE}/dmem.max"), &format!("{VR} max\n"));
         fs::create_dir_all(r.join("run/orbis/admit")).unwrap();
         r
+    }
+
+    fn pending(r: &std::path::Path, me: u32) -> Option<std::path::PathBuf> {
+        fs::read_dir(r.join("run/orbis/admit")).ok()?.flatten().map(|e| e.path()).find(|p| {
+            let n = p.file_name().unwrap().to_string_lossy().into_owned();
+            n.starts_with(&format!("{me}.")) && n.ends_with(".req")
+        })
     }
 
     #[test]
@@ -145,6 +178,8 @@ mod tests {
         assert_eq!(decide(None, &bad, true).1.get("state").and_then(Value::as_str), Some("NO_REPLY"));
         let (start, rec) = decide(Some(&jobj! {"rejected" => "x"}), &bad, false);
         assert!(start && rec.get("state").and_then(Value::as_str) == Some("REJECTED"));
+        let (start, rec) = decide_state(Some(("NOT_IN_SCOPE", "x".into())), None, &ok, true);
+        assert!(!start && rec.get("state").and_then(Value::as_str) == Some("NOT_IN_SCOPE"));
         let prof = json::parse(r#"{"memory":{"dmem_max_mb":512,"gtt_max_mb":0,"require_limits":true}}"#).unwrap();
         assert_eq!(profile_limits(&prof), (Some(512 << 20), None, true));
     }
@@ -153,34 +188,40 @@ mod tests {
     #[test]
     fn game_starts_only_after_limits_are_in_force() {
         let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let r = fixture("order");
+        let r = fixture("order", SCOPE);
         std::env::set_var("ORBIS_ROOT", &r);
         std::env::set_var(ENV_VRAM, (512u64 << 20).to_string());
         std::env::set_var(ENV_REQUIRE, "1");
         let me = std::process::id();
         let r2 = r.clone();
         let server = std::thread::spawn(move || {
-            let req = r2.join(format!("run/orbis/admit/{me}.req"));
             for _ in 0..400 {
-                if req.exists() {
+                if let Some(req) = pending(&r2, me) {
                     std::thread::sleep(Duration::from_millis(30)); // a slow daemon
-                    fs::write(r2.join("sys/fs/cgroup/user.slice/user-1000.slice/orbis-game-1.scope/dmem.max"), format!("{VR} {}\n", 512u64 << 20)).unwrap();
-                    let n = orbis_core::json::parse(&fs::read_to_string(&req).unwrap()).unwrap().get("nonce").and_then(Value::as_str).unwrap().to_string();
+                    let doc = orbis_core::json::parse(&fs::read_to_string(&req).unwrap()).unwrap();
+                    assert_eq!(doc.get("starttime").and_then(Value::as_i64), Some(424242));
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        assert_eq!(fs::metadata(&req).unwrap().permissions().mode() & 0o777, 0o600, "request is private");
+                    }
+                    fs::write(r2.join(format!("sys/fs/cgroup/{SCOPE}/dmem.max")), format!("{VR} {}\n", 512u64 << 20)).unwrap();
+                    let n = doc.get("nonce").and_then(Value::as_str).unwrap().to_string();
                     fs::create_dir_all(r2.join("run/orbis/admit-replies")).unwrap();
-                    // a stale reply for this PID first: must be ignored
-                    fs::write(r2.join(format!("run/orbis/admit-replies/{me}.reply")), r#"{"admitted":true,"nonce":"00"}"#).unwrap();
+                    // a reply with another nonce at our name: ignored
+                    fs::write(r2.join(format!("run/orbis/admit-replies/{me}.{n}.reply")), r#"{"admitted":true,"nonce":"00"}"#).unwrap();
                     std::thread::sleep(Duration::from_millis(60));
-                    fs::write(r2.join(format!("run/orbis/admit-replies/{me}.reply")), format!(r#"{{"admitted":true,"nonce":"{n}"}}"#)).unwrap();
+                    fs::write(r2.join(format!("run/orbis/admit-replies/{me}.{n}.reply")), format!(r#"{{"admitted":true,"nonce":"{n}"}}"#)).unwrap();
                     let _ = fs::remove_file(&req);
                     return;
                 }
                 std::thread::sleep(Duration::from_millis(5));
             }
+            panic!("no request appeared");
         });
         let r3 = r.clone();
         let code = stage2(move || {
             // at exec time the limit must already be there
-            let m = fs::read_to_string(r3.join("sys/fs/cgroup/user.slice/user-1000.slice/orbis-game-1.scope/dmem.max")).unwrap();
+            let m = fs::read_to_string(r3.join(format!("sys/fs/cgroup/{SCOPE}/dmem.max"))).unwrap();
             assert!(m.contains(&(512u64 << 20).to_string()), "exec before admission: {m}");
             0
         }, Duration::from_secs(5));
@@ -190,11 +231,11 @@ mod tests {
         std::env::remove_var("ORBIS_ROOT");
     }
 
-    /// Required limits and no daemon: the game is never started.
+    /// Required limits and no daemon: the game is never started; the request is withdrawn.
     #[test]
     fn required_limits_without_daemon_refuse_launch() {
         let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let r = fixture("nodaemon");
+        let r = fixture("nodaemon", SCOPE);
         std::env::set_var("ORBIS_ROOT", &r);
         std::env::set_var(ENV_VRAM, (512u64 << 20).to_string());
         std::env::set_var(ENV_REQUIRE, "1");
@@ -204,11 +245,39 @@ mod tests {
         assert_eq!(code, admit::EXIT_ADMISSION);
         let rec = json::parse(&fs::read_to_string(&res).unwrap()).unwrap();
         assert_eq!(rec.get("state").and_then(Value::as_str), Some("NO_REPLY"));
-        assert!(!r.join(format!("run/orbis/admit/{}.req", std::process::id())).exists(), "request withdrawn");
+        assert!(pending(&r, std::process::id()).is_none(), "request withdrawn");
         // optional limits: the game starts, the record says so
         std::env::set_var(ENV_VRAM, (512u64 << 20).to_string());
         let code = stage2(|| 7, Duration::from_millis(100));
         assert_eq!(code, 7);
+        std::env::remove_var("ORBIS_ROOT");
+    }
+
+    /// Not in an orbis-game scope (systemd-run did not create one): no request, required -> 75.
+    #[test]
+    fn outside_a_game_scope_is_reported_not_requested() {
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let r = fixture("noscope", "user.slice/user-1000.slice/session-2.scope");
+        std::env::set_var("ORBIS_ROOT", &r);
+        std::env::set_var(ENV_VRAM, (512u64 << 20).to_string());
+        std::env::set_var(ENV_REQUIRE, "1");
+        let res = r.join("admission.json");
+        std::env::set_var(ENV_RESULT, &res);
+        assert_eq!(stage2(|| panic!("must not start"), Duration::from_millis(100)), admit::EXIT_ADMISSION);
+        let rec = json::parse(&fs::read_to_string(&res).unwrap()).unwrap();
+        assert_eq!(rec.get("state").and_then(Value::as_str), Some("NOT_IN_SCOPE"));
+        assert!(pending(&r, std::process::id()).is_none());
+        // request directory missing and not creatable: REQUEST_FAILED, not a silent timeout
+        let r = fixture("noreqdir", SCOPE);
+        fs::remove_dir_all(r.join("run/orbis/admit")).unwrap();
+        fs::write(r.join("run/orbis/admit"), "not a directory").unwrap();
+        std::env::set_var("ORBIS_ROOT", &r);
+        std::env::set_var(ENV_VRAM, (512u64 << 20).to_string());
+        std::env::set_var(ENV_REQUIRE, "1");
+        std::env::set_var(ENV_RESULT, r.join("a.json"));
+        assert_eq!(stage2(|| panic!("must not start"), Duration::from_millis(100)), admit::EXIT_ADMISSION);
+        let rec = json::parse(&fs::read_to_string(r.join("a.json")).unwrap()).unwrap();
+        assert_eq!(rec.get("state").and_then(Value::as_str), Some("REQUEST_FAILED"));
         std::env::remove_var("ORBIS_ROOT");
     }
 }
