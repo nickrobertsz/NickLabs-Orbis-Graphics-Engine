@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nicklabs.local/orbis/target.schema.json",
+  "title": "NickLabs Orbis board-support target (orbis-target/1)",
+  "description": "One file per common layer, southbridge, APU or console model. Model files extend a family file; the registry resolves 'extends' and the southbridge/APU references. Validated by diag/orbis_targets/registry.py (std-only subset of JSON Schema: type, required, enum, properties, additionalProperties, items, pattern).",
+  "type": "object",
+  "required": ["schema", "id", "kind", "name"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"enum": ["orbis-target/1"]},
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "kind": {"enum": ["common", "southbridge", "apu", "family", "model"]},
+    "name": {"type": "string"},
+    "extends": {"type": "string"},
+    "abstract": {"type": "boolean"},
+    "reference": {"type": "boolean"},
+    "family": {"enum": ["fat", "slim", "pro"]},
+    "models": {"type": "array", "items": {"type": "string", "pattern": "^CUH-[0-9?]{4}[A-Z?*]*$"}},
+    "chassis": {"type": "string"},
+    "motherboards": {"type": "array", "items": {"type": "string"}},
+    "southbridge": {"type": "string"},
+    "apu": {"type": "string"},
+    "part_numbers": {"type": "array", "items": {"type": "string"}},
+    "pci": {"type": "object"},
+    "subsys_subid": {"type": "object"},
+    "gpu": {"type": "object"},
+    "hdmi_bridge": {"type": "string"},
+    "wifi_bt": {"type": "array", "items": {"type": "string"}},
+    "memory": {"type": "object"},
+    "kernel": {"type": "object"},
+    "capabilities": {"type": "object"},
+    "unified_memory": {"type": "object"},
+    "community": {"type": "array", "items": {"type": "object"}},
+    "sources": {"type": "array", "items": {"type": "object"}},
+    "notes": {"type": "array", "items": {"type": "string"}},
+    "owner_console": {"type": "string"}
+  },
+  "$defs": {
+    "capability": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {"enum": ["verified", "awaiting-hardware", "unsupported"]},
+        "implemented_by": {"type": "array", "items": {"type": "string"}},
+        "evidence": {"type": "string"},
+        "reason": {"type": "string"},
+        "needs": {"type": "string"}
+      }
+    }
+  }
+}

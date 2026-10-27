@@ -1,0 +1,58 @@
+{
+ "schema": "orbis-target/1",
+ "id": "aeolia",
+ "kind": "southbridge",
+ "name": "Aeolia (CXD90025G)",
+ "part_numbers": [
+  "CXD90025G"
+ ],
+ "pci": {
+  "vendor": "0x104d",
+  "acpi": "0x908f",
+  "gbe": "0x909e",
+  "ahci": "0x909f",
+  "sdhci": "0x90a0",
+  "pcie": "0x90a1",
+  "dmac": "0x90a2",
+  "mem": "0x90a3",
+  "xhci": "0x90a4"
+ },
+ "subsys_subid": {
+  "0x10100": "A0",
+  "0x10200": "A1",
+  "0x10300": "A2"
+ },
+ "motherboards": [
+  "CVN-K12",
+  "SAA-001",
+  "SAB-001"
+ ],
+ "kernel": {
+  "aeolia-belize-6.15": {
+   "state": "awaiting-hardware",
+   "evidence": "feeRnt/ps4-linux-12xx lists CUH-1003, CUH-1004A, CUH-1116A working on 6.15.4 (community report, not NickLabs)"
+  }
+ },
+ "sources": [
+  {
+   "name": "psdevwiki PS4 Southbridge",
+   "url": "https://www.psdevwiki.com/ps4/Southbridge",
+   "role": "southbridge part numbers, motherboard and chassis mapping"
+  },
+  {
+   "name": "tomfitzhenry/ps4-which-southbridge",
+   "url": "https://github.com/tomfitzhenry/ps4-which-southbridge",
+   "role": "hw.sce_subsys_subid values per southbridge stepping (read under OrbisOS)"
+  },
+  {
+   "name": "kernel tree include/linux/pci_ids.h + drivers/gpu/drm/amd/amdgpu/ps4_bridge.c",
+   "url": "https://github.com/feeRnt/ps4-linux-12xx",
+   "role": "Sony southbridge PCI IDs; GPU PCI IDs 0x9920 (CUH-11xx), 0x9922 (CUH-12xx), 0x9923 (CUH-2xxx), 0x9924 (CUH-7xxx)"
+  },
+  {
+   "name": "feeRnt/ps4-linux-12xx",
+   "url": "https://github.com/feeRnt/ps4-linux-12xx",
+   "role": "base kernel tree (6.15.4-aeolia-belize-crashniels @108ef97 for Orbis 0.2.0); model/southbridge/kernel table"
+  }
+ ]
+}

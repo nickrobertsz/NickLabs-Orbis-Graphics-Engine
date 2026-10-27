@@ -1,0 +1,42 @@
+{
+ "schema": "orbis-target/1",
+ "id": "cuh-22xx-baikal",
+ "kind": "model",
+ "name": "PS4 Slim CUH-22xx (Baikal board)",
+ "extends": "common",
+ "family": "slim",
+ "southbridge": "baikal",
+ "apu": "liverpool-slim",
+ "models": [
+  "CUH-22??*"
+ ],
+ "chassis": "2200",
+ "motherboards": [
+  "SAF-004",
+  "SAF-006"
+ ],
+ "wifi_bt": [
+  "MediaTek MT7668",
+  "unknown"
+ ],
+ "unified_memory": {
+  "pool_gib": 8,
+  "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+  "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+  "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+  "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+  "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console",
+  "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+  "cus": 18,
+  "state": "awaiting-hardware"
+ },
+ "notes": [
+  "Every kernel-dependent capability is unsupported until a Baikal 6.15 flavor exists; shared userspace is unaffected.",
+  "NickLabs secondary console CUH-2215B is on the Baikal path (stated by Nick); CUH-22xx boards exist with Belize 2 too."
+ ],
+ "kernel": {
+  "flavor": null,
+  "state": "unsupported",
+  "reason": "Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)"
+ }
+}

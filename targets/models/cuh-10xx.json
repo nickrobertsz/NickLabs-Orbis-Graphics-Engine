@@ -1,0 +1,35 @@
+{
+ "schema": "orbis-target/1",
+ "id": "cuh-10xx",
+ "kind": "model",
+ "name": "PS4 CUH-10xx (launch Fat)",
+ "extends": "common",
+ "family": "fat",
+ "southbridge": "aeolia",
+ "apu": "liverpool-fat",
+ "models": [
+  "CUH-10??*"
+ ],
+ "chassis": "1000",
+ "motherboards": [
+  "SAA-001",
+  "CVN-K12"
+ ],
+ "wifi_bt": [
+  "Marvell 88W8797 (Torus 1)"
+ ],
+ "unified_memory": {
+  "pool_gib": 8,
+  "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+  "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+  "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+  "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+  "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console",
+  "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+  "cus": 18,
+  "state": "awaiting-hardware"
+ },
+ "notes": [
+  "Separate Blu-ray daughterboard (consolemods)."
+ ]
+}

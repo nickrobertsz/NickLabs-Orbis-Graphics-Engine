@@ -1,0 +1,32 @@
+{
+ "schema": "orbis-target/1",
+ "id": "cuh-12xx",
+ "kind": "model",
+ "name": "PS4 CUH-12xx (last Fat)",
+ "extends": "common",
+ "family": "fat",
+ "southbridge": "belize",
+ "apu": "liverpool-12xx",
+ "models": [
+  "CUH-12??*"
+ ],
+ "chassis": "1200",
+ "motherboards": [
+  "SAC-001"
+ ],
+ "wifi_bt": [
+  "Marvell 88W8897 (Torus 2)"
+ ],
+ "unified_memory": {
+  "pool_gib": 8,
+  "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+  "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+  "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+  "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+  "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console",
+  "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+  "cus": 18,
+  "state": "awaiting-hardware"
+ },
+ "notes": []
+}

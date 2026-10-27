@@ -1,0 +1,86 @@
+{
+ "schema": "orbis-target/1",
+ "id": "baikal",
+ "kind": "southbridge",
+ "name": "Baikal (CXD90042GG)",
+ "part_numbers": [
+  "CXD90042GG"
+ ],
+ "pci": {
+  "vendor": "0x104d",
+  "acpi": "0x90d7",
+  "gbe": "0x90d8",
+  "ahci": "0x90d9",
+  "sdhci": "0x90da",
+  "pcie": "0x90db",
+  "dmac": "0x90dc",
+  "mem": "0x90dd",
+  "xhci": "0x90de"
+ },
+ "subsys_subid": {
+  "0x30100": "A0",
+  "0x30200": "B0",
+  "0x30201": "B1"
+ },
+ "motherboards": [
+  "NVB-004",
+  "NVG-002",
+  "NVG-004",
+  "SAD-002",
+  "SAE-002",
+  "SAE-004",
+  "SAF-004",
+  "SAF-006"
+ ],
+ "kernel": {
+  "aeolia-belize-6.15": {
+   "state": "unsupported",
+   "reason": "no 6.15 Baikal kernel is known to work: the community Baikal kernel is 5.4.247-baikal-dfaus, the 5.15.15 Baikal port is reported non-functional, and the 7.0.8 Baikal binary (X-F1REBALL-X) has no pinned source. The 6.15.4 base tree only carries Baikal PCI IDs in apcie/ahci/sky2, not the Baikal patch set. The GE needs 6.15 interfaces (TTM shrink helpers, dmem cgroup).",
+   "path": "PortForge gap report: port the 5.4.247-baikal-dfaus Baikal patch set onto 6.15.4, or pin and review the 7.0.8 source once published"
+  }
+ },
+ "community": [
+  {
+   "kernel": "5.4.247-baikal-dfaus",
+   "repo": "sony-jaguar-devs/ps4-linux",
+   "state": "reported working (CUH-2215B, CUH-2216A B1, CUH-7116B, CUH-7202B, CUH-7216B)"
+  },
+  {
+   "kernel": "x_experimental__5.15.15-fix-baikal",
+   "repo": "sony-jaguar-devs/ps4-linux",
+   "state": "reported non-functional"
+  },
+  {
+   "kernel": "baikal 7.0.8 (binary)",
+   "repo": "X-F1REBALL-X/PS4-Linux",
+   "state": "reported working on CUH-2116A; source not pinned"
+  }
+ ],
+ "sources": [
+  {
+   "name": "psdevwiki PS4 Southbridge",
+   "url": "https://www.psdevwiki.com/ps4/Southbridge",
+   "role": "southbridge part numbers, motherboard and chassis mapping"
+  },
+  {
+   "name": "tomfitzhenry/ps4-which-southbridge",
+   "url": "https://github.com/tomfitzhenry/ps4-which-southbridge",
+   "role": "hw.sce_subsys_subid values per southbridge stepping (read under OrbisOS)"
+  },
+  {
+   "name": "kernel tree include/linux/pci_ids.h + drivers/gpu/drm/amd/amdgpu/ps4_bridge.c",
+   "url": "https://github.com/feeRnt/ps4-linux-12xx",
+   "role": "Sony southbridge PCI IDs; GPU PCI IDs 0x9920 (CUH-11xx), 0x9922 (CUH-12xx), 0x9923 (CUH-2xxx), 0x9924 (CUH-7xxx)"
+  },
+  {
+   "name": "sony-jaguar-devs/ps4-linux",
+   "url": "https://github.com/sony-jaguar-devs/ps4-linux",
+   "role": "same lineage; branches 5.4.247-baikal-dfaus, 5.15.15-belize, 6.15.4-aeolia-belize-crashniels, 7.0-Clean"
+  },
+  {
+   "name": "X-F1REBALL-X/PS4-Linux",
+   "url": "https://github.com/X-F1REBALL-X/PS4-Linux",
+   "role": "binary Belize 7.1.7 / Baikal 7.0.8 kernels reported working on CUH-7116B / CUH-2116A; no pinned source"
+  }
+ ]
+}

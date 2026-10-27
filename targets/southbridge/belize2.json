@@ -1,0 +1,53 @@
+{
+ "schema": "orbis-target/1",
+ "id": "belize2",
+ "kind": "southbridge",
+ "name": "Belize 2 (CXD90046GG)",
+ "part_numbers": [
+  "CXD90046GG"
+ ],
+ "pci": {
+  "vendor": "0x104d",
+  "note": "PCI device IDs not documented in the sources used; assumed to present the Belize IDs (0x90c8-0x90cf) because Belize-labelled Slim/Pro consoles run Belize kernels. Needs lspci -nn from a Belize 2 console."
+ },
+ "subsys_subid": {
+  "0x40100": "A0"
+ },
+ "motherboards": [
+  "NVB-003",
+  "NVG-001",
+  "SAD-003 (1-981-769-21/-31)",
+  "SAE-001",
+  "SAE-003",
+  "SAF-003",
+  "SAF-005"
+ ],
+ "kernel": {
+  "aeolia-belize-6.15": {
+   "state": "awaiting-hardware",
+   "evidence": "no community report of 6.15.4 on Belize 2; 5.15.15-belize reported on CUH-2216A (Belize) and a Belize 7.1.7 kernel on CUH-7116B (X-F1REBALL-X)"
+  }
+ },
+ "sources": [
+  {
+   "name": "psdevwiki PS4 Southbridge",
+   "url": "https://www.psdevwiki.com/ps4/Southbridge",
+   "role": "southbridge part numbers, motherboard and chassis mapping"
+  },
+  {
+   "name": "tomfitzhenry/ps4-which-southbridge",
+   "url": "https://github.com/tomfitzhenry/ps4-which-southbridge",
+   "role": "hw.sce_subsys_subid values per southbridge stepping (read under OrbisOS)"
+  },
+  {
+   "name": "feeRnt/ps4-linux-12xx",
+   "url": "https://github.com/feeRnt/ps4-linux-12xx",
+   "role": "base kernel tree (6.15.4-aeolia-belize-crashniels @108ef97 for Orbis 0.2.0); model/southbridge/kernel table"
+  },
+  {
+   "name": "X-F1REBALL-X/PS4-Linux",
+   "url": "https://github.com/X-F1REBALL-X/PS4-Linux",
+   "role": "binary Belize 7.1.7 / Baikal 7.0.8 kernels reported working on CUH-7116B / CUH-2116A; no pinned source"
+  }
+ ]
+}

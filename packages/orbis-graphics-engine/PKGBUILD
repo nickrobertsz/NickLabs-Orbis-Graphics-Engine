@@ -22,9 +22,13 @@ _root() { echo "${startdir}/../.."; }
 package() {
   local R; R="$(_root)"
   install -d "$pkgdir/usr/lib/orbis-graphics"
-  cp -r "$R/diag/orbis_engine" "$pkgdir/usr/lib/orbis-graphics/"
-  find "$pkgdir/usr/lib/orbis-graphics/orbis_engine" -name __pycache__ -prune -exec rm -rf {} +
-  python -m compileall -q "$pkgdir/usr/lib/orbis-graphics/orbis_engine"
+  cp -r "$R/diag/orbis_engine" "$R/diag/orbis_targets" "$pkgdir/usr/lib/orbis-graphics/"
+  find "$pkgdir/usr/lib/orbis-graphics/orbis_engine" "$pkgdir/usr/lib/orbis-graphics/orbis_targets" -name __pycache__ -prune -exec rm -rf {} +
+  python -m compileall -q "$pkgdir/usr/lib/orbis-graphics/orbis_engine" "$pkgdir/usr/lib/orbis-graphics/orbis_targets"
+  # Porting Kit target registry (read by orbis-hw identify/compatibility/qualify)
+  install -d "$pkgdir/usr/share/orbis/targets"
+  cp -r "$R/targets/schema" "$R/targets/common" "$R/targets/southbridge" "$R/targets/apu" "$R/targets/models" "$R/targets/generated" \
+    "$pkgdir/usr/share/orbis/targets/"
   for b in orbis-hw orbis-mem orbis-debug orbis-video orbis-ai-gpu orbis-blackbox orbis-hwd; do
     install -Dm755 "$R/diag/bin/$b" "$pkgdir/usr/bin/$b"
   done

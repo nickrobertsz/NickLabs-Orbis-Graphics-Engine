@@ -1,0 +1,35 @@
+{
+ "schema": "orbis-target/1",
+ "id": "cuh-20xx-belize",
+ "kind": "model",
+ "name": "PS4 Slim CUH-20xx (Belize board)",
+ "extends": "common",
+ "family": "slim",
+ "southbridge": "belize",
+ "apu": "liverpool-slim",
+ "models": [
+  "CUH-20??*"
+ ],
+ "chassis": "2000",
+ "motherboards": [
+  "SAD-001",
+  "SAD-003 (1-981-769-11)"
+ ],
+ "wifi_bt": [
+  "unknown"
+ ],
+ "unified_memory": {
+  "pool_gib": 8,
+  "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+  "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+  "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+  "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+  "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console",
+  "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+  "cus": 18,
+  "state": "awaiting-hardware"
+ },
+ "notes": [
+  "SAD-003 revisions -21/-31 may carry Belize 2 (psdevwiki marks it uncertain)."
+ ]
+}

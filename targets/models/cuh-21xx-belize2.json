@@ -1,0 +1,33 @@
+{
+ "schema": "orbis-target/1",
+ "id": "cuh-21xx-belize2",
+ "kind": "model",
+ "name": "PS4 Slim CUH-21xx (Belize 2 board)",
+ "extends": "common",
+ "family": "slim",
+ "southbridge": "belize2",
+ "apu": "liverpool-slim",
+ "models": [
+  "CUH-21??*"
+ ],
+ "chassis": "2100",
+ "motherboards": [
+  "SAE-001",
+  "SAE-003"
+ ],
+ "wifi_bt": [
+  "MediaTek MT7668 (some boards)"
+ ],
+ "unified_memory": {
+  "pool_gib": 8,
+  "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+  "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+  "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+  "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+  "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console",
+  "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+  "cus": 18,
+  "state": "awaiting-hardware"
+ },
+ "notes": []
+}

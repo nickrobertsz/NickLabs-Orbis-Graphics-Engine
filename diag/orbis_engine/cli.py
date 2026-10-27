@@ -33,7 +33,13 @@ def _common(ap):
 
 
 def main_hw(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="orbis-hw", description="Orbis hardware status and controls")
+    argv = sys.argv[1:] if argv is None else argv
+    # Porting Kit: target identification (read-only probe, registry, qualification records)
+    if argv and argv[0] in ("probe", "identify", "compatibility", "qualify"):
+        from orbis_targets.cli import hw_main
+        return hw_main(argv[0], argv[1:])
+    ap = argparse.ArgumentParser(prog="orbis-hw", description="Orbis hardware status and controls "
+                                 "(also: probe | identify | compatibility | qualify, see orbis-hw <cmd> --help)")
     _common(ap)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status")
@@ -145,6 +151,7 @@ def main_debug(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("collect")
     c.add_argument("--out")
+    c.add_argument("--hardware", action="store_true", help="add the target probe, identification and compatibility (read-only)")
     e = sub.add_parser("export")
     e.add_argument("--out")
     for n in ("last-crash", "gpu", "memory", "video", "boots"):
@@ -162,7 +169,7 @@ def main_debug(argv=None) -> int:
     a = ap.parse_args(argv)
     try:
         if a.cmd == "collect":
-            d = debug.collect(Path(a.out) if a.out else None)
+            d = debug.collect(Path(a.out) if a.out else None, hardware=a.hardware)
             out = {"bundle_dir": str(d), "report": str(d / "report.txt")}
         elif a.cmd == "export":
             out = debug.export(Path(a.out) if a.out else None)

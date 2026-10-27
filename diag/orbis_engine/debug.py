@@ -67,7 +67,22 @@ def memory_view() -> dict:
     return {"ownership": memory.ownership(), "plan_for_current_mode": memory.plan(memory.current_mode())}
 
 
-def collect(out: Path | None = None, run=runner.run) -> Path:
+def hardware_section() -> dict:
+    """Porting Kit view of this console: redacted probe, identification, compatibility (read-only)."""
+    from orbis_targets import compat as tcompat, match as tmatch, probe as tprobe
+    from orbis_targets.cli import recovery
+    from orbis_targets.registry import Registry
+    reg = Registry()
+    doc = tprobe.probe()
+    m = tmatch.match(reg, tprobe.facts(doc))
+    out = {"probe": doc, "identify": m}
+    if m.get("result") == "confirmed":
+        out["compatibility"] = tcompat.compatibility(reg, m["target"], doc)
+        out["recovery"] = recovery(reg.resolve(m["target"]))
+    return out
+
+
+def collect(out: Path | None = None, run=runner.run, hardware: bool = False) -> Path:
     stamp = time.strftime("%Y%m%d-%H%M%S")
     out = out or Path(p("var/lib/orbis-blackbox/exports")) / f"orbis-debug-{stamp}"
     out.mkdir(parents=True, exist_ok=True)
@@ -89,6 +104,8 @@ def collect(out: Path | None = None, run=runner.run) -> Path:
               "ai": section("ai", ai.status),
               "blackbox": section("blackbox", lambda: {"boots": blackbox.list_boots(), "last_crash": blackbox.last_crash()}),
               "kdump": section("kdump", kdump.status)}
+    if hardware:
+        report["hardware"] = section("hardware", hardware_section)
     g = sysfs.primary_gpu()
     if g and g.debugfs:
         for name in DEBUGFS_FILES:

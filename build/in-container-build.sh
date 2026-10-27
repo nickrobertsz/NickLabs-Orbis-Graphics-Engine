@@ -115,7 +115,7 @@ step "32-bit Mesa (build deps preinstalled by Containerfile.gfx; mesa-orbis-ps4 
 mkc mesa/lib32 mesa-lib32 nodeps "$R/mesa"
 step "orbis-graphics tools + meta package"
 mkc packages/orbis-graphics orbis-graphics nodeps "$R/diag" "$R/docs" "$R/LICENSE"
-mkc packages/orbis-graphics-engine orbis-graphics-engine nodeps "$R/diag" "$R/tools" "$R/LICENSE"
+mkc packages/orbis-graphics-engine orbis-graphics-engine nodeps "$R/diag" "$R/tools" "$R/targets" "$R/LICENSE"
 step "orbis-native (Rust, btver2 + fat LTO, gated by the Orbis 0.2.0 ISA audit)"
 [ -f /orbis/platform/orbis/isa_audit.py ] || { echo "/orbis/platform (Orbis 0.2.0 platform/) is not mounted: build-pack.sh mounts it" >&2; exit 6; }
 cp -a /orbis/platform "$B/packages/orbis-native/orbis-platform" && chown -R builder "$B/packages/orbis-native/orbis-platform"

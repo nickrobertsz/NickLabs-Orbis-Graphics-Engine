@@ -1,0 +1,3638 @@
+{
+ "reference": "cuh-1215a",
+ "schema": "orbis-target-registry/1",
+ "sources_files": {
+  "aeolia": "southbridge/aeolia.json",
+  "baikal": "southbridge/baikal.json",
+  "belize": "southbridge/belize.json",
+  "belize2": "southbridge/belize2.json",
+  "common": "common/base.json",
+  "cuh-10xx": "models/cuh-10xx.json",
+  "cuh-11xx": "models/cuh-11xx.json",
+  "cuh-1215a": "models/cuh-1215a.json",
+  "cuh-12xx": "models/cuh-12xx.json",
+  "cuh-20xx-baikal": "models/cuh-20xx-baikal.json",
+  "cuh-20xx-belize": "models/cuh-20xx-belize.json",
+  "cuh-21xx-baikal": "models/cuh-21xx-baikal.json",
+  "cuh-21xx-belize2": "models/cuh-21xx-belize2.json",
+  "cuh-22xx-baikal": "models/cuh-22xx-baikal.json",
+  "cuh-22xx-belize2": "models/cuh-22xx-belize2.json",
+  "cuh-70xx": "models/cuh-70xx.json",
+  "cuh-71xx-baikal": "models/cuh-71xx-baikal.json",
+  "cuh-71xx-belize2": "models/cuh-71xx-belize2.json",
+  "cuh-72xx-baikal": "models/cuh-72xx-baikal.json",
+  "cuh-72xx-belize2": "models/cuh-72xx-belize2.json",
+  "gladius": "apu/gladius.json",
+  "liverpool-12xx": "apu/liverpool-12xx.json",
+  "liverpool-fat": "apu/liverpool-fat.json",
+  "liverpool-slim": "apu/liverpool-slim.json"
+ },
+ "targets": {
+  "cuh-10xx": {
+   "apu": "liverpool-fat",
+   "apu_info": {
+    "gpu": {
+     "amdgpu_chip": "CHIP_LIVERPOOL",
+     "compute_units": 18,
+     "pci_device": "0x9920",
+     "pci_vendor": "0x1002",
+     "process": "28 nm"
+    },
+    "hdmi_bridge": "MN86471A",
+    "id": "liverpool-fat",
+    "memory": {
+     "gddr5_bytes": 8589934592,
+     "peak_bandwidth_gbs": 176
+    },
+    "name": "Liverpool (CUH-10xx/11xx)",
+    "notes": [
+     "ps4_bridge.c names 0x9920 PCI_DEVICE_ID_CUH_11XX; CUH-10xx assumed identical (launch boards)"
+    ]
+   },
+   "capabilities": {
+    "boot": {
+     "implemented_by": [
+      "Orbis 0.2.0 loader + GE loader patch (memory contract, time handoff)",
+      "kernel flavor"
+     ],
+     "needs": "boot log (orbis-debug collect --hardware) from the console",
+     "state": "awaiting-hardware"
+    },
+    "cpufreq": {
+     "implemented_by": [
+      "ge-0007 Jaguar hardware P-state driver"
+     ],
+     "needs": "scaling_driver present, P-state switch observed",
+     "state": "awaiting-hardware"
+    },
+    "display-hdmi": {
+     "implemented_by": [
+      "ps4_bridge (MN86471A / MN864729) + ge-0005/0006 robustness knobs"
+     ],
+     "needs": "picture on HDMI at boot and after modeset",
+     "path": "ps4_bridge MN86471A path (GPU 0x9920)",
+     "state": "awaiting-hardware"
+    },
+    "ge-telemetry": {
+     "implemented_by": [
+      "ge-0008 engine activity + runtime GTT budget"
+     ],
+     "needs": "orbis_engine_busy readable under load",
+     "state": "awaiting-hardware"
+    },
+    "ge-unified-memory": {
+     "implemented_by": [
+      "ge-0014 shrinker/trim",
+      "ge-0015 GTT dmem region",
+      "ge-0016 corrections",
+      "stable-6.15/0001-0002 TTM fixes",
+      "orbis-memd",
+      "orbis-run admission"
+     ],
+     "needs": "orbis-mem bench PASS, set-budget enforced, admission ADMITTED on a game",
+     "state": "awaiting-hardware"
+    },
+    "gpu-3d": {
+     "implemented_by": [
+      "amdgpu CIK Liverpool/Gladius",
+      "Mesa 26.2.5 radeonsi/RADV"
+     ],
+     "needs": "orbis-gpu qualify PASS",
+     "state": "awaiting-hardware"
+    },
+    "gpu-clocks": {
+     "implemented_by": [
+      "ge-0002 SCLK restore/control",
+      "ge-0009 SMU mailbox (opt-in)"
+     ],
+     "needs": "ps4_sclk state=max measured",
+     "state": "awaiting-hardware"
+    },
+    "hdmi-audio": {
+     "implemented_by": [
+      "ge-0004 audio DTO"
+     ],
+     "needs": "speaker-test over HDMI",
+     "state": "awaiting-hardware"
+    },
+    "icc-power-fan": {
+     "implemented_by": [
+      "ps4-apcie-icc",
+      "ps4-fan + ge-0001 fan threshold"
+     ],
+     "needs": "orbis-hw status: fan threshold readable and writable, power button event",
+     "state": "awaiting-hardware"
+    },
+    "rtc": {
+     "implemented_by": [
+      "ge-0011 Aeolia/Belize RTC class device",
+      "ge-0010 loader wall clock"
+     ],
+     "needs": "orbis-time status shows source rtc-hardware or loader",
+     "state": "awaiting-hardware"
+    },
+    "southbridge-io": {
+     "implemented_by": [
+      "aeolia/belize apcie, ahci, xhci, sky2, sdhci drivers in the base tree"
+     ],
+     "needs": "lspci -nnk + dmesg showing every southbridge function bound",
+     "state": "awaiting-hardware"
+    },
+    "video-decode": {
+     "reason": "UVD on Liverpool is a research kernel only (--research-uvd, never packed)",
+     "state": "unsupported"
+    },
+    "wifi-bt": {
+     "implemented_by": [
+      "mwifiex (Marvell) or mt7668 depending on board"
+     ],
+     "needs": "association on the NickLabs LAN",
+     "state": "awaiting-hardware"
+    }
+   },
+   "chassis": "1000",
+   "family": "fat",
+   "file": "models/cuh-10xx.json",
+   "id": "cuh-10xx",
+   "kernel": {
+    "base": "feeRnt 6.15.4 crashnt-4.7 @108ef97 + Orbis 0001",
+    "evidence": "feeRnt/ps4-linux-12xx lists CUH-1003, CUH-1004A, CUH-1116A working on 6.15.4 (community report, not NickLabs)",
+    "flavor": "aeolia-belize-6.15",
+    "state": "awaiting-hardware"
+   },
+   "kind": "model",
+   "models": [
+    "CUH-10??*"
+   ],
+   "motherboards": [
+    "SAA-001",
+    "CVN-K12"
+   ],
+   "name": "PS4 CUH-10xx (launch Fat)",
+   "notes": [
+    "Separate Blu-ray daughterboard (consolemods)."
+   ],
+   "reference": false,
+   "sources": [
+    {
+     "name": "feeRnt/ps4-linux-12xx",
+     "role": "base kernel tree (6.15.4-aeolia-belize-crashniels @108ef97 for Orbis 0.2.0); model/southbridge/kernel table",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    },
+    {
+     "name": "sony-jaguar-devs/ps4-linux",
+     "role": "same lineage; branches 5.4.247-baikal-dfaus, 5.15.15-belize, 6.15.4-aeolia-belize-crashniels, 7.0-Clean",
+     "url": "https://github.com/sony-jaguar-devs/ps4-linux"
+    },
+    {
+     "name": "codedwrench/ps4-linux",
+     "role": "upstream of the feeRnt / sony-jaguar-devs forks",
+     "url": "https://github.com/codedwrench/ps4-linux"
+    },
+    {
+     "name": "psdevwiki PS4 Southbridge",
+     "role": "southbridge part numbers, motherboard and chassis mapping",
+     "url": "https://www.psdevwiki.com/ps4/Southbridge"
+    },
+    {
+     "name": "tomfitzhenry/ps4-which-southbridge",
+     "role": "hw.sce_subsys_subid values per southbridge stepping (read under OrbisOS)",
+     "url": "https://github.com/tomfitzhenry/ps4-which-southbridge"
+    },
+    {
+     "name": "X-F1REBALL-X/PS4-Linux",
+     "role": "binary Belize 7.1.7 / Baikal 7.0.8 kernels reported working on CUH-7116B / CUH-2116A; no pinned source",
+     "url": "https://github.com/X-F1REBALL-X/PS4-Linux"
+    },
+    {
+     "name": "kernel.org stable",
+     "role": "upstream/stable backports (stable-6.15/0001-0002), reproducible tarballs",
+     "url": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
+    },
+    {
+     "name": "kernel tree include/linux/pci_ids.h + drivers/gpu/drm/amd/amdgpu/ps4_bridge.c",
+     "role": "Sony southbridge PCI IDs; GPU PCI IDs 0x9920 (CUH-11xx), 0x9922 (CUH-12xx), 0x9923 (CUH-2xxx), 0x9924 (CUH-7xxx)",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    }
+   ],
+   "southbridge": "aeolia",
+   "southbridge_info": {
+    "id": "aeolia",
+    "kernel": {
+     "aeolia-belize-6.15": {
+      "evidence": "feeRnt/ps4-linux-12xx lists CUH-1003, CUH-1004A, CUH-1116A working on 6.15.4 (community report, not NickLabs)",
+      "state": "awaiting-hardware"
+     }
+    },
+    "name": "Aeolia (CXD90025G)",
+    "part_numbers": [
+     "CXD90025G"
+    ],
+    "pci": {
+     "acpi": "0x908f",
+     "ahci": "0x909f",
+     "dmac": "0x90a2",
+     "gbe": "0x909e",
+     "mem": "0x90a3",
+     "pcie": "0x90a1",
+     "sdhci": "0x90a0",
+     "vendor": "0x104d",
+     "xhci": "0x90a4"
+    },
+    "subsys_subid": {
+     "0x10100": "A0",
+     "0x10200": "A1",
+     "0x10300": "A2"
+    }
+   },
+   "status": "awaiting-hardware",
+   "unified_memory": {
+    "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+    "contract": "loader carve-out (vram.txt) + runtime GTT budget + dmem limits",
+    "cus": 18,
+    "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+    "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+    "pool": "8 GiB GDDR5 shared by CPU and GPU",
+    "pool_gib": 8,
+    "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+    "state": "awaiting-hardware",
+    "states_note": "per-target values below override",
+    "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+    "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console"
+   },
+   "wifi_bt": [
+    "Marvell 88W8797 (Torus 1)"
+   ]
+  },
+  "cuh-11xx": {
+   "apu": "liverpool-fat",
+   "apu_info": {
+    "gpu": {
+     "amdgpu_chip": "CHIP_LIVERPOOL",
+     "compute_units": 18,
+     "pci_device": "0x9920",
+     "pci_vendor": "0x1002",
+     "process": "28 nm"
+    },
+    "hdmi_bridge": "MN86471A",
+    "id": "liverpool-fat",
+    "memory": {
+     "gddr5_bytes": 8589934592,
+     "peak_bandwidth_gbs": 176
+    },
+    "name": "Liverpool (CUH-10xx/11xx)",
+    "notes": [
+     "ps4_bridge.c names 0x9920 PCI_DEVICE_ID_CUH_11XX; CUH-10xx assumed identical (launch boards)"
+    ]
+   },
+   "capabilities": {
+    "boot": {
+     "implemented_by": [
+      "Orbis 0.2.0 loader + GE loader patch (memory contract, time handoff)",
+      "kernel flavor"
+     ],
+     "needs": "boot log (orbis-debug collect --hardware) from the console",
+     "state": "awaiting-hardware"
+    },
+    "cpufreq": {
+     "implemented_by": [
+      "ge-0007 Jaguar hardware P-state driver"
+     ],
+     "needs": "scaling_driver present, P-state switch observed",
+     "state": "awaiting-hardware"
+    },
+    "display-hdmi": {
+     "implemented_by": [
+      "ps4_bridge (MN86471A / MN864729) + ge-0005/0006 robustness knobs"
+     ],
+     "needs": "picture on HDMI at boot and after modeset",
+     "path": "ps4_bridge MN86471A path (GPU 0x9920)",
+     "state": "awaiting-hardware"
+    },
+    "ge-telemetry": {
+     "implemented_by": [
+      "ge-0008 engine activity + runtime GTT budget"
+     ],
+     "needs": "orbis_engine_busy readable under load",
+     "state": "awaiting-hardware"
+    },
+    "ge-unified-memory": {
+     "implemented_by": [
+      "ge-0014 shrinker/trim",
+      "ge-0015 GTT dmem region",
+      "ge-0016 corrections",
+      "stable-6.15/0001-0002 TTM fixes",
+      "orbis-memd",
+      "orbis-run admission"
+     ],
+     "needs": "orbis-mem bench PASS, set-budget enforced, admission ADMITTED on a game",
+     "state": "awaiting-hardware"
+    },
+    "gpu-3d": {
+     "implemented_by": [
+      "amdgpu CIK Liverpool/Gladius",
+      "Mesa 26.2.5 radeonsi/RADV"
+     ],
+     "needs": "orbis-gpu qualify PASS",
+     "state": "awaiting-hardware"
+    },
+    "gpu-clocks": {
+     "implemented_by": [
+      "ge-0002 SCLK restore/control",
+      "ge-0009 SMU mailbox (opt-in)"
+     ],
+     "needs": "ps4_sclk state=max measured",
+     "state": "awaiting-hardware"
+    },
+    "hdmi-audio": {
+     "implemented_by": [
+      "ge-0004 audio DTO"
+     ],
+     "needs": "speaker-test over HDMI",
+     "state": "awaiting-hardware"
+    },
+    "icc-power-fan": {
+     "implemented_by": [
+      "ps4-apcie-icc",
+      "ps4-fan + ge-0001 fan threshold"
+     ],
+     "needs": "orbis-hw status: fan threshold readable and writable, power button event",
+     "state": "awaiting-hardware"
+    },
+    "rtc": {
+     "implemented_by": [
+      "ge-0011 Aeolia/Belize RTC class device",
+      "ge-0010 loader wall clock"
+     ],
+     "needs": "orbis-time status shows source rtc-hardware or loader",
+     "state": "awaiting-hardware"
+    },
+    "southbridge-io": {
+     "implemented_by": [
+      "aeolia/belize apcie, ahci, xhci, sky2, sdhci drivers in the base tree"
+     ],
+     "needs": "lspci -nnk + dmesg showing every southbridge function bound",
+     "state": "awaiting-hardware"
+    },
+    "video-decode": {
+     "reason": "UVD on Liverpool is a research kernel only (--research-uvd, never packed)",
+     "state": "unsupported"
+    },
+    "wifi-bt": {
+     "implemented_by": [
+      "mwifiex (Marvell) or mt7668 depending on board"
+     ],
+     "needs": "association on the NickLabs LAN",
+     "state": "awaiting-hardware"
+    }
+   },
+   "chassis": "1100",
+   "family": "fat",
+   "file": "models/cuh-11xx.json",
+   "id": "cuh-11xx",
+   "kernel": {
+    "base": "feeRnt 6.15.4 crashnt-4.7 @108ef97 + Orbis 0001",
+    "evidence": "feeRnt/ps4-linux-12xx lists CUH-1003, CUH-1004A, CUH-1116A working on 6.15.4 (community report, not NickLabs)",
+    "flavor": "aeolia-belize-6.15",
+    "state": "awaiting-hardware"
+   },
+   "kind": "model",
+   "models": [
+    "CUH-11??*"
+   ],
+   "motherboards": [
+    "SAB-001"
+   ],
+   "name": "PS4 CUH-11xx (Fat revision)",
+   "notes": [
+    "Wi-Fi chip of CUH-1116A unknown (feeRnt table)."
+   ],
+   "reference": false,
+   "sources": [
+    {
+     "name": "feeRnt/ps4-linux-12xx",
+     "role": "base kernel tree (6.15.4-aeolia-belize-crashniels @108ef97 for Orbis 0.2.0); model/southbridge/kernel table",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    },
+    {
+     "name": "sony-jaguar-devs/ps4-linux",
+     "role": "same lineage; branches 5.4.247-baikal-dfaus, 5.15.15-belize, 6.15.4-aeolia-belize-crashniels, 7.0-Clean",
+     "url": "https://github.com/sony-jaguar-devs/ps4-linux"
+    },
+    {
+     "name": "codedwrench/ps4-linux",
+     "role": "upstream of the feeRnt / sony-jaguar-devs forks",
+     "url": "https://github.com/codedwrench/ps4-linux"
+    },
+    {
+     "name": "psdevwiki PS4 Southbridge",
+     "role": "southbridge part numbers, motherboard and chassis mapping",
+     "url": "https://www.psdevwiki.com/ps4/Southbridge"
+    },
+    {
+     "name": "tomfitzhenry/ps4-which-southbridge",
+     "role": "hw.sce_subsys_subid values per southbridge stepping (read under OrbisOS)",
+     "url": "https://github.com/tomfitzhenry/ps4-which-southbridge"
+    },
+    {
+     "name": "X-F1REBALL-X/PS4-Linux",
+     "role": "binary Belize 7.1.7 / Baikal 7.0.8 kernels reported working on CUH-7116B / CUH-2116A; no pinned source",
+     "url": "https://github.com/X-F1REBALL-X/PS4-Linux"
+    },
+    {
+     "name": "kernel.org stable",
+     "role": "upstream/stable backports (stable-6.15/0001-0002), reproducible tarballs",
+     "url": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
+    },
+    {
+     "name": "kernel tree include/linux/pci_ids.h + drivers/gpu/drm/amd/amdgpu/ps4_bridge.c",
+     "role": "Sony southbridge PCI IDs; GPU PCI IDs 0x9920 (CUH-11xx), 0x9922 (CUH-12xx), 0x9923 (CUH-2xxx), 0x9924 (CUH-7xxx)",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    }
+   ],
+   "southbridge": "aeolia",
+   "southbridge_info": {
+    "id": "aeolia",
+    "kernel": {
+     "aeolia-belize-6.15": {
+      "evidence": "feeRnt/ps4-linux-12xx lists CUH-1003, CUH-1004A, CUH-1116A working on 6.15.4 (community report, not NickLabs)",
+      "state": "awaiting-hardware"
+     }
+    },
+    "name": "Aeolia (CXD90025G)",
+    "part_numbers": [
+     "CXD90025G"
+    ],
+    "pci": {
+     "acpi": "0x908f",
+     "ahci": "0x909f",
+     "dmac": "0x90a2",
+     "gbe": "0x909e",
+     "mem": "0x90a3",
+     "pcie": "0x90a1",
+     "sdhci": "0x90a0",
+     "vendor": "0x104d",
+     "xhci": "0x90a4"
+    },
+    "subsys_subid": {
+     "0x10100": "A0",
+     "0x10200": "A1",
+     "0x10300": "A2"
+    }
+   },
+   "status": "awaiting-hardware",
+   "unified_memory": {
+    "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+    "contract": "loader carve-out (vram.txt) + runtime GTT budget + dmem limits",
+    "cus": 18,
+    "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+    "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+    "pool": "8 GiB GDDR5 shared by CPU and GPU",
+    "pool_gib": 8,
+    "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+    "state": "awaiting-hardware",
+    "states_note": "per-target values below override",
+    "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+    "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console"
+   },
+   "wifi_bt": [
+    "Marvell 88W8797 (Torus 1)",
+    "unknown on some boards"
+   ]
+  },
+  "cuh-1215a": {
+   "apu": "liverpool-12xx",
+   "apu_info": {
+    "gpu": {
+     "amdgpu_chip": "CHIP_LIVERPOOL",
+     "compute_units": 18,
+     "pci_device": "0x9922",
+     "pci_vendor": "0x1002",
+     "process": "28 nm"
+    },
+    "hdmi_bridge": "MN864729",
+    "id": "liverpool-12xx",
+    "memory": {
+     "gddr5_bytes": 8589934592,
+     "peak_bandwidth_gbs": 176
+    },
+    "name": "Liverpool (CUH-12xx)",
+    "notes": [
+     "ps4_bridge.c: PCI_DEVICE_ID_CUH_12XX"
+    ]
+   },
+   "capabilities": {
+    "boot": {
+     "implemented_by": [
+      "Orbis 0.2.0 loader + GE loader patch (memory contract, time handoff)",
+      "kernel flavor"
+     ],
+     "needs": "boot log (orbis-debug collect --hardware) from the console",
+     "state": "awaiting-hardware"
+    },
+    "cpufreq": {
+     "implemented_by": [
+      "ge-0007 Jaguar hardware P-state driver"
+     ],
+     "needs": "scaling_driver present, P-state switch observed",
+     "state": "awaiting-hardware"
+    },
+    "display-hdmi": {
+     "implemented_by": [
+      "ps4_bridge (MN86471A / MN864729) + ge-0005/0006 robustness knobs"
+     ],
+     "needs": "picture on HDMI at boot and after modeset",
+     "path": "ps4_bridge MN864729 path (GPU 0x9922)",
+     "state": "awaiting-hardware"
+    },
+    "ge-telemetry": {
+     "implemented_by": [
+      "ge-0008 engine activity + runtime GTT budget"
+     ],
+     "needs": "orbis_engine_busy readable under load",
+     "state": "awaiting-hardware"
+    },
+    "ge-unified-memory": {
+     "implemented_by": [
+      "ge-0014 shrinker/trim",
+      "ge-0015 GTT dmem region",
+      "ge-0016 corrections",
+      "stable-6.15/0001-0002 TTM fixes",
+      "orbis-memd",
+      "orbis-run admission"
+     ],
+     "needs": "orbis-mem bench PASS, set-budget enforced, admission ADMITTED on a game",
+     "state": "awaiting-hardware"
+    },
+    "gpu-3d": {
+     "implemented_by": [
+      "amdgpu CIK Liverpool/Gladius",
+      "Mesa 26.2.5 radeonsi/RADV"
+     ],
+     "needs": "orbis-gpu qualify PASS",
+     "state": "awaiting-hardware"
+    },
+    "gpu-clocks": {
+     "implemented_by": [
+      "ge-0002 SCLK restore/control",
+      "ge-0009 SMU mailbox (opt-in)"
+     ],
+     "needs": "ps4_sclk state=max measured",
+     "state": "awaiting-hardware"
+    },
+    "hdmi-audio": {
+     "implemented_by": [
+      "ge-0004 audio DTO"
+     ],
+     "needs": "speaker-test over HDMI",
+     "state": "awaiting-hardware"
+    },
+    "icc-power-fan": {
+     "implemented_by": [
+      "ps4-apcie-icc",
+      "ps4-fan + ge-0001 fan threshold"
+     ],
+     "needs": "orbis-hw status: fan threshold readable and writable, power button event",
+     "state": "awaiting-hardware"
+    },
+    "rtc": {
+     "implemented_by": [
+      "ge-0011 Aeolia/Belize RTC class device",
+      "ge-0010 loader wall clock"
+     ],
+     "needs": "orbis-time status shows source rtc-hardware or loader",
+     "state": "awaiting-hardware"
+    },
+    "southbridge-io": {
+     "implemented_by": [
+      "aeolia/belize apcie, ahci, xhci, sky2, sdhci drivers in the base tree"
+     ],
+     "needs": "lspci -nnk + dmesg showing every southbridge function bound",
+     "state": "awaiting-hardware"
+    },
+    "video-decode": {
+     "reason": "UVD on Liverpool is a research kernel only (--research-uvd, never packed)",
+     "state": "unsupported"
+    },
+    "wifi-bt": {
+     "implemented_by": [
+      "mwifiex (Marvell) or mt7668 depending on board"
+     ],
+     "needs": "association on the NickLabs LAN",
+     "state": "awaiting-hardware"
+    }
+   },
+   "chassis": "1200",
+   "family": "fat",
+   "file": "models/cuh-1215a.json",
+   "id": "cuh-1215a",
+   "kernel": {
+    "base": "feeRnt 6.15.4 crashnt-4.7 @108ef97 + Orbis 0001",
+    "evidence": "base tree of Orbis 0.2.0 (CUH-12xx Belize); feeRnt lists CUH-1215(A/B), CUH-1216(A/B) on 6.15.4",
+    "flavor": "aeolia-belize-6.15",
+    "state": "awaiting-hardware"
+   },
+   "kind": "model",
+   "models": [
+    "CUH-1215A"
+   ],
+   "motherboards": [
+    "SAC-001"
+   ],
+   "name": "PS4 CUH-1215A (NickLabs reference console)",
+   "notes": [
+    "Reference target of Orbis 0.2.0 (profile cuh-1215a: Liverpool + Marvell 88W8897 required, EDID optional) and of the Graphics Engine.",
+    "Nothing of Orbis 0.2.0 or the Graphics Engine has been booted on it yet: no capability is 'verified'."
+   ],
+   "owner_console": "NickLabs primary development console (firmware 13.50, GoldHEN)",
+   "reference": true,
+   "sources": [
+    {
+     "name": "feeRnt/ps4-linux-12xx",
+     "role": "base kernel tree (6.15.4-aeolia-belize-crashniels @108ef97 for Orbis 0.2.0); model/southbridge/kernel table",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    },
+    {
+     "name": "sony-jaguar-devs/ps4-linux",
+     "role": "same lineage; branches 5.4.247-baikal-dfaus, 5.15.15-belize, 6.15.4-aeolia-belize-crashniels, 7.0-Clean",
+     "url": "https://github.com/sony-jaguar-devs/ps4-linux"
+    },
+    {
+     "name": "codedwrench/ps4-linux",
+     "role": "upstream of the feeRnt / sony-jaguar-devs forks",
+     "url": "https://github.com/codedwrench/ps4-linux"
+    },
+    {
+     "name": "psdevwiki PS4 Southbridge",
+     "role": "southbridge part numbers, motherboard and chassis mapping",
+     "url": "https://www.psdevwiki.com/ps4/Southbridge"
+    },
+    {
+     "name": "tomfitzhenry/ps4-which-southbridge",
+     "role": "hw.sce_subsys_subid values per southbridge stepping (read under OrbisOS)",
+     "url": "https://github.com/tomfitzhenry/ps4-which-southbridge"
+    },
+    {
+     "name": "X-F1REBALL-X/PS4-Linux",
+     "role": "binary Belize 7.1.7 / Baikal 7.0.8 kernels reported working on CUH-7116B / CUH-2116A; no pinned source",
+     "url": "https://github.com/X-F1REBALL-X/PS4-Linux"
+    },
+    {
+     "name": "kernel.org stable",
+     "role": "upstream/stable backports (stable-6.15/0001-0002), reproducible tarballs",
+     "url": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
+    },
+    {
+     "name": "kernel tree include/linux/pci_ids.h + drivers/gpu/drm/amd/amdgpu/ps4_bridge.c",
+     "role": "Sony southbridge PCI IDs; GPU PCI IDs 0x9920 (CUH-11xx), 0x9922 (CUH-12xx), 0x9923 (CUH-2xxx), 0x9924 (CUH-7xxx)",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    }
+   ],
+   "southbridge": "belize",
+   "southbridge_info": {
+    "id": "belize",
+    "kernel": {
+     "aeolia-belize-6.15": {
+      "evidence": "base tree of Orbis 0.2.0 (CUH-12xx Belize); feeRnt lists CUH-1215(A/B), CUH-1216(A/B) on 6.15.4",
+      "state": "awaiting-hardware"
+     }
+    },
+    "name": "Belize (CXD90036G)",
+    "part_numbers": [
+     "CXD90036G"
+    ],
+    "pci": {
+     "acpi": "0x90c8",
+     "ahci": "0x90ca",
+     "dmac": "0x90cd",
+     "gbe": "0x90c9",
+     "mem": "0x90ce",
+     "pcie": "0x90cc",
+     "sdhci": "0x90cb",
+     "vendor": "0x104d",
+     "xhci": "0x90cf"
+    },
+    "subsys_subid": {
+     "0x20100": "A0",
+     "0x20200": "B0"
+    }
+   },
+   "status": "awaiting-hardware",
+   "unified_memory": {
+    "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+    "contract": "loader carve-out (vram.txt) + runtime GTT budget + dmem limits",
+    "cus": 18,
+    "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+    "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+    "pool": "8 GiB GDDR5 shared by CPU and GPU",
+    "pool_gib": 8,
+    "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+    "state": "awaiting-hardware",
+    "states_note": "per-target values below override",
+    "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+    "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console"
+   },
+   "wifi_bt": [
+    "Marvell 88W8897 (Torus 2)"
+   ]
+  },
+  "cuh-12xx": {
+   "apu": "liverpool-12xx",
+   "apu_info": {
+    "gpu": {
+     "amdgpu_chip": "CHIP_LIVERPOOL",
+     "compute_units": 18,
+     "pci_device": "0x9922",
+     "pci_vendor": "0x1002",
+     "process": "28 nm"
+    },
+    "hdmi_bridge": "MN864729",
+    "id": "liverpool-12xx",
+    "memory": {
+     "gddr5_bytes": 8589934592,
+     "peak_bandwidth_gbs": 176
+    },
+    "name": "Liverpool (CUH-12xx)",
+    "notes": [
+     "ps4_bridge.c: PCI_DEVICE_ID_CUH_12XX"
+    ]
+   },
+   "capabilities": {
+    "boot": {
+     "implemented_by": [
+      "Orbis 0.2.0 loader + GE loader patch (memory contract, time handoff)",
+      "kernel flavor"
+     ],
+     "needs": "boot log (orbis-debug collect --hardware) from the console",
+     "state": "awaiting-hardware"
+    },
+    "cpufreq": {
+     "implemented_by": [
+      "ge-0007 Jaguar hardware P-state driver"
+     ],
+     "needs": "scaling_driver present, P-state switch observed",
+     "state": "awaiting-hardware"
+    },
+    "display-hdmi": {
+     "implemented_by": [
+      "ps4_bridge (MN86471A / MN864729) + ge-0005/0006 robustness knobs"
+     ],
+     "needs": "picture on HDMI at boot and after modeset",
+     "path": "ps4_bridge MN864729 path (GPU 0x9922)",
+     "state": "awaiting-hardware"
+    },
+    "ge-telemetry": {
+     "implemented_by": [
+      "ge-0008 engine activity + runtime GTT budget"
+     ],
+     "needs": "orbis_engine_busy readable under load",
+     "state": "awaiting-hardware"
+    },
+    "ge-unified-memory": {
+     "implemented_by": [
+      "ge-0014 shrinker/trim",
+      "ge-0015 GTT dmem region",
+      "ge-0016 corrections",
+      "stable-6.15/0001-0002 TTM fixes",
+      "orbis-memd",
+      "orbis-run admission"
+     ],
+     "needs": "orbis-mem bench PASS, set-budget enforced, admission ADMITTED on a game",
+     "state": "awaiting-hardware"
+    },
+    "gpu-3d": {
+     "implemented_by": [
+      "amdgpu CIK Liverpool/Gladius",
+      "Mesa 26.2.5 radeonsi/RADV"
+     ],
+     "needs": "orbis-gpu qualify PASS",
+     "state": "awaiting-hardware"
+    },
+    "gpu-clocks": {
+     "implemented_by": [
+      "ge-0002 SCLK restore/control",
+      "ge-0009 SMU mailbox (opt-in)"
+     ],
+     "needs": "ps4_sclk state=max measured",
+     "state": "awaiting-hardware"
+    },
+    "hdmi-audio": {
+     "implemented_by": [
+      "ge-0004 audio DTO"
+     ],
+     "needs": "speaker-test over HDMI",
+     "state": "awaiting-hardware"
+    },
+    "icc-power-fan": {
+     "implemented_by": [
+      "ps4-apcie-icc",
+      "ps4-fan + ge-0001 fan threshold"
+     ],
+     "needs": "orbis-hw status: fan threshold readable and writable, power button event",
+     "state": "awaiting-hardware"
+    },
+    "rtc": {
+     "implemented_by": [
+      "ge-0011 Aeolia/Belize RTC class device",
+      "ge-0010 loader wall clock"
+     ],
+     "needs": "orbis-time status shows source rtc-hardware or loader",
+     "state": "awaiting-hardware"
+    },
+    "southbridge-io": {
+     "implemented_by": [
+      "aeolia/belize apcie, ahci, xhci, sky2, sdhci drivers in the base tree"
+     ],
+     "needs": "lspci -nnk + dmesg showing every southbridge function bound",
+     "state": "awaiting-hardware"
+    },
+    "video-decode": {
+     "reason": "UVD on Liverpool is a research kernel only (--research-uvd, never packed)",
+     "state": "unsupported"
+    },
+    "wifi-bt": {
+     "implemented_by": [
+      "mwifiex (Marvell) or mt7668 depending on board"
+     ],
+     "needs": "association on the NickLabs LAN",
+     "state": "awaiting-hardware"
+    }
+   },
+   "chassis": "1200",
+   "family": "fat",
+   "file": "models/cuh-12xx.json",
+   "id": "cuh-12xx",
+   "kernel": {
+    "base": "feeRnt 6.15.4 crashnt-4.7 @108ef97 + Orbis 0001",
+    "evidence": "base tree of Orbis 0.2.0 (CUH-12xx Belize); feeRnt lists CUH-1215(A/B), CUH-1216(A/B) on 6.15.4",
+    "flavor": "aeolia-belize-6.15",
+    "state": "awaiting-hardware"
+   },
+   "kind": "model",
+   "models": [
+    "CUH-12??*"
+   ],
+   "motherboards": [
+    "SAC-001"
+   ],
+   "name": "PS4 CUH-12xx (last Fat)",
+   "notes": [],
+   "reference": false,
+   "sources": [
+    {
+     "name": "feeRnt/ps4-linux-12xx",
+     "role": "base kernel tree (6.15.4-aeolia-belize-crashniels @108ef97 for Orbis 0.2.0); model/southbridge/kernel table",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    },
+    {
+     "name": "sony-jaguar-devs/ps4-linux",
+     "role": "same lineage; branches 5.4.247-baikal-dfaus, 5.15.15-belize, 6.15.4-aeolia-belize-crashniels, 7.0-Clean",
+     "url": "https://github.com/sony-jaguar-devs/ps4-linux"
+    },
+    {
+     "name": "codedwrench/ps4-linux",
+     "role": "upstream of the feeRnt / sony-jaguar-devs forks",
+     "url": "https://github.com/codedwrench/ps4-linux"
+    },
+    {
+     "name": "psdevwiki PS4 Southbridge",
+     "role": "southbridge part numbers, motherboard and chassis mapping",
+     "url": "https://www.psdevwiki.com/ps4/Southbridge"
+    },
+    {
+     "name": "tomfitzhenry/ps4-which-southbridge",
+     "role": "hw.sce_subsys_subid values per southbridge stepping (read under OrbisOS)",
+     "url": "https://github.com/tomfitzhenry/ps4-which-southbridge"
+    },
+    {
+     "name": "X-F1REBALL-X/PS4-Linux",
+     "role": "binary Belize 7.1.7 / Baikal 7.0.8 kernels reported working on CUH-7116B / CUH-2116A; no pinned source",
+     "url": "https://github.com/X-F1REBALL-X/PS4-Linux"
+    },
+    {
+     "name": "kernel.org stable",
+     "role": "upstream/stable backports (stable-6.15/0001-0002), reproducible tarballs",
+     "url": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
+    },
+    {
+     "name": "kernel tree include/linux/pci_ids.h + drivers/gpu/drm/amd/amdgpu/ps4_bridge.c",
+     "role": "Sony southbridge PCI IDs; GPU PCI IDs 0x9920 (CUH-11xx), 0x9922 (CUH-12xx), 0x9923 (CUH-2xxx), 0x9924 (CUH-7xxx)",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    }
+   ],
+   "southbridge": "belize",
+   "southbridge_info": {
+    "id": "belize",
+    "kernel": {
+     "aeolia-belize-6.15": {
+      "evidence": "base tree of Orbis 0.2.0 (CUH-12xx Belize); feeRnt lists CUH-1215(A/B), CUH-1216(A/B) on 6.15.4",
+      "state": "awaiting-hardware"
+     }
+    },
+    "name": "Belize (CXD90036G)",
+    "part_numbers": [
+     "CXD90036G"
+    ],
+    "pci": {
+     "acpi": "0x90c8",
+     "ahci": "0x90ca",
+     "dmac": "0x90cd",
+     "gbe": "0x90c9",
+     "mem": "0x90ce",
+     "pcie": "0x90cc",
+     "sdhci": "0x90cb",
+     "vendor": "0x104d",
+     "xhci": "0x90cf"
+    },
+    "subsys_subid": {
+     "0x20100": "A0",
+     "0x20200": "B0"
+    }
+   },
+   "status": "awaiting-hardware",
+   "unified_memory": {
+    "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+    "contract": "loader carve-out (vram.txt) + runtime GTT budget + dmem limits",
+    "cus": 18,
+    "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+    "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+    "pool": "8 GiB GDDR5 shared by CPU and GPU",
+    "pool_gib": 8,
+    "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+    "state": "awaiting-hardware",
+    "states_note": "per-target values below override",
+    "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+    "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console"
+   },
+   "wifi_bt": [
+    "Marvell 88W8897 (Torus 2)"
+   ]
+  },
+  "cuh-20xx-baikal": {
+   "apu": "liverpool-slim",
+   "apu_info": {
+    "gpu": {
+     "amdgpu_chip": "CHIP_LIVERPOOL",
+     "compute_units": 18,
+     "pci_device": "0x9923",
+     "pci_vendor": "0x1002",
+     "process": "16 nm"
+    },
+    "hdmi_bridge": "MN864729",
+    "id": "liverpool-slim",
+    "memory": {
+     "gddr5_bytes": 8589934592,
+     "peak_bandwidth_gbs": 176
+    },
+    "name": "Liverpool 16 nm (CUH-2xxx Slim)",
+    "notes": [
+     "ps4_bridge.c: PCI_DEVICE_ID_CUH_2XXX"
+    ]
+   },
+   "capabilities": {
+    "boot": {
+     "implemented_by": [
+      "Orbis 0.2.0 loader + GE loader patch (memory contract, time handoff)",
+      "kernel flavor"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "cpufreq": {
+     "implemented_by": [
+      "ge-0007 Jaguar hardware P-state driver"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "display-hdmi": {
+     "implemented_by": [
+      "ps4_bridge (MN86471A / MN864729) + ge-0005/0006 robustness knobs"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "ge-telemetry": {
+     "implemented_by": [
+      "ge-0008 engine activity + runtime GTT budget"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "ge-unified-memory": {
+     "implemented_by": [
+      "ge-0014 shrinker/trim",
+      "ge-0015 GTT dmem region",
+      "ge-0016 corrections",
+      "stable-6.15/0001-0002 TTM fixes",
+      "orbis-memd",
+      "orbis-run admission"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "gpu-3d": {
+     "implemented_by": [
+      "amdgpu CIK Liverpool/Gladius",
+      "Mesa 26.2.5 radeonsi/RADV"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "gpu-clocks": {
+     "implemented_by": [
+      "ge-0002 SCLK restore/control",
+      "ge-0009 SMU mailbox (opt-in)"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "hdmi-audio": {
+     "implemented_by": [
+      "ge-0004 audio DTO"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "icc-power-fan": {
+     "implemented_by": [
+      "ps4-apcie-icc",
+      "ps4-fan + ge-0001 fan threshold"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "rtc": {
+     "implemented_by": [
+      "ge-0011 Aeolia/Belize RTC class device",
+      "ge-0010 loader wall clock"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "southbridge-io": {
+     "implemented_by": [
+      "aeolia/belize apcie, ahci, xhci, sky2, sdhci drivers in the base tree"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "video-decode": {
+     "reason": "UVD on Liverpool is a research kernel only (--research-uvd, never packed)",
+     "state": "unsupported"
+    },
+    "wifi-bt": {
+     "implemented_by": [
+      "mwifiex (Marvell) or mt7668 depending on board"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    }
+   },
+   "chassis": "2000",
+   "family": "slim",
+   "file": "models/cuh-20xx-baikal.json",
+   "id": "cuh-20xx-baikal",
+   "kernel": {
+    "base": "feeRnt 6.15.4 crashnt-4.7 @108ef97 + Orbis 0001",
+    "flavor": null,
+    "flavors": {
+     "aeolia-belize-6.15": "the only GE kernel flavor that exists"
+    },
+    "reason": "Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+    "series": "kernel/patches/series (stable-6.15/0001-0002, ge-6.15/0001-0016)",
+    "state": "unsupported"
+   },
+   "kind": "model",
+   "models": [
+    "CUH-20??*"
+   ],
+   "motherboards": [
+    "SAD-002"
+   ],
+   "name": "PS4 Slim CUH-20xx (Baikal board)",
+   "notes": [
+    "Every kernel-dependent capability is unsupported until a Baikal 6.15 flavor exists; shared userspace is unaffected."
+   ],
+   "reference": false,
+   "sources": [
+    {
+     "name": "feeRnt/ps4-linux-12xx",
+     "role": "base kernel tree (6.15.4-aeolia-belize-crashniels @108ef97 for Orbis 0.2.0); model/southbridge/kernel table",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    },
+    {
+     "name": "sony-jaguar-devs/ps4-linux",
+     "role": "same lineage; branches 5.4.247-baikal-dfaus, 5.15.15-belize, 6.15.4-aeolia-belize-crashniels, 7.0-Clean",
+     "url": "https://github.com/sony-jaguar-devs/ps4-linux"
+    },
+    {
+     "name": "codedwrench/ps4-linux",
+     "role": "upstream of the feeRnt / sony-jaguar-devs forks",
+     "url": "https://github.com/codedwrench/ps4-linux"
+    },
+    {
+     "name": "psdevwiki PS4 Southbridge",
+     "role": "southbridge part numbers, motherboard and chassis mapping",
+     "url": "https://www.psdevwiki.com/ps4/Southbridge"
+    },
+    {
+     "name": "tomfitzhenry/ps4-which-southbridge",
+     "role": "hw.sce_subsys_subid values per southbridge stepping (read under OrbisOS)",
+     "url": "https://github.com/tomfitzhenry/ps4-which-southbridge"
+    },
+    {
+     "name": "X-F1REBALL-X/PS4-Linux",
+     "role": "binary Belize 7.1.7 / Baikal 7.0.8 kernels reported working on CUH-7116B / CUH-2116A; no pinned source",
+     "url": "https://github.com/X-F1REBALL-X/PS4-Linux"
+    },
+    {
+     "name": "kernel.org stable",
+     "role": "upstream/stable backports (stable-6.15/0001-0002), reproducible tarballs",
+     "url": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
+    },
+    {
+     "name": "kernel tree include/linux/pci_ids.h + drivers/gpu/drm/amd/amdgpu/ps4_bridge.c",
+     "role": "Sony southbridge PCI IDs; GPU PCI IDs 0x9920 (CUH-11xx), 0x9922 (CUH-12xx), 0x9923 (CUH-2xxx), 0x9924 (CUH-7xxx)",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    }
+   ],
+   "southbridge": "baikal",
+   "southbridge_info": {
+    "community": [
+     {
+      "kernel": "5.4.247-baikal-dfaus",
+      "repo": "sony-jaguar-devs/ps4-linux",
+      "state": "reported working (CUH-2215B, CUH-2216A B1, CUH-7116B, CUH-7202B, CUH-7216B)"
+     },
+     {
+      "kernel": "x_experimental__5.15.15-fix-baikal",
+      "repo": "sony-jaguar-devs/ps4-linux",
+      "state": "reported non-functional"
+     },
+     {
+      "kernel": "baikal 7.0.8 (binary)",
+      "repo": "X-F1REBALL-X/PS4-Linux",
+      "state": "reported working on CUH-2116A; source not pinned"
+     }
+    ],
+    "id": "baikal",
+    "kernel": {
+     "aeolia-belize-6.15": {
+      "path": "PortForge gap report: port the 5.4.247-baikal-dfaus Baikal patch set onto 6.15.4, or pin and review the 7.0.8 source once published",
+      "reason": "no 6.15 Baikal kernel is known to work: the community Baikal kernel is 5.4.247-baikal-dfaus, the 5.15.15 Baikal port is reported non-functional, and the 7.0.8 Baikal binary (X-F1REBALL-X) has no pinned source. The 6.15.4 base tree only carries Baikal PCI IDs in apcie/ahci/sky2, not the Baikal patch set. The GE needs 6.15 interfaces (TTM shrink helpers, dmem cgroup).",
+      "state": "unsupported"
+     }
+    },
+    "name": "Baikal (CXD90042GG)",
+    "part_numbers": [
+     "CXD90042GG"
+    ],
+    "pci": {
+     "acpi": "0x90d7",
+     "ahci": "0x90d9",
+     "dmac": "0x90dc",
+     "gbe": "0x90d8",
+     "mem": "0x90dd",
+     "pcie": "0x90db",
+     "sdhci": "0x90da",
+     "vendor": "0x104d",
+     "xhci": "0x90de"
+    },
+    "subsys_subid": {
+     "0x30100": "A0",
+     "0x30200": "B0",
+     "0x30201": "B1"
+    }
+   },
+   "status": "unsupported",
+   "unified_memory": {
+    "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+    "contract": "loader carve-out (vram.txt) + runtime GTT budget + dmem limits",
+    "cus": 18,
+    "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+    "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+    "pool": "8 GiB GDDR5 shared by CPU and GPU",
+    "pool_gib": 8,
+    "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+    "state": "awaiting-hardware",
+    "states_note": "per-target values below override",
+    "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+    "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console"
+   },
+   "wifi_bt": [
+    "unknown"
+   ]
+  },
+  "cuh-20xx-belize": {
+   "apu": "liverpool-slim",
+   "apu_info": {
+    "gpu": {
+     "amdgpu_chip": "CHIP_LIVERPOOL",
+     "compute_units": 18,
+     "pci_device": "0x9923",
+     "pci_vendor": "0x1002",
+     "process": "16 nm"
+    },
+    "hdmi_bridge": "MN864729",
+    "id": "liverpool-slim",
+    "memory": {
+     "gddr5_bytes": 8589934592,
+     "peak_bandwidth_gbs": 176
+    },
+    "name": "Liverpool 16 nm (CUH-2xxx Slim)",
+    "notes": [
+     "ps4_bridge.c: PCI_DEVICE_ID_CUH_2XXX"
+    ]
+   },
+   "capabilities": {
+    "boot": {
+     "implemented_by": [
+      "Orbis 0.2.0 loader + GE loader patch (memory contract, time handoff)",
+      "kernel flavor"
+     ],
+     "needs": "boot log (orbis-debug collect --hardware) from the console",
+     "state": "awaiting-hardware"
+    },
+    "cpufreq": {
+     "implemented_by": [
+      "ge-0007 Jaguar hardware P-state driver"
+     ],
+     "needs": "scaling_driver present, P-state switch observed",
+     "state": "awaiting-hardware"
+    },
+    "display-hdmi": {
+     "implemented_by": [
+      "ps4_bridge (MN86471A / MN864729) + ge-0005/0006 robustness knobs"
+     ],
+     "needs": "picture on HDMI at boot and after modeset",
+     "path": "ps4_bridge MN864729 path (GPU 0x9923)",
+     "state": "awaiting-hardware"
+    },
+    "ge-telemetry": {
+     "implemented_by": [
+      "ge-0008 engine activity + runtime GTT budget"
+     ],
+     "needs": "orbis_engine_busy readable under load",
+     "state": "awaiting-hardware"
+    },
+    "ge-unified-memory": {
+     "implemented_by": [
+      "ge-0014 shrinker/trim",
+      "ge-0015 GTT dmem region",
+      "ge-0016 corrections",
+      "stable-6.15/0001-0002 TTM fixes",
+      "orbis-memd",
+      "orbis-run admission"
+     ],
+     "needs": "orbis-mem bench PASS, set-budget enforced, admission ADMITTED on a game",
+     "state": "awaiting-hardware"
+    },
+    "gpu-3d": {
+     "implemented_by": [
+      "amdgpu CIK Liverpool/Gladius",
+      "Mesa 26.2.5 radeonsi/RADV"
+     ],
+     "needs": "orbis-gpu qualify PASS",
+     "state": "awaiting-hardware"
+    },
+    "gpu-clocks": {
+     "implemented_by": [
+      "ge-0002 SCLK restore/control",
+      "ge-0009 SMU mailbox (opt-in)"
+     ],
+     "needs": "ps4_sclk state=max measured",
+     "state": "awaiting-hardware"
+    },
+    "hdmi-audio": {
+     "implemented_by": [
+      "ge-0004 audio DTO"
+     ],
+     "needs": "speaker-test over HDMI",
+     "state": "awaiting-hardware"
+    },
+    "icc-power-fan": {
+     "implemented_by": [
+      "ps4-apcie-icc",
+      "ps4-fan + ge-0001 fan threshold"
+     ],
+     "needs": "orbis-hw status: fan threshold readable and writable, power button event",
+     "state": "awaiting-hardware"
+    },
+    "rtc": {
+     "implemented_by": [
+      "ge-0011 Aeolia/Belize RTC class device",
+      "ge-0010 loader wall clock"
+     ],
+     "needs": "orbis-time status shows source rtc-hardware or loader",
+     "state": "awaiting-hardware"
+    },
+    "southbridge-io": {
+     "implemented_by": [
+      "aeolia/belize apcie, ahci, xhci, sky2, sdhci drivers in the base tree"
+     ],
+     "needs": "lspci -nnk + dmesg showing every southbridge function bound",
+     "state": "awaiting-hardware"
+    },
+    "video-decode": {
+     "reason": "UVD on Liverpool is a research kernel only (--research-uvd, never packed)",
+     "state": "unsupported"
+    },
+    "wifi-bt": {
+     "implemented_by": [
+      "mwifiex (Marvell) or mt7668 depending on board"
+     ],
+     "needs": "association on the NickLabs LAN",
+     "state": "awaiting-hardware"
+    }
+   },
+   "chassis": "2000",
+   "family": "slim",
+   "file": "models/cuh-20xx-belize.json",
+   "id": "cuh-20xx-belize",
+   "kernel": {
+    "base": "feeRnt 6.15.4 crashnt-4.7 @108ef97 + Orbis 0001",
+    "evidence": "base tree of Orbis 0.2.0 (CUH-12xx Belize); feeRnt lists CUH-1215(A/B), CUH-1216(A/B) on 6.15.4",
+    "flavor": "aeolia-belize-6.15",
+    "state": "awaiting-hardware"
+   },
+   "kind": "model",
+   "models": [
+    "CUH-20??*"
+   ],
+   "motherboards": [
+    "SAD-001",
+    "SAD-003 (1-981-769-11)"
+   ],
+   "name": "PS4 Slim CUH-20xx (Belize board)",
+   "notes": [
+    "SAD-003 revisions -21/-31 may carry Belize 2 (psdevwiki marks it uncertain)."
+   ],
+   "reference": false,
+   "sources": [
+    {
+     "name": "feeRnt/ps4-linux-12xx",
+     "role": "base kernel tree (6.15.4-aeolia-belize-crashniels @108ef97 for Orbis 0.2.0); model/southbridge/kernel table",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    },
+    {
+     "name": "sony-jaguar-devs/ps4-linux",
+     "role": "same lineage; branches 5.4.247-baikal-dfaus, 5.15.15-belize, 6.15.4-aeolia-belize-crashniels, 7.0-Clean",
+     "url": "https://github.com/sony-jaguar-devs/ps4-linux"
+    },
+    {
+     "name": "codedwrench/ps4-linux",
+     "role": "upstream of the feeRnt / sony-jaguar-devs forks",
+     "url": "https://github.com/codedwrench/ps4-linux"
+    },
+    {
+     "name": "psdevwiki PS4 Southbridge",
+     "role": "southbridge part numbers, motherboard and chassis mapping",
+     "url": "https://www.psdevwiki.com/ps4/Southbridge"
+    },
+    {
+     "name": "tomfitzhenry/ps4-which-southbridge",
+     "role": "hw.sce_subsys_subid values per southbridge stepping (read under OrbisOS)",
+     "url": "https://github.com/tomfitzhenry/ps4-which-southbridge"
+    },
+    {
+     "name": "X-F1REBALL-X/PS4-Linux",
+     "role": "binary Belize 7.1.7 / Baikal 7.0.8 kernels reported working on CUH-7116B / CUH-2116A; no pinned source",
+     "url": "https://github.com/X-F1REBALL-X/PS4-Linux"
+    },
+    {
+     "name": "kernel.org stable",
+     "role": "upstream/stable backports (stable-6.15/0001-0002), reproducible tarballs",
+     "url": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
+    },
+    {
+     "name": "kernel tree include/linux/pci_ids.h + drivers/gpu/drm/amd/amdgpu/ps4_bridge.c",
+     "role": "Sony southbridge PCI IDs; GPU PCI IDs 0x9920 (CUH-11xx), 0x9922 (CUH-12xx), 0x9923 (CUH-2xxx), 0x9924 (CUH-7xxx)",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    }
+   ],
+   "southbridge": "belize",
+   "southbridge_info": {
+    "id": "belize",
+    "kernel": {
+     "aeolia-belize-6.15": {
+      "evidence": "base tree of Orbis 0.2.0 (CUH-12xx Belize); feeRnt lists CUH-1215(A/B), CUH-1216(A/B) on 6.15.4",
+      "state": "awaiting-hardware"
+     }
+    },
+    "name": "Belize (CXD90036G)",
+    "part_numbers": [
+     "CXD90036G"
+    ],
+    "pci": {
+     "acpi": "0x90c8",
+     "ahci": "0x90ca",
+     "dmac": "0x90cd",
+     "gbe": "0x90c9",
+     "mem": "0x90ce",
+     "pcie": "0x90cc",
+     "sdhci": "0x90cb",
+     "vendor": "0x104d",
+     "xhci": "0x90cf"
+    },
+    "subsys_subid": {
+     "0x20100": "A0",
+     "0x20200": "B0"
+    }
+   },
+   "status": "awaiting-hardware",
+   "unified_memory": {
+    "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+    "contract": "loader carve-out (vram.txt) + runtime GTT budget + dmem limits",
+    "cus": 18,
+    "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+    "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+    "pool": "8 GiB GDDR5 shared by CPU and GPU",
+    "pool_gib": 8,
+    "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+    "state": "awaiting-hardware",
+    "states_note": "per-target values below override",
+    "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+    "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console"
+   },
+   "wifi_bt": [
+    "unknown"
+   ]
+  },
+  "cuh-21xx-baikal": {
+   "apu": "liverpool-slim",
+   "apu_info": {
+    "gpu": {
+     "amdgpu_chip": "CHIP_LIVERPOOL",
+     "compute_units": 18,
+     "pci_device": "0x9923",
+     "pci_vendor": "0x1002",
+     "process": "16 nm"
+    },
+    "hdmi_bridge": "MN864729",
+    "id": "liverpool-slim",
+    "memory": {
+     "gddr5_bytes": 8589934592,
+     "peak_bandwidth_gbs": 176
+    },
+    "name": "Liverpool 16 nm (CUH-2xxx Slim)",
+    "notes": [
+     "ps4_bridge.c: PCI_DEVICE_ID_CUH_2XXX"
+    ]
+   },
+   "capabilities": {
+    "boot": {
+     "implemented_by": [
+      "Orbis 0.2.0 loader + GE loader patch (memory contract, time handoff)",
+      "kernel flavor"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "cpufreq": {
+     "implemented_by": [
+      "ge-0007 Jaguar hardware P-state driver"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "display-hdmi": {
+     "implemented_by": [
+      "ps4_bridge (MN86471A / MN864729) + ge-0005/0006 robustness knobs"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "ge-telemetry": {
+     "implemented_by": [
+      "ge-0008 engine activity + runtime GTT budget"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "ge-unified-memory": {
+     "implemented_by": [
+      "ge-0014 shrinker/trim",
+      "ge-0015 GTT dmem region",
+      "ge-0016 corrections",
+      "stable-6.15/0001-0002 TTM fixes",
+      "orbis-memd",
+      "orbis-run admission"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "gpu-3d": {
+     "implemented_by": [
+      "amdgpu CIK Liverpool/Gladius",
+      "Mesa 26.2.5 radeonsi/RADV"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "gpu-clocks": {
+     "implemented_by": [
+      "ge-0002 SCLK restore/control",
+      "ge-0009 SMU mailbox (opt-in)"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "hdmi-audio": {
+     "implemented_by": [
+      "ge-0004 audio DTO"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "icc-power-fan": {
+     "implemented_by": [
+      "ps4-apcie-icc",
+      "ps4-fan + ge-0001 fan threshold"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "rtc": {
+     "implemented_by": [
+      "ge-0011 Aeolia/Belize RTC class device",
+      "ge-0010 loader wall clock"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "southbridge-io": {
+     "implemented_by": [
+      "aeolia/belize apcie, ahci, xhci, sky2, sdhci drivers in the base tree"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "video-decode": {
+     "reason": "UVD on Liverpool is a research kernel only (--research-uvd, never packed)",
+     "state": "unsupported"
+    },
+    "wifi-bt": {
+     "implemented_by": [
+      "mwifiex (Marvell) or mt7668 depending on board"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    }
+   },
+   "chassis": "2100",
+   "family": "slim",
+   "file": "models/cuh-21xx-baikal.json",
+   "id": "cuh-21xx-baikal",
+   "kernel": {
+    "base": "feeRnt 6.15.4 crashnt-4.7 @108ef97 + Orbis 0001",
+    "flavor": null,
+    "flavors": {
+     "aeolia-belize-6.15": "the only GE kernel flavor that exists"
+    },
+    "reason": "Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+    "series": "kernel/patches/series (stable-6.15/0001-0002, ge-6.15/0001-0016)",
+    "state": "unsupported"
+   },
+   "kind": "model",
+   "models": [
+    "CUH-21??*"
+   ],
+   "motherboards": [
+    "SAE-002",
+    "SAE-004"
+   ],
+   "name": "PS4 Slim CUH-21xx (Baikal board)",
+   "notes": [
+    "Every kernel-dependent capability is unsupported until a Baikal 6.15 flavor exists; shared userspace is unaffected."
+   ],
+   "reference": false,
+   "sources": [
+    {
+     "name": "feeRnt/ps4-linux-12xx",
+     "role": "base kernel tree (6.15.4-aeolia-belize-crashniels @108ef97 for Orbis 0.2.0); model/southbridge/kernel table",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    },
+    {
+     "name": "sony-jaguar-devs/ps4-linux",
+     "role": "same lineage; branches 5.4.247-baikal-dfaus, 5.15.15-belize, 6.15.4-aeolia-belize-crashniels, 7.0-Clean",
+     "url": "https://github.com/sony-jaguar-devs/ps4-linux"
+    },
+    {
+     "name": "codedwrench/ps4-linux",
+     "role": "upstream of the feeRnt / sony-jaguar-devs forks",
+     "url": "https://github.com/codedwrench/ps4-linux"
+    },
+    {
+     "name": "psdevwiki PS4 Southbridge",
+     "role": "southbridge part numbers, motherboard and chassis mapping",
+     "url": "https://www.psdevwiki.com/ps4/Southbridge"
+    },
+    {
+     "name": "tomfitzhenry/ps4-which-southbridge",
+     "role": "hw.sce_subsys_subid values per southbridge stepping (read under OrbisOS)",
+     "url": "https://github.com/tomfitzhenry/ps4-which-southbridge"
+    },
+    {
+     "name": "X-F1REBALL-X/PS4-Linux",
+     "role": "binary Belize 7.1.7 / Baikal 7.0.8 kernels reported working on CUH-7116B / CUH-2116A; no pinned source",
+     "url": "https://github.com/X-F1REBALL-X/PS4-Linux"
+    },
+    {
+     "name": "kernel.org stable",
+     "role": "upstream/stable backports (stable-6.15/0001-0002), reproducible tarballs",
+     "url": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
+    },
+    {
+     "name": "kernel tree include/linux/pci_ids.h + drivers/gpu/drm/amd/amdgpu/ps4_bridge.c",
+     "role": "Sony southbridge PCI IDs; GPU PCI IDs 0x9920 (CUH-11xx), 0x9922 (CUH-12xx), 0x9923 (CUH-2xxx), 0x9924 (CUH-7xxx)",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    }
+   ],
+   "southbridge": "baikal",
+   "southbridge_info": {
+    "community": [
+     {
+      "kernel": "5.4.247-baikal-dfaus",
+      "repo": "sony-jaguar-devs/ps4-linux",
+      "state": "reported working (CUH-2215B, CUH-2216A B1, CUH-7116B, CUH-7202B, CUH-7216B)"
+     },
+     {
+      "kernel": "x_experimental__5.15.15-fix-baikal",
+      "repo": "sony-jaguar-devs/ps4-linux",
+      "state": "reported non-functional"
+     },
+     {
+      "kernel": "baikal 7.0.8 (binary)",
+      "repo": "X-F1REBALL-X/PS4-Linux",
+      "state": "reported working on CUH-2116A; source not pinned"
+     }
+    ],
+    "id": "baikal",
+    "kernel": {
+     "aeolia-belize-6.15": {
+      "path": "PortForge gap report: port the 5.4.247-baikal-dfaus Baikal patch set onto 6.15.4, or pin and review the 7.0.8 source once published",
+      "reason": "no 6.15 Baikal kernel is known to work: the community Baikal kernel is 5.4.247-baikal-dfaus, the 5.15.15 Baikal port is reported non-functional, and the 7.0.8 Baikal binary (X-F1REBALL-X) has no pinned source. The 6.15.4 base tree only carries Baikal PCI IDs in apcie/ahci/sky2, not the Baikal patch set. The GE needs 6.15 interfaces (TTM shrink helpers, dmem cgroup).",
+      "state": "unsupported"
+     }
+    },
+    "name": "Baikal (CXD90042GG)",
+    "part_numbers": [
+     "CXD90042GG"
+    ],
+    "pci": {
+     "acpi": "0x90d7",
+     "ahci": "0x90d9",
+     "dmac": "0x90dc",
+     "gbe": "0x90d8",
+     "mem": "0x90dd",
+     "pcie": "0x90db",
+     "sdhci": "0x90da",
+     "vendor": "0x104d",
+     "xhci": "0x90de"
+    },
+    "subsys_subid": {
+     "0x30100": "A0",
+     "0x30200": "B0",
+     "0x30201": "B1"
+    }
+   },
+   "status": "unsupported",
+   "unified_memory": {
+    "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+    "contract": "loader carve-out (vram.txt) + runtime GTT budget + dmem limits",
+    "cus": 18,
+    "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+    "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+    "pool": "8 GiB GDDR5 shared by CPU and GPU",
+    "pool_gib": 8,
+    "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+    "state": "awaiting-hardware",
+    "states_note": "per-target values below override",
+    "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+    "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console"
+   },
+   "wifi_bt": [
+    "MediaTek MT7668 (some boards)"
+   ]
+  },
+  "cuh-21xx-belize2": {
+   "apu": "liverpool-slim",
+   "apu_info": {
+    "gpu": {
+     "amdgpu_chip": "CHIP_LIVERPOOL",
+     "compute_units": 18,
+     "pci_device": "0x9923",
+     "pci_vendor": "0x1002",
+     "process": "16 nm"
+    },
+    "hdmi_bridge": "MN864729",
+    "id": "liverpool-slim",
+    "memory": {
+     "gddr5_bytes": 8589934592,
+     "peak_bandwidth_gbs": 176
+    },
+    "name": "Liverpool 16 nm (CUH-2xxx Slim)",
+    "notes": [
+     "ps4_bridge.c: PCI_DEVICE_ID_CUH_2XXX"
+    ]
+   },
+   "capabilities": {
+    "boot": {
+     "implemented_by": [
+      "Orbis 0.2.0 loader + GE loader patch (memory contract, time handoff)",
+      "kernel flavor"
+     ],
+     "needs": "boot log (orbis-debug collect --hardware) from the console",
+     "state": "awaiting-hardware"
+    },
+    "cpufreq": {
+     "implemented_by": [
+      "ge-0007 Jaguar hardware P-state driver"
+     ],
+     "needs": "scaling_driver present, P-state switch observed",
+     "state": "awaiting-hardware"
+    },
+    "display-hdmi": {
+     "implemented_by": [
+      "ps4_bridge (MN86471A / MN864729) + ge-0005/0006 robustness knobs"
+     ],
+     "needs": "picture on HDMI at boot and after modeset",
+     "path": "ps4_bridge MN864729 path (GPU 0x9923)",
+     "state": "awaiting-hardware"
+    },
+    "ge-telemetry": {
+     "implemented_by": [
+      "ge-0008 engine activity + runtime GTT budget"
+     ],
+     "needs": "orbis_engine_busy readable under load",
+     "state": "awaiting-hardware"
+    },
+    "ge-unified-memory": {
+     "implemented_by": [
+      "ge-0014 shrinker/trim",
+      "ge-0015 GTT dmem region",
+      "ge-0016 corrections",
+      "stable-6.15/0001-0002 TTM fixes",
+      "orbis-memd",
+      "orbis-run admission"
+     ],
+     "needs": "orbis-mem bench PASS, set-budget enforced, admission ADMITTED on a game",
+     "state": "awaiting-hardware"
+    },
+    "gpu-3d": {
+     "implemented_by": [
+      "amdgpu CIK Liverpool/Gladius",
+      "Mesa 26.2.5 radeonsi/RADV"
+     ],
+     "needs": "orbis-gpu qualify PASS",
+     "state": "awaiting-hardware"
+    },
+    "gpu-clocks": {
+     "implemented_by": [
+      "ge-0002 SCLK restore/control",
+      "ge-0009 SMU mailbox (opt-in)"
+     ],
+     "needs": "ps4_sclk state=max measured",
+     "state": "awaiting-hardware"
+    },
+    "hdmi-audio": {
+     "implemented_by": [
+      "ge-0004 audio DTO"
+     ],
+     "needs": "speaker-test over HDMI",
+     "state": "awaiting-hardware"
+    },
+    "icc-power-fan": {
+     "implemented_by": [
+      "ps4-apcie-icc",
+      "ps4-fan + ge-0001 fan threshold"
+     ],
+     "needs": "orbis-hw status: fan threshold readable and writable, power button event",
+     "state": "awaiting-hardware"
+    },
+    "rtc": {
+     "implemented_by": [
+      "ge-0011 Aeolia/Belize RTC class device",
+      "ge-0010 loader wall clock"
+     ],
+     "needs": "orbis-time status shows source rtc-hardware or loader",
+     "state": "awaiting-hardware"
+    },
+    "southbridge-io": {
+     "implemented_by": [
+      "aeolia/belize apcie, ahci, xhci, sky2, sdhci drivers in the base tree"
+     ],
+     "needs": "lspci -nnk + dmesg showing every southbridge function bound",
+     "state": "awaiting-hardware"
+    },
+    "video-decode": {
+     "reason": "UVD on Liverpool is a research kernel only (--research-uvd, never packed)",
+     "state": "unsupported"
+    },
+    "wifi-bt": {
+     "implemented_by": [
+      "mwifiex (Marvell) or mt7668 depending on board"
+     ],
+     "needs": "association on the NickLabs LAN",
+     "state": "awaiting-hardware"
+    }
+   },
+   "chassis": "2100",
+   "family": "slim",
+   "file": "models/cuh-21xx-belize2.json",
+   "id": "cuh-21xx-belize2",
+   "kernel": {
+    "base": "feeRnt 6.15.4 crashnt-4.7 @108ef97 + Orbis 0001",
+    "evidence": "no community report of 6.15.4 on Belize 2; 5.15.15-belize reported on CUH-2216A (Belize) and a Belize 7.1.7 kernel on CUH-7116B (X-F1REBALL-X)",
+    "flavor": "aeolia-belize-6.15",
+    "state": "awaiting-hardware"
+   },
+   "kind": "model",
+   "models": [
+    "CUH-21??*"
+   ],
+   "motherboards": [
+    "SAE-001",
+    "SAE-003"
+   ],
+   "name": "PS4 Slim CUH-21xx (Belize 2 board)",
+   "notes": [],
+   "reference": false,
+   "sources": [
+    {
+     "name": "feeRnt/ps4-linux-12xx",
+     "role": "base kernel tree (6.15.4-aeolia-belize-crashniels @108ef97 for Orbis 0.2.0); model/southbridge/kernel table",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    },
+    {
+     "name": "sony-jaguar-devs/ps4-linux",
+     "role": "same lineage; branches 5.4.247-baikal-dfaus, 5.15.15-belize, 6.15.4-aeolia-belize-crashniels, 7.0-Clean",
+     "url": "https://github.com/sony-jaguar-devs/ps4-linux"
+    },
+    {
+     "name": "codedwrench/ps4-linux",
+     "role": "upstream of the feeRnt / sony-jaguar-devs forks",
+     "url": "https://github.com/codedwrench/ps4-linux"
+    },
+    {
+     "name": "psdevwiki PS4 Southbridge",
+     "role": "southbridge part numbers, motherboard and chassis mapping",
+     "url": "https://www.psdevwiki.com/ps4/Southbridge"
+    },
+    {
+     "name": "tomfitzhenry/ps4-which-southbridge",
+     "role": "hw.sce_subsys_subid values per southbridge stepping (read under OrbisOS)",
+     "url": "https://github.com/tomfitzhenry/ps4-which-southbridge"
+    },
+    {
+     "name": "X-F1REBALL-X/PS4-Linux",
+     "role": "binary Belize 7.1.7 / Baikal 7.0.8 kernels reported working on CUH-7116B / CUH-2116A; no pinned source",
+     "url": "https://github.com/X-F1REBALL-X/PS4-Linux"
+    },
+    {
+     "name": "kernel.org stable",
+     "role": "upstream/stable backports (stable-6.15/0001-0002), reproducible tarballs",
+     "url": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
+    },
+    {
+     "name": "kernel tree include/linux/pci_ids.h + drivers/gpu/drm/amd/amdgpu/ps4_bridge.c",
+     "role": "Sony southbridge PCI IDs; GPU PCI IDs 0x9920 (CUH-11xx), 0x9922 (CUH-12xx), 0x9923 (CUH-2xxx), 0x9924 (CUH-7xxx)",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    }
+   ],
+   "southbridge": "belize2",
+   "southbridge_info": {
+    "id": "belize2",
+    "kernel": {
+     "aeolia-belize-6.15": {
+      "evidence": "no community report of 6.15.4 on Belize 2; 5.15.15-belize reported on CUH-2216A (Belize) and a Belize 7.1.7 kernel on CUH-7116B (X-F1REBALL-X)",
+      "state": "awaiting-hardware"
+     }
+    },
+    "name": "Belize 2 (CXD90046GG)",
+    "part_numbers": [
+     "CXD90046GG"
+    ],
+    "pci": {
+     "note": "PCI device IDs not documented in the sources used; assumed to present the Belize IDs (0x90c8-0x90cf) because Belize-labelled Slim/Pro consoles run Belize kernels. Needs lspci -nn from a Belize 2 console.",
+     "vendor": "0x104d"
+    },
+    "subsys_subid": {
+     "0x40100": "A0"
+    }
+   },
+   "status": "awaiting-hardware",
+   "unified_memory": {
+    "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+    "contract": "loader carve-out (vram.txt) + runtime GTT budget + dmem limits",
+    "cus": 18,
+    "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+    "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+    "pool": "8 GiB GDDR5 shared by CPU and GPU",
+    "pool_gib": 8,
+    "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+    "state": "awaiting-hardware",
+    "states_note": "per-target values below override",
+    "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+    "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console"
+   },
+   "wifi_bt": [
+    "MediaTek MT7668 (some boards)"
+   ]
+  },
+  "cuh-22xx-baikal": {
+   "apu": "liverpool-slim",
+   "apu_info": {
+    "gpu": {
+     "amdgpu_chip": "CHIP_LIVERPOOL",
+     "compute_units": 18,
+     "pci_device": "0x9923",
+     "pci_vendor": "0x1002",
+     "process": "16 nm"
+    },
+    "hdmi_bridge": "MN864729",
+    "id": "liverpool-slim",
+    "memory": {
+     "gddr5_bytes": 8589934592,
+     "peak_bandwidth_gbs": 176
+    },
+    "name": "Liverpool 16 nm (CUH-2xxx Slim)",
+    "notes": [
+     "ps4_bridge.c: PCI_DEVICE_ID_CUH_2XXX"
+    ]
+   },
+   "capabilities": {
+    "boot": {
+     "implemented_by": [
+      "Orbis 0.2.0 loader + GE loader patch (memory contract, time handoff)",
+      "kernel flavor"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "cpufreq": {
+     "implemented_by": [
+      "ge-0007 Jaguar hardware P-state driver"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "display-hdmi": {
+     "implemented_by": [
+      "ps4_bridge (MN86471A / MN864729) + ge-0005/0006 robustness knobs"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "ge-telemetry": {
+     "implemented_by": [
+      "ge-0008 engine activity + runtime GTT budget"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "ge-unified-memory": {
+     "implemented_by": [
+      "ge-0014 shrinker/trim",
+      "ge-0015 GTT dmem region",
+      "ge-0016 corrections",
+      "stable-6.15/0001-0002 TTM fixes",
+      "orbis-memd",
+      "orbis-run admission"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "gpu-3d": {
+     "implemented_by": [
+      "amdgpu CIK Liverpool/Gladius",
+      "Mesa 26.2.5 radeonsi/RADV"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "gpu-clocks": {
+     "implemented_by": [
+      "ge-0002 SCLK restore/control",
+      "ge-0009 SMU mailbox (opt-in)"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "hdmi-audio": {
+     "implemented_by": [
+      "ge-0004 audio DTO"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "icc-power-fan": {
+     "implemented_by": [
+      "ps4-apcie-icc",
+      "ps4-fan + ge-0001 fan threshold"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "rtc": {
+     "implemented_by": [
+      "ge-0011 Aeolia/Belize RTC class device",
+      "ge-0010 loader wall clock"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "southbridge-io": {
+     "implemented_by": [
+      "aeolia/belize apcie, ahci, xhci, sky2, sdhci drivers in the base tree"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "video-decode": {
+     "reason": "UVD on Liverpool is a research kernel only (--research-uvd, never packed)",
+     "state": "unsupported"
+    },
+    "wifi-bt": {
+     "implemented_by": [
+      "mwifiex (Marvell) or mt7668 depending on board"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    }
+   },
+   "chassis": "2200",
+   "family": "slim",
+   "file": "models/cuh-22xx-baikal.json",
+   "id": "cuh-22xx-baikal",
+   "kernel": {
+    "base": "feeRnt 6.15.4 crashnt-4.7 @108ef97 + Orbis 0001",
+    "flavor": null,
+    "flavors": {
+     "aeolia-belize-6.15": "the only GE kernel flavor that exists"
+    },
+    "reason": "Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+    "series": "kernel/patches/series (stable-6.15/0001-0002, ge-6.15/0001-0016)",
+    "state": "unsupported"
+   },
+   "kind": "model",
+   "models": [
+    "CUH-22??*"
+   ],
+   "motherboards": [
+    "SAF-004",
+    "SAF-006"
+   ],
+   "name": "PS4 Slim CUH-22xx (Baikal board)",
+   "notes": [
+    "Every kernel-dependent capability is unsupported until a Baikal 6.15 flavor exists; shared userspace is unaffected.",
+    "NickLabs secondary console CUH-2215B is on the Baikal path (stated by Nick); CUH-22xx boards exist with Belize 2 too."
+   ],
+   "reference": false,
+   "sources": [
+    {
+     "name": "feeRnt/ps4-linux-12xx",
+     "role": "base kernel tree (6.15.4-aeolia-belize-crashniels @108ef97 for Orbis 0.2.0); model/southbridge/kernel table",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    },
+    {
+     "name": "sony-jaguar-devs/ps4-linux",
+     "role": "same lineage; branches 5.4.247-baikal-dfaus, 5.15.15-belize, 6.15.4-aeolia-belize-crashniels, 7.0-Clean",
+     "url": "https://github.com/sony-jaguar-devs/ps4-linux"
+    },
+    {
+     "name": "codedwrench/ps4-linux",
+     "role": "upstream of the feeRnt / sony-jaguar-devs forks",
+     "url": "https://github.com/codedwrench/ps4-linux"
+    },
+    {
+     "name": "psdevwiki PS4 Southbridge",
+     "role": "southbridge part numbers, motherboard and chassis mapping",
+     "url": "https://www.psdevwiki.com/ps4/Southbridge"
+    },
+    {
+     "name": "tomfitzhenry/ps4-which-southbridge",
+     "role": "hw.sce_subsys_subid values per southbridge stepping (read under OrbisOS)",
+     "url": "https://github.com/tomfitzhenry/ps4-which-southbridge"
+    },
+    {
+     "name": "X-F1REBALL-X/PS4-Linux",
+     "role": "binary Belize 7.1.7 / Baikal 7.0.8 kernels reported working on CUH-7116B / CUH-2116A; no pinned source",
+     "url": "https://github.com/X-F1REBALL-X/PS4-Linux"
+    },
+    {
+     "name": "kernel.org stable",
+     "role": "upstream/stable backports (stable-6.15/0001-0002), reproducible tarballs",
+     "url": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
+    },
+    {
+     "name": "kernel tree include/linux/pci_ids.h + drivers/gpu/drm/amd/amdgpu/ps4_bridge.c",
+     "role": "Sony southbridge PCI IDs; GPU PCI IDs 0x9920 (CUH-11xx), 0x9922 (CUH-12xx), 0x9923 (CUH-2xxx), 0x9924 (CUH-7xxx)",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    }
+   ],
+   "southbridge": "baikal",
+   "southbridge_info": {
+    "community": [
+     {
+      "kernel": "5.4.247-baikal-dfaus",
+      "repo": "sony-jaguar-devs/ps4-linux",
+      "state": "reported working (CUH-2215B, CUH-2216A B1, CUH-7116B, CUH-7202B, CUH-7216B)"
+     },
+     {
+      "kernel": "x_experimental__5.15.15-fix-baikal",
+      "repo": "sony-jaguar-devs/ps4-linux",
+      "state": "reported non-functional"
+     },
+     {
+      "kernel": "baikal 7.0.8 (binary)",
+      "repo": "X-F1REBALL-X/PS4-Linux",
+      "state": "reported working on CUH-2116A; source not pinned"
+     }
+    ],
+    "id": "baikal",
+    "kernel": {
+     "aeolia-belize-6.15": {
+      "path": "PortForge gap report: port the 5.4.247-baikal-dfaus Baikal patch set onto 6.15.4, or pin and review the 7.0.8 source once published",
+      "reason": "no 6.15 Baikal kernel is known to work: the community Baikal kernel is 5.4.247-baikal-dfaus, the 5.15.15 Baikal port is reported non-functional, and the 7.0.8 Baikal binary (X-F1REBALL-X) has no pinned source. The 6.15.4 base tree only carries Baikal PCI IDs in apcie/ahci/sky2, not the Baikal patch set. The GE needs 6.15 interfaces (TTM shrink helpers, dmem cgroup).",
+      "state": "unsupported"
+     }
+    },
+    "name": "Baikal (CXD90042GG)",
+    "part_numbers": [
+     "CXD90042GG"
+    ],
+    "pci": {
+     "acpi": "0x90d7",
+     "ahci": "0x90d9",
+     "dmac": "0x90dc",
+     "gbe": "0x90d8",
+     "mem": "0x90dd",
+     "pcie": "0x90db",
+     "sdhci": "0x90da",
+     "vendor": "0x104d",
+     "xhci": "0x90de"
+    },
+    "subsys_subid": {
+     "0x30100": "A0",
+     "0x30200": "B0",
+     "0x30201": "B1"
+    }
+   },
+   "status": "unsupported",
+   "unified_memory": {
+    "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+    "contract": "loader carve-out (vram.txt) + runtime GTT budget + dmem limits",
+    "cus": 18,
+    "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+    "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+    "pool": "8 GiB GDDR5 shared by CPU and GPU",
+    "pool_gib": 8,
+    "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+    "state": "awaiting-hardware",
+    "states_note": "per-target values below override",
+    "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+    "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console"
+   },
+   "wifi_bt": [
+    "MediaTek MT7668",
+    "unknown"
+   ]
+  },
+  "cuh-22xx-belize2": {
+   "apu": "liverpool-slim",
+   "apu_info": {
+    "gpu": {
+     "amdgpu_chip": "CHIP_LIVERPOOL",
+     "compute_units": 18,
+     "pci_device": "0x9923",
+     "pci_vendor": "0x1002",
+     "process": "16 nm"
+    },
+    "hdmi_bridge": "MN864729",
+    "id": "liverpool-slim",
+    "memory": {
+     "gddr5_bytes": 8589934592,
+     "peak_bandwidth_gbs": 176
+    },
+    "name": "Liverpool 16 nm (CUH-2xxx Slim)",
+    "notes": [
+     "ps4_bridge.c: PCI_DEVICE_ID_CUH_2XXX"
+    ]
+   },
+   "capabilities": {
+    "boot": {
+     "implemented_by": [
+      "Orbis 0.2.0 loader + GE loader patch (memory contract, time handoff)",
+      "kernel flavor"
+     ],
+     "needs": "boot log (orbis-debug collect --hardware) from the console",
+     "state": "awaiting-hardware"
+    },
+    "cpufreq": {
+     "implemented_by": [
+      "ge-0007 Jaguar hardware P-state driver"
+     ],
+     "needs": "scaling_driver present, P-state switch observed",
+     "state": "awaiting-hardware"
+    },
+    "display-hdmi": {
+     "implemented_by": [
+      "ps4_bridge (MN86471A / MN864729) + ge-0005/0006 robustness knobs"
+     ],
+     "needs": "picture on HDMI at boot and after modeset",
+     "path": "ps4_bridge MN864729 path (GPU 0x9923)",
+     "state": "awaiting-hardware"
+    },
+    "ge-telemetry": {
+     "implemented_by": [
+      "ge-0008 engine activity + runtime GTT budget"
+     ],
+     "needs": "orbis_engine_busy readable under load",
+     "state": "awaiting-hardware"
+    },
+    "ge-unified-memory": {
+     "implemented_by": [
+      "ge-0014 shrinker/trim",
+      "ge-0015 GTT dmem region",
+      "ge-0016 corrections",
+      "stable-6.15/0001-0002 TTM fixes",
+      "orbis-memd",
+      "orbis-run admission"
+     ],
+     "needs": "orbis-mem bench PASS, set-budget enforced, admission ADMITTED on a game",
+     "state": "awaiting-hardware"
+    },
+    "gpu-3d": {
+     "implemented_by": [
+      "amdgpu CIK Liverpool/Gladius",
+      "Mesa 26.2.5 radeonsi/RADV"
+     ],
+     "needs": "orbis-gpu qualify PASS",
+     "state": "awaiting-hardware"
+    },
+    "gpu-clocks": {
+     "implemented_by": [
+      "ge-0002 SCLK restore/control",
+      "ge-0009 SMU mailbox (opt-in)"
+     ],
+     "needs": "ps4_sclk state=max measured",
+     "state": "awaiting-hardware"
+    },
+    "hdmi-audio": {
+     "implemented_by": [
+      "ge-0004 audio DTO"
+     ],
+     "needs": "speaker-test over HDMI",
+     "state": "awaiting-hardware"
+    },
+    "icc-power-fan": {
+     "implemented_by": [
+      "ps4-apcie-icc",
+      "ps4-fan + ge-0001 fan threshold"
+     ],
+     "needs": "orbis-hw status: fan threshold readable and writable, power button event",
+     "state": "awaiting-hardware"
+    },
+    "rtc": {
+     "implemented_by": [
+      "ge-0011 Aeolia/Belize RTC class device",
+      "ge-0010 loader wall clock"
+     ],
+     "needs": "orbis-time status shows source rtc-hardware or loader",
+     "state": "awaiting-hardware"
+    },
+    "southbridge-io": {
+     "implemented_by": [
+      "aeolia/belize apcie, ahci, xhci, sky2, sdhci drivers in the base tree"
+     ],
+     "needs": "lspci -nnk + dmesg showing every southbridge function bound",
+     "state": "awaiting-hardware"
+    },
+    "video-decode": {
+     "reason": "UVD on Liverpool is a research kernel only (--research-uvd, never packed)",
+     "state": "unsupported"
+    },
+    "wifi-bt": {
+     "implemented_by": [
+      "mwifiex (Marvell) or mt7668 depending on board"
+     ],
+     "needs": "association on the NickLabs LAN",
+     "state": "awaiting-hardware"
+    }
+   },
+   "chassis": "2200",
+   "family": "slim",
+   "file": "models/cuh-22xx-belize2.json",
+   "id": "cuh-22xx-belize2",
+   "kernel": {
+    "base": "feeRnt 6.15.4 crashnt-4.7 @108ef97 + Orbis 0001",
+    "evidence": "no community report of 6.15.4 on Belize 2; 5.15.15-belize reported on CUH-2216A (Belize) and a Belize 7.1.7 kernel on CUH-7116B (X-F1REBALL-X)",
+    "flavor": "aeolia-belize-6.15",
+    "state": "awaiting-hardware"
+   },
+   "kind": "model",
+   "models": [
+    "CUH-22??*"
+   ],
+   "motherboards": [
+    "SAF-003",
+    "SAF-005"
+   ],
+   "name": "PS4 Slim CUH-22xx (Belize 2 board)",
+   "notes": [
+    "feeRnt lists a CUH-2216A with a Belize southbridge on 5.15.15."
+   ],
+   "reference": false,
+   "sources": [
+    {
+     "name": "feeRnt/ps4-linux-12xx",
+     "role": "base kernel tree (6.15.4-aeolia-belize-crashniels @108ef97 for Orbis 0.2.0); model/southbridge/kernel table",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    },
+    {
+     "name": "sony-jaguar-devs/ps4-linux",
+     "role": "same lineage; branches 5.4.247-baikal-dfaus, 5.15.15-belize, 6.15.4-aeolia-belize-crashniels, 7.0-Clean",
+     "url": "https://github.com/sony-jaguar-devs/ps4-linux"
+    },
+    {
+     "name": "codedwrench/ps4-linux",
+     "role": "upstream of the feeRnt / sony-jaguar-devs forks",
+     "url": "https://github.com/codedwrench/ps4-linux"
+    },
+    {
+     "name": "psdevwiki PS4 Southbridge",
+     "role": "southbridge part numbers, motherboard and chassis mapping",
+     "url": "https://www.psdevwiki.com/ps4/Southbridge"
+    },
+    {
+     "name": "tomfitzhenry/ps4-which-southbridge",
+     "role": "hw.sce_subsys_subid values per southbridge stepping (read under OrbisOS)",
+     "url": "https://github.com/tomfitzhenry/ps4-which-southbridge"
+    },
+    {
+     "name": "X-F1REBALL-X/PS4-Linux",
+     "role": "binary Belize 7.1.7 / Baikal 7.0.8 kernels reported working on CUH-7116B / CUH-2116A; no pinned source",
+     "url": "https://github.com/X-F1REBALL-X/PS4-Linux"
+    },
+    {
+     "name": "kernel.org stable",
+     "role": "upstream/stable backports (stable-6.15/0001-0002), reproducible tarballs",
+     "url": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
+    },
+    {
+     "name": "kernel tree include/linux/pci_ids.h + drivers/gpu/drm/amd/amdgpu/ps4_bridge.c",
+     "role": "Sony southbridge PCI IDs; GPU PCI IDs 0x9920 (CUH-11xx), 0x9922 (CUH-12xx), 0x9923 (CUH-2xxx), 0x9924 (CUH-7xxx)",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    }
+   ],
+   "southbridge": "belize2",
+   "southbridge_info": {
+    "id": "belize2",
+    "kernel": {
+     "aeolia-belize-6.15": {
+      "evidence": "no community report of 6.15.4 on Belize 2; 5.15.15-belize reported on CUH-2216A (Belize) and a Belize 7.1.7 kernel on CUH-7116B (X-F1REBALL-X)",
+      "state": "awaiting-hardware"
+     }
+    },
+    "name": "Belize 2 (CXD90046GG)",
+    "part_numbers": [
+     "CXD90046GG"
+    ],
+    "pci": {
+     "note": "PCI device IDs not documented in the sources used; assumed to present the Belize IDs (0x90c8-0x90cf) because Belize-labelled Slim/Pro consoles run Belize kernels. Needs lspci -nn from a Belize 2 console.",
+     "vendor": "0x104d"
+    },
+    "subsys_subid": {
+     "0x40100": "A0"
+    }
+   },
+   "status": "awaiting-hardware",
+   "unified_memory": {
+    "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+    "contract": "loader carve-out (vram.txt) + runtime GTT budget + dmem limits",
+    "cus": 18,
+    "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+    "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+    "pool": "8 GiB GDDR5 shared by CPU and GPU",
+    "pool_gib": 8,
+    "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+    "state": "awaiting-hardware",
+    "states_note": "per-target values below override",
+    "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+    "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console"
+   },
+   "wifi_bt": [
+    "MediaTek MT7668"
+   ]
+  },
+  "cuh-70xx": {
+   "apu": "gladius",
+   "apu_info": {
+    "gpu": {
+     "amdgpu_chip": "CHIP_GLADIUS",
+     "compute_units": 36,
+     "pci_device": "0x9924",
+     "pci_vendor": "0x1002",
+     "process": "16 nm"
+    },
+    "hdmi_bridge": "MN864729",
+    "id": "gladius",
+    "memory": {
+     "gddr5_bytes": 8589934592,
+     "peak_bandwidth_gbs": 218
+    },
+    "name": "Gladius / Neo (CUH-7xxx Pro)",
+    "notes": [
+     "ps4_bridge.c: PCI_DEVICE_ID_CUH_7XXX; amdgpu_drv.c maps 0x9924 to CHIP_GLADIUS",
+     "The Pro's extra 1 GiB DDR3 belongs to OrbisOS background tasks and is not part of the Linux pool"
+    ]
+   },
+   "capabilities": {
+    "boot": {
+     "implemented_by": [
+      "Orbis 0.2.0 loader + GE loader patch (memory contract, time handoff)",
+      "kernel flavor"
+     ],
+     "needs": "boot log (orbis-debug collect --hardware) from the console",
+     "state": "awaiting-hardware"
+    },
+    "cpufreq": {
+     "implemented_by": [
+      "ge-0007 Jaguar hardware P-state driver"
+     ],
+     "needs": "scaling_driver present, P-state switch observed",
+     "state": "awaiting-hardware"
+    },
+    "display-hdmi": {
+     "implemented_by": [
+      "ps4_bridge (MN86471A / MN864729) + ge-0005/0006 robustness knobs"
+     ],
+     "needs": "picture on HDMI at boot and after modeset",
+     "path": "ps4_bridge MN864729 path (GPU 0x9924)",
+     "state": "awaiting-hardware"
+    },
+    "ge-telemetry": {
+     "implemented_by": [
+      "ge-0008 engine activity + runtime GTT budget"
+     ],
+     "needs": "orbis_engine_busy readable under load",
+     "state": "awaiting-hardware"
+    },
+    "ge-unified-memory": {
+     "implemented_by": [
+      "ge-0014 shrinker/trim",
+      "ge-0015 GTT dmem region",
+      "ge-0016 corrections",
+      "stable-6.15/0001-0002 TTM fixes",
+      "orbis-memd",
+      "orbis-run admission"
+     ],
+     "needs": "orbis-mem bench PASS, set-budget enforced, admission ADMITTED on a game",
+     "state": "awaiting-hardware"
+    },
+    "gpu-3d": {
+     "implemented_by": [
+      "amdgpu CIK Liverpool/Gladius",
+      "Mesa 26.2.5 radeonsi/RADV"
+     ],
+     "needs": "orbis-gpu qualify PASS",
+     "state": "awaiting-hardware"
+    },
+    "gpu-clocks": {
+     "implemented_by": [
+      "ge-0002 SCLK restore/control",
+      "ge-0009 SMU mailbox (opt-in)"
+     ],
+     "needs": "ps4_sclk state=max measured",
+     "state": "awaiting-hardware"
+    },
+    "hdmi-audio": {
+     "implemented_by": [
+      "ge-0004 audio DTO"
+     ],
+     "needs": "speaker-test over HDMI",
+     "state": "awaiting-hardware"
+    },
+    "icc-power-fan": {
+     "implemented_by": [
+      "ps4-apcie-icc",
+      "ps4-fan + ge-0001 fan threshold"
+     ],
+     "needs": "orbis-hw status: fan threshold readable and writable, power button event",
+     "state": "awaiting-hardware"
+    },
+    "rtc": {
+     "implemented_by": [
+      "ge-0011 Aeolia/Belize RTC class device",
+      "ge-0010 loader wall clock"
+     ],
+     "needs": "orbis-time status shows source rtc-hardware or loader",
+     "state": "awaiting-hardware"
+    },
+    "southbridge-io": {
+     "implemented_by": [
+      "aeolia/belize apcie, ahci, xhci, sky2, sdhci drivers in the base tree"
+     ],
+     "needs": "lspci -nnk + dmesg showing every southbridge function bound",
+     "state": "awaiting-hardware"
+    },
+    "video-decode": {
+     "reason": "UVD on Liverpool is a research kernel only (--research-uvd, never packed)",
+     "state": "unsupported"
+    },
+    "wifi-bt": {
+     "implemented_by": [
+      "mwifiex (Marvell) or mt7668 depending on board"
+     ],
+     "needs": "association on the NickLabs LAN",
+     "state": "awaiting-hardware"
+    }
+   },
+   "chassis": "7000",
+   "family": "pro",
+   "file": "models/cuh-70xx.json",
+   "id": "cuh-70xx",
+   "kernel": {
+    "base": "feeRnt 6.15.4 crashnt-4.7 @108ef97 + Orbis 0001",
+    "evidence": "base tree of Orbis 0.2.0 (CUH-12xx Belize); feeRnt lists CUH-1215(A/B), CUH-1216(A/B) on 6.15.4",
+    "flavor": "aeolia-belize-6.15",
+    "state": "awaiting-hardware"
+   },
+   "kind": "model",
+   "models": [
+    "CUH-70??*"
+   ],
+   "motherboards": [
+    "NVA-001"
+   ],
+   "name": "PS4 Pro CUH-70xx",
+   "notes": [],
+   "reference": false,
+   "sources": [
+    {
+     "name": "feeRnt/ps4-linux-12xx",
+     "role": "base kernel tree (6.15.4-aeolia-belize-crashniels @108ef97 for Orbis 0.2.0); model/southbridge/kernel table",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    },
+    {
+     "name": "sony-jaguar-devs/ps4-linux",
+     "role": "same lineage; branches 5.4.247-baikal-dfaus, 5.15.15-belize, 6.15.4-aeolia-belize-crashniels, 7.0-Clean",
+     "url": "https://github.com/sony-jaguar-devs/ps4-linux"
+    },
+    {
+     "name": "codedwrench/ps4-linux",
+     "role": "upstream of the feeRnt / sony-jaguar-devs forks",
+     "url": "https://github.com/codedwrench/ps4-linux"
+    },
+    {
+     "name": "psdevwiki PS4 Southbridge",
+     "role": "southbridge part numbers, motherboard and chassis mapping",
+     "url": "https://www.psdevwiki.com/ps4/Southbridge"
+    },
+    {
+     "name": "tomfitzhenry/ps4-which-southbridge",
+     "role": "hw.sce_subsys_subid values per southbridge stepping (read under OrbisOS)",
+     "url": "https://github.com/tomfitzhenry/ps4-which-southbridge"
+    },
+    {
+     "name": "X-F1REBALL-X/PS4-Linux",
+     "role": "binary Belize 7.1.7 / Baikal 7.0.8 kernels reported working on CUH-7116B / CUH-2116A; no pinned source",
+     "url": "https://github.com/X-F1REBALL-X/PS4-Linux"
+    },
+    {
+     "name": "kernel.org stable",
+     "role": "upstream/stable backports (stable-6.15/0001-0002), reproducible tarballs",
+     "url": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
+    },
+    {
+     "name": "kernel tree include/linux/pci_ids.h + drivers/gpu/drm/amd/amdgpu/ps4_bridge.c",
+     "role": "Sony southbridge PCI IDs; GPU PCI IDs 0x9920 (CUH-11xx), 0x9922 (CUH-12xx), 0x9923 (CUH-2xxx), 0x9924 (CUH-7xxx)",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    }
+   ],
+   "southbridge": "belize",
+   "southbridge_info": {
+    "id": "belize",
+    "kernel": {
+     "aeolia-belize-6.15": {
+      "evidence": "base tree of Orbis 0.2.0 (CUH-12xx Belize); feeRnt lists CUH-1215(A/B), CUH-1216(A/B) on 6.15.4",
+      "state": "awaiting-hardware"
+     }
+    },
+    "name": "Belize (CXD90036G)",
+    "part_numbers": [
+     "CXD90036G"
+    ],
+    "pci": {
+     "acpi": "0x90c8",
+     "ahci": "0x90ca",
+     "dmac": "0x90cd",
+     "gbe": "0x90c9",
+     "mem": "0x90ce",
+     "pcie": "0x90cc",
+     "sdhci": "0x90cb",
+     "vendor": "0x104d",
+     "xhci": "0x90cf"
+    },
+    "subsys_subid": {
+     "0x20100": "A0",
+     "0x20200": "B0"
+    }
+   },
+   "status": "awaiting-hardware",
+   "unified_memory": {
+    "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+    "contract": "loader carve-out (vram.txt) + runtime GTT budget + dmem limits",
+    "cus": 36,
+    "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+    "note": "twice the CUs at higher bandwidth: the same carve-out leaves less headroom per CU; default carve-out to be decided from a Pro qualification run",
+    "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+    "pool": "8 GiB GDDR5 shared by CPU and GPU",
+    "pool_gib": 8,
+    "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+    "state": "awaiting-hardware",
+    "states_note": "per-target values below override",
+    "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+    "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console"
+   },
+   "wifi_bt": [
+    "unknown"
+   ]
+  },
+  "cuh-71xx-baikal": {
+   "apu": "gladius",
+   "apu_info": {
+    "gpu": {
+     "amdgpu_chip": "CHIP_GLADIUS",
+     "compute_units": 36,
+     "pci_device": "0x9924",
+     "pci_vendor": "0x1002",
+     "process": "16 nm"
+    },
+    "hdmi_bridge": "MN864729",
+    "id": "gladius",
+    "memory": {
+     "gddr5_bytes": 8589934592,
+     "peak_bandwidth_gbs": 218
+    },
+    "name": "Gladius / Neo (CUH-7xxx Pro)",
+    "notes": [
+     "ps4_bridge.c: PCI_DEVICE_ID_CUH_7XXX; amdgpu_drv.c maps 0x9924 to CHIP_GLADIUS",
+     "The Pro's extra 1 GiB DDR3 belongs to OrbisOS background tasks and is not part of the Linux pool"
+    ]
+   },
+   "capabilities": {
+    "boot": {
+     "implemented_by": [
+      "Orbis 0.2.0 loader + GE loader patch (memory contract, time handoff)",
+      "kernel flavor"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "cpufreq": {
+     "implemented_by": [
+      "ge-0007 Jaguar hardware P-state driver"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "display-hdmi": {
+     "implemented_by": [
+      "ps4_bridge (MN86471A / MN864729) + ge-0005/0006 robustness knobs"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "ge-telemetry": {
+     "implemented_by": [
+      "ge-0008 engine activity + runtime GTT budget"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "ge-unified-memory": {
+     "implemented_by": [
+      "ge-0014 shrinker/trim",
+      "ge-0015 GTT dmem region",
+      "ge-0016 corrections",
+      "stable-6.15/0001-0002 TTM fixes",
+      "orbis-memd",
+      "orbis-run admission"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "gpu-3d": {
+     "implemented_by": [
+      "amdgpu CIK Liverpool/Gladius",
+      "Mesa 26.2.5 radeonsi/RADV"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "gpu-clocks": {
+     "implemented_by": [
+      "ge-0002 SCLK restore/control",
+      "ge-0009 SMU mailbox (opt-in)"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "hdmi-audio": {
+     "implemented_by": [
+      "ge-0004 audio DTO"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "icc-power-fan": {
+     "implemented_by": [
+      "ps4-apcie-icc",
+      "ps4-fan + ge-0001 fan threshold"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "rtc": {
+     "implemented_by": [
+      "ge-0011 Aeolia/Belize RTC class device",
+      "ge-0010 loader wall clock"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "southbridge-io": {
+     "implemented_by": [
+      "aeolia/belize apcie, ahci, xhci, sky2, sdhci drivers in the base tree"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "video-decode": {
+     "reason": "UVD on Liverpool is a research kernel only (--research-uvd, never packed)",
+     "state": "unsupported"
+    },
+    "wifi-bt": {
+     "implemented_by": [
+      "mwifiex (Marvell) or mt7668 depending on board"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    }
+   },
+   "chassis": "7100",
+   "family": "pro",
+   "file": "models/cuh-71xx-baikal.json",
+   "id": "cuh-71xx-baikal",
+   "kernel": {
+    "base": "feeRnt 6.15.4 crashnt-4.7 @108ef97 + Orbis 0001",
+    "flavor": null,
+    "flavors": {
+     "aeolia-belize-6.15": "the only GE kernel flavor that exists"
+    },
+    "reason": "Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+    "series": "kernel/patches/series (stable-6.15/0001-0002, ge-6.15/0001-0016)",
+    "state": "unsupported"
+   },
+   "kind": "model",
+   "models": [
+    "CUH-71??*"
+   ],
+   "motherboards": [
+    "NVB-004"
+   ],
+   "name": "PS4 Pro CUH-71xx (Baikal board)",
+   "notes": [
+    "Every kernel-dependent capability is unsupported until a Baikal 6.15 flavor exists; shared userspace is unaffected."
+   ],
+   "reference": false,
+   "sources": [
+    {
+     "name": "feeRnt/ps4-linux-12xx",
+     "role": "base kernel tree (6.15.4-aeolia-belize-crashniels @108ef97 for Orbis 0.2.0); model/southbridge/kernel table",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    },
+    {
+     "name": "sony-jaguar-devs/ps4-linux",
+     "role": "same lineage; branches 5.4.247-baikal-dfaus, 5.15.15-belize, 6.15.4-aeolia-belize-crashniels, 7.0-Clean",
+     "url": "https://github.com/sony-jaguar-devs/ps4-linux"
+    },
+    {
+     "name": "codedwrench/ps4-linux",
+     "role": "upstream of the feeRnt / sony-jaguar-devs forks",
+     "url": "https://github.com/codedwrench/ps4-linux"
+    },
+    {
+     "name": "psdevwiki PS4 Southbridge",
+     "role": "southbridge part numbers, motherboard and chassis mapping",
+     "url": "https://www.psdevwiki.com/ps4/Southbridge"
+    },
+    {
+     "name": "tomfitzhenry/ps4-which-southbridge",
+     "role": "hw.sce_subsys_subid values per southbridge stepping (read under OrbisOS)",
+     "url": "https://github.com/tomfitzhenry/ps4-which-southbridge"
+    },
+    {
+     "name": "X-F1REBALL-X/PS4-Linux",
+     "role": "binary Belize 7.1.7 / Baikal 7.0.8 kernels reported working on CUH-7116B / CUH-2116A; no pinned source",
+     "url": "https://github.com/X-F1REBALL-X/PS4-Linux"
+    },
+    {
+     "name": "kernel.org stable",
+     "role": "upstream/stable backports (stable-6.15/0001-0002), reproducible tarballs",
+     "url": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
+    },
+    {
+     "name": "kernel tree include/linux/pci_ids.h + drivers/gpu/drm/amd/amdgpu/ps4_bridge.c",
+     "role": "Sony southbridge PCI IDs; GPU PCI IDs 0x9920 (CUH-11xx), 0x9922 (CUH-12xx), 0x9923 (CUH-2xxx), 0x9924 (CUH-7xxx)",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    }
+   ],
+   "southbridge": "baikal",
+   "southbridge_info": {
+    "community": [
+     {
+      "kernel": "5.4.247-baikal-dfaus",
+      "repo": "sony-jaguar-devs/ps4-linux",
+      "state": "reported working (CUH-2215B, CUH-2216A B1, CUH-7116B, CUH-7202B, CUH-7216B)"
+     },
+     {
+      "kernel": "x_experimental__5.15.15-fix-baikal",
+      "repo": "sony-jaguar-devs/ps4-linux",
+      "state": "reported non-functional"
+     },
+     {
+      "kernel": "baikal 7.0.8 (binary)",
+      "repo": "X-F1REBALL-X/PS4-Linux",
+      "state": "reported working on CUH-2116A; source not pinned"
+     }
+    ],
+    "id": "baikal",
+    "kernel": {
+     "aeolia-belize-6.15": {
+      "path": "PortForge gap report: port the 5.4.247-baikal-dfaus Baikal patch set onto 6.15.4, or pin and review the 7.0.8 source once published",
+      "reason": "no 6.15 Baikal kernel is known to work: the community Baikal kernel is 5.4.247-baikal-dfaus, the 5.15.15 Baikal port is reported non-functional, and the 7.0.8 Baikal binary (X-F1REBALL-X) has no pinned source. The 6.15.4 base tree only carries Baikal PCI IDs in apcie/ahci/sky2, not the Baikal patch set. The GE needs 6.15 interfaces (TTM shrink helpers, dmem cgroup).",
+      "state": "unsupported"
+     }
+    },
+    "name": "Baikal (CXD90042GG)",
+    "part_numbers": [
+     "CXD90042GG"
+    ],
+    "pci": {
+     "acpi": "0x90d7",
+     "ahci": "0x90d9",
+     "dmac": "0x90dc",
+     "gbe": "0x90d8",
+     "mem": "0x90dd",
+     "pcie": "0x90db",
+     "sdhci": "0x90da",
+     "vendor": "0x104d",
+     "xhci": "0x90de"
+    },
+    "subsys_subid": {
+     "0x30100": "A0",
+     "0x30200": "B0",
+     "0x30201": "B1"
+    }
+   },
+   "status": "unsupported",
+   "unified_memory": {
+    "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+    "contract": "loader carve-out (vram.txt) + runtime GTT budget + dmem limits",
+    "cus": 36,
+    "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+    "note": "twice the CUs at higher bandwidth: the same carve-out leaves less headroom per CU; default carve-out to be decided from a Pro qualification run",
+    "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+    "pool": "8 GiB GDDR5 shared by CPU and GPU",
+    "pool_gib": 8,
+    "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+    "state": "awaiting-hardware",
+    "states_note": "per-target values below override",
+    "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+    "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console"
+   },
+   "wifi_bt": [
+    "unknown"
+   ]
+  },
+  "cuh-71xx-belize2": {
+   "apu": "gladius",
+   "apu_info": {
+    "gpu": {
+     "amdgpu_chip": "CHIP_GLADIUS",
+     "compute_units": 36,
+     "pci_device": "0x9924",
+     "pci_vendor": "0x1002",
+     "process": "16 nm"
+    },
+    "hdmi_bridge": "MN864729",
+    "id": "gladius",
+    "memory": {
+     "gddr5_bytes": 8589934592,
+     "peak_bandwidth_gbs": 218
+    },
+    "name": "Gladius / Neo (CUH-7xxx Pro)",
+    "notes": [
+     "ps4_bridge.c: PCI_DEVICE_ID_CUH_7XXX; amdgpu_drv.c maps 0x9924 to CHIP_GLADIUS",
+     "The Pro's extra 1 GiB DDR3 belongs to OrbisOS background tasks and is not part of the Linux pool"
+    ]
+   },
+   "capabilities": {
+    "boot": {
+     "implemented_by": [
+      "Orbis 0.2.0 loader + GE loader patch (memory contract, time handoff)",
+      "kernel flavor"
+     ],
+     "needs": "boot log (orbis-debug collect --hardware) from the console",
+     "state": "awaiting-hardware"
+    },
+    "cpufreq": {
+     "implemented_by": [
+      "ge-0007 Jaguar hardware P-state driver"
+     ],
+     "needs": "scaling_driver present, P-state switch observed",
+     "state": "awaiting-hardware"
+    },
+    "display-hdmi": {
+     "implemented_by": [
+      "ps4_bridge (MN86471A / MN864729) + ge-0005/0006 robustness knobs"
+     ],
+     "needs": "picture on HDMI at boot and after modeset",
+     "path": "ps4_bridge MN864729 path (GPU 0x9924)",
+     "state": "awaiting-hardware"
+    },
+    "ge-telemetry": {
+     "implemented_by": [
+      "ge-0008 engine activity + runtime GTT budget"
+     ],
+     "needs": "orbis_engine_busy readable under load",
+     "state": "awaiting-hardware"
+    },
+    "ge-unified-memory": {
+     "implemented_by": [
+      "ge-0014 shrinker/trim",
+      "ge-0015 GTT dmem region",
+      "ge-0016 corrections",
+      "stable-6.15/0001-0002 TTM fixes",
+      "orbis-memd",
+      "orbis-run admission"
+     ],
+     "needs": "orbis-mem bench PASS, set-budget enforced, admission ADMITTED on a game",
+     "state": "awaiting-hardware"
+    },
+    "gpu-3d": {
+     "implemented_by": [
+      "amdgpu CIK Liverpool/Gladius",
+      "Mesa 26.2.5 radeonsi/RADV"
+     ],
+     "needs": "orbis-gpu qualify PASS",
+     "state": "awaiting-hardware"
+    },
+    "gpu-clocks": {
+     "implemented_by": [
+      "ge-0002 SCLK restore/control",
+      "ge-0009 SMU mailbox (opt-in)"
+     ],
+     "needs": "ps4_sclk state=max measured",
+     "state": "awaiting-hardware"
+    },
+    "hdmi-audio": {
+     "implemented_by": [
+      "ge-0004 audio DTO"
+     ],
+     "needs": "speaker-test over HDMI",
+     "state": "awaiting-hardware"
+    },
+    "icc-power-fan": {
+     "implemented_by": [
+      "ps4-apcie-icc",
+      "ps4-fan + ge-0001 fan threshold"
+     ],
+     "needs": "orbis-hw status: fan threshold readable and writable, power button event",
+     "state": "awaiting-hardware"
+    },
+    "rtc": {
+     "implemented_by": [
+      "ge-0011 Aeolia/Belize RTC class device",
+      "ge-0010 loader wall clock"
+     ],
+     "needs": "orbis-time status shows source rtc-hardware or loader",
+     "state": "awaiting-hardware"
+    },
+    "southbridge-io": {
+     "implemented_by": [
+      "aeolia/belize apcie, ahci, xhci, sky2, sdhci drivers in the base tree"
+     ],
+     "needs": "lspci -nnk + dmesg showing every southbridge function bound",
+     "state": "awaiting-hardware"
+    },
+    "video-decode": {
+     "reason": "UVD on Liverpool is a research kernel only (--research-uvd, never packed)",
+     "state": "unsupported"
+    },
+    "wifi-bt": {
+     "implemented_by": [
+      "mwifiex (Marvell) or mt7668 depending on board"
+     ],
+     "needs": "association on the NickLabs LAN",
+     "state": "awaiting-hardware"
+    }
+   },
+   "chassis": "7100",
+   "family": "pro",
+   "file": "models/cuh-71xx-belize2.json",
+   "id": "cuh-71xx-belize2",
+   "kernel": {
+    "base": "feeRnt 6.15.4 crashnt-4.7 @108ef97 + Orbis 0001",
+    "evidence": "no community report of 6.15.4 on Belize 2; 5.15.15-belize reported on CUH-2216A (Belize) and a Belize 7.1.7 kernel on CUH-7116B (X-F1REBALL-X)",
+    "flavor": "aeolia-belize-6.15",
+    "state": "awaiting-hardware"
+   },
+   "kind": "model",
+   "models": [
+    "CUH-71??*"
+   ],
+   "motherboards": [
+    "NVB-003"
+   ],
+   "name": "PS4 Pro CUH-71xx (Belize 2 board)",
+   "notes": [
+    "X-F1REBALL-X reports a Belize 7.1.7 kernel working on CUH-7116B."
+   ],
+   "reference": false,
+   "sources": [
+    {
+     "name": "feeRnt/ps4-linux-12xx",
+     "role": "base kernel tree (6.15.4-aeolia-belize-crashniels @108ef97 for Orbis 0.2.0); model/southbridge/kernel table",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    },
+    {
+     "name": "sony-jaguar-devs/ps4-linux",
+     "role": "same lineage; branches 5.4.247-baikal-dfaus, 5.15.15-belize, 6.15.4-aeolia-belize-crashniels, 7.0-Clean",
+     "url": "https://github.com/sony-jaguar-devs/ps4-linux"
+    },
+    {
+     "name": "codedwrench/ps4-linux",
+     "role": "upstream of the feeRnt / sony-jaguar-devs forks",
+     "url": "https://github.com/codedwrench/ps4-linux"
+    },
+    {
+     "name": "psdevwiki PS4 Southbridge",
+     "role": "southbridge part numbers, motherboard and chassis mapping",
+     "url": "https://www.psdevwiki.com/ps4/Southbridge"
+    },
+    {
+     "name": "tomfitzhenry/ps4-which-southbridge",
+     "role": "hw.sce_subsys_subid values per southbridge stepping (read under OrbisOS)",
+     "url": "https://github.com/tomfitzhenry/ps4-which-southbridge"
+    },
+    {
+     "name": "X-F1REBALL-X/PS4-Linux",
+     "role": "binary Belize 7.1.7 / Baikal 7.0.8 kernels reported working on CUH-7116B / CUH-2116A; no pinned source",
+     "url": "https://github.com/X-F1REBALL-X/PS4-Linux"
+    },
+    {
+     "name": "kernel.org stable",
+     "role": "upstream/stable backports (stable-6.15/0001-0002), reproducible tarballs",
+     "url": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
+    },
+    {
+     "name": "kernel tree include/linux/pci_ids.h + drivers/gpu/drm/amd/amdgpu/ps4_bridge.c",
+     "role": "Sony southbridge PCI IDs; GPU PCI IDs 0x9920 (CUH-11xx), 0x9922 (CUH-12xx), 0x9923 (CUH-2xxx), 0x9924 (CUH-7xxx)",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    }
+   ],
+   "southbridge": "belize2",
+   "southbridge_info": {
+    "id": "belize2",
+    "kernel": {
+     "aeolia-belize-6.15": {
+      "evidence": "no community report of 6.15.4 on Belize 2; 5.15.15-belize reported on CUH-2216A (Belize) and a Belize 7.1.7 kernel on CUH-7116B (X-F1REBALL-X)",
+      "state": "awaiting-hardware"
+     }
+    },
+    "name": "Belize 2 (CXD90046GG)",
+    "part_numbers": [
+     "CXD90046GG"
+    ],
+    "pci": {
+     "note": "PCI device IDs not documented in the sources used; assumed to present the Belize IDs (0x90c8-0x90cf) because Belize-labelled Slim/Pro consoles run Belize kernels. Needs lspci -nn from a Belize 2 console.",
+     "vendor": "0x104d"
+    },
+    "subsys_subid": {
+     "0x40100": "A0"
+    }
+   },
+   "status": "awaiting-hardware",
+   "unified_memory": {
+    "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+    "contract": "loader carve-out (vram.txt) + runtime GTT budget + dmem limits",
+    "cus": 36,
+    "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+    "note": "twice the CUs at higher bandwidth: the same carve-out leaves less headroom per CU; default carve-out to be decided from a Pro qualification run",
+    "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+    "pool": "8 GiB GDDR5 shared by CPU and GPU",
+    "pool_gib": 8,
+    "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+    "state": "awaiting-hardware",
+    "states_note": "per-target values below override",
+    "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+    "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console"
+   },
+   "wifi_bt": [
+    "unknown"
+   ]
+  },
+  "cuh-72xx-baikal": {
+   "apu": "gladius",
+   "apu_info": {
+    "gpu": {
+     "amdgpu_chip": "CHIP_GLADIUS",
+     "compute_units": 36,
+     "pci_device": "0x9924",
+     "pci_vendor": "0x1002",
+     "process": "16 nm"
+    },
+    "hdmi_bridge": "MN864729",
+    "id": "gladius",
+    "memory": {
+     "gddr5_bytes": 8589934592,
+     "peak_bandwidth_gbs": 218
+    },
+    "name": "Gladius / Neo (CUH-7xxx Pro)",
+    "notes": [
+     "ps4_bridge.c: PCI_DEVICE_ID_CUH_7XXX; amdgpu_drv.c maps 0x9924 to CHIP_GLADIUS",
+     "The Pro's extra 1 GiB DDR3 belongs to OrbisOS background tasks and is not part of the Linux pool"
+    ]
+   },
+   "capabilities": {
+    "boot": {
+     "implemented_by": [
+      "Orbis 0.2.0 loader + GE loader patch (memory contract, time handoff)",
+      "kernel flavor"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "cpufreq": {
+     "implemented_by": [
+      "ge-0007 Jaguar hardware P-state driver"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "display-hdmi": {
+     "implemented_by": [
+      "ps4_bridge (MN86471A / MN864729) + ge-0005/0006 robustness knobs"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "ge-telemetry": {
+     "implemented_by": [
+      "ge-0008 engine activity + runtime GTT budget"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "ge-unified-memory": {
+     "implemented_by": [
+      "ge-0014 shrinker/trim",
+      "ge-0015 GTT dmem region",
+      "ge-0016 corrections",
+      "stable-6.15/0001-0002 TTM fixes",
+      "orbis-memd",
+      "orbis-run admission"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "gpu-3d": {
+     "implemented_by": [
+      "amdgpu CIK Liverpool/Gladius",
+      "Mesa 26.2.5 radeonsi/RADV"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "gpu-clocks": {
+     "implemented_by": [
+      "ge-0002 SCLK restore/control",
+      "ge-0009 SMU mailbox (opt-in)"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "hdmi-audio": {
+     "implemented_by": [
+      "ge-0004 audio DTO"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "icc-power-fan": {
+     "implemented_by": [
+      "ps4-apcie-icc",
+      "ps4-fan + ge-0001 fan threshold"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "rtc": {
+     "implemented_by": [
+      "ge-0011 Aeolia/Belize RTC class device",
+      "ge-0010 loader wall clock"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "southbridge-io": {
+     "implemented_by": [
+      "aeolia/belize apcie, ahci, xhci, sky2, sdhci drivers in the base tree"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    },
+    "video-decode": {
+     "reason": "UVD on Liverpool is a research kernel only (--research-uvd, never packed)",
+     "state": "unsupported"
+    },
+    "wifi-bt": {
+     "implemented_by": [
+      "mwifiex (Marvell) or mt7668 depending on board"
+     ],
+     "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+     "state": "unsupported"
+    }
+   },
+   "chassis": "7200",
+   "family": "pro",
+   "file": "models/cuh-72xx-baikal.json",
+   "id": "cuh-72xx-baikal",
+   "kernel": {
+    "base": "feeRnt 6.15.4 crashnt-4.7 @108ef97 + Orbis 0001",
+    "flavor": null,
+    "flavors": {
+     "aeolia-belize-6.15": "the only GE kernel flavor that exists"
+    },
+    "reason": "Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+    "series": "kernel/patches/series (stable-6.15/0001-0002, ge-6.15/0001-0016)",
+    "state": "unsupported"
+   },
+   "kind": "model",
+   "models": [
+    "CUH-72??*"
+   ],
+   "motherboards": [
+    "NVG-002",
+    "NVG-004"
+   ],
+   "name": "PS4 Pro CUH-72xx (Baikal board)",
+   "notes": [
+    "Every kernel-dependent capability is unsupported until a Baikal 6.15 flavor exists; shared userspace is unaffected."
+   ],
+   "reference": false,
+   "sources": [
+    {
+     "name": "feeRnt/ps4-linux-12xx",
+     "role": "base kernel tree (6.15.4-aeolia-belize-crashniels @108ef97 for Orbis 0.2.0); model/southbridge/kernel table",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    },
+    {
+     "name": "sony-jaguar-devs/ps4-linux",
+     "role": "same lineage; branches 5.4.247-baikal-dfaus, 5.15.15-belize, 6.15.4-aeolia-belize-crashniels, 7.0-Clean",
+     "url": "https://github.com/sony-jaguar-devs/ps4-linux"
+    },
+    {
+     "name": "codedwrench/ps4-linux",
+     "role": "upstream of the feeRnt / sony-jaguar-devs forks",
+     "url": "https://github.com/codedwrench/ps4-linux"
+    },
+    {
+     "name": "psdevwiki PS4 Southbridge",
+     "role": "southbridge part numbers, motherboard and chassis mapping",
+     "url": "https://www.psdevwiki.com/ps4/Southbridge"
+    },
+    {
+     "name": "tomfitzhenry/ps4-which-southbridge",
+     "role": "hw.sce_subsys_subid values per southbridge stepping (read under OrbisOS)",
+     "url": "https://github.com/tomfitzhenry/ps4-which-southbridge"
+    },
+    {
+     "name": "X-F1REBALL-X/PS4-Linux",
+     "role": "binary Belize 7.1.7 / Baikal 7.0.8 kernels reported working on CUH-7116B / CUH-2116A; no pinned source",
+     "url": "https://github.com/X-F1REBALL-X/PS4-Linux"
+    },
+    {
+     "name": "kernel.org stable",
+     "role": "upstream/stable backports (stable-6.15/0001-0002), reproducible tarballs",
+     "url": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
+    },
+    {
+     "name": "kernel tree include/linux/pci_ids.h + drivers/gpu/drm/amd/amdgpu/ps4_bridge.c",
+     "role": "Sony southbridge PCI IDs; GPU PCI IDs 0x9920 (CUH-11xx), 0x9922 (CUH-12xx), 0x9923 (CUH-2xxx), 0x9924 (CUH-7xxx)",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    }
+   ],
+   "southbridge": "baikal",
+   "southbridge_info": {
+    "community": [
+     {
+      "kernel": "5.4.247-baikal-dfaus",
+      "repo": "sony-jaguar-devs/ps4-linux",
+      "state": "reported working (CUH-2215B, CUH-2216A B1, CUH-7116B, CUH-7202B, CUH-7216B)"
+     },
+     {
+      "kernel": "x_experimental__5.15.15-fix-baikal",
+      "repo": "sony-jaguar-devs/ps4-linux",
+      "state": "reported non-functional"
+     },
+     {
+      "kernel": "baikal 7.0.8 (binary)",
+      "repo": "X-F1REBALL-X/PS4-Linux",
+      "state": "reported working on CUH-2116A; source not pinned"
+     }
+    ],
+    "id": "baikal",
+    "kernel": {
+     "aeolia-belize-6.15": {
+      "path": "PortForge gap report: port the 5.4.247-baikal-dfaus Baikal patch set onto 6.15.4, or pin and review the 7.0.8 source once published",
+      "reason": "no 6.15 Baikal kernel is known to work: the community Baikal kernel is 5.4.247-baikal-dfaus, the 5.15.15 Baikal port is reported non-functional, and the 7.0.8 Baikal binary (X-F1REBALL-X) has no pinned source. The 6.15.4 base tree only carries Baikal PCI IDs in apcie/ahci/sky2, not the Baikal patch set. The GE needs 6.15 interfaces (TTM shrink helpers, dmem cgroup).",
+      "state": "unsupported"
+     }
+    },
+    "name": "Baikal (CXD90042GG)",
+    "part_numbers": [
+     "CXD90042GG"
+    ],
+    "pci": {
+     "acpi": "0x90d7",
+     "ahci": "0x90d9",
+     "dmac": "0x90dc",
+     "gbe": "0x90d8",
+     "mem": "0x90dd",
+     "pcie": "0x90db",
+     "sdhci": "0x90da",
+     "vendor": "0x104d",
+     "xhci": "0x90de"
+    },
+    "subsys_subid": {
+     "0x30100": "A0",
+     "0x30200": "B0",
+     "0x30201": "B1"
+    }
+   },
+   "status": "unsupported",
+   "unified_memory": {
+    "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+    "contract": "loader carve-out (vram.txt) + runtime GTT budget + dmem limits",
+    "cus": 36,
+    "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+    "note": "twice the CUs at higher bandwidth: the same carve-out leaves less headroom per CU; default carve-out to be decided from a Pro qualification run",
+    "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+    "pool": "8 GiB GDDR5 shared by CPU and GPU",
+    "pool_gib": 8,
+    "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+    "state": "awaiting-hardware",
+    "states_note": "per-target values below override",
+    "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+    "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console"
+   },
+   "wifi_bt": [
+    "MediaTek MT7668 (CUH-7216B)",
+    "unknown"
+   ]
+  },
+  "cuh-72xx-belize2": {
+   "apu": "gladius",
+   "apu_info": {
+    "gpu": {
+     "amdgpu_chip": "CHIP_GLADIUS",
+     "compute_units": 36,
+     "pci_device": "0x9924",
+     "pci_vendor": "0x1002",
+     "process": "16 nm"
+    },
+    "hdmi_bridge": "MN864729",
+    "id": "gladius",
+    "memory": {
+     "gddr5_bytes": 8589934592,
+     "peak_bandwidth_gbs": 218
+    },
+    "name": "Gladius / Neo (CUH-7xxx Pro)",
+    "notes": [
+     "ps4_bridge.c: PCI_DEVICE_ID_CUH_7XXX; amdgpu_drv.c maps 0x9924 to CHIP_GLADIUS",
+     "The Pro's extra 1 GiB DDR3 belongs to OrbisOS background tasks and is not part of the Linux pool"
+    ]
+   },
+   "capabilities": {
+    "boot": {
+     "implemented_by": [
+      "Orbis 0.2.0 loader + GE loader patch (memory contract, time handoff)",
+      "kernel flavor"
+     ],
+     "needs": "boot log (orbis-debug collect --hardware) from the console",
+     "state": "awaiting-hardware"
+    },
+    "cpufreq": {
+     "implemented_by": [
+      "ge-0007 Jaguar hardware P-state driver"
+     ],
+     "needs": "scaling_driver present, P-state switch observed",
+     "state": "awaiting-hardware"
+    },
+    "display-hdmi": {
+     "implemented_by": [
+      "ps4_bridge (MN86471A / MN864729) + ge-0005/0006 robustness knobs"
+     ],
+     "needs": "picture on HDMI at boot and after modeset",
+     "path": "ps4_bridge MN864729 path (GPU 0x9924)",
+     "state": "awaiting-hardware"
+    },
+    "ge-telemetry": {
+     "implemented_by": [
+      "ge-0008 engine activity + runtime GTT budget"
+     ],
+     "needs": "orbis_engine_busy readable under load",
+     "state": "awaiting-hardware"
+    },
+    "ge-unified-memory": {
+     "implemented_by": [
+      "ge-0014 shrinker/trim",
+      "ge-0015 GTT dmem region",
+      "ge-0016 corrections",
+      "stable-6.15/0001-0002 TTM fixes",
+      "orbis-memd",
+      "orbis-run admission"
+     ],
+     "needs": "orbis-mem bench PASS, set-budget enforced, admission ADMITTED on a game",
+     "state": "awaiting-hardware"
+    },
+    "gpu-3d": {
+     "implemented_by": [
+      "amdgpu CIK Liverpool/Gladius",
+      "Mesa 26.2.5 radeonsi/RADV"
+     ],
+     "needs": "orbis-gpu qualify PASS",
+     "state": "awaiting-hardware"
+    },
+    "gpu-clocks": {
+     "implemented_by": [
+      "ge-0002 SCLK restore/control",
+      "ge-0009 SMU mailbox (opt-in)"
+     ],
+     "needs": "ps4_sclk state=max measured",
+     "state": "awaiting-hardware"
+    },
+    "hdmi-audio": {
+     "implemented_by": [
+      "ge-0004 audio DTO"
+     ],
+     "needs": "speaker-test over HDMI",
+     "state": "awaiting-hardware"
+    },
+    "icc-power-fan": {
+     "implemented_by": [
+      "ps4-apcie-icc",
+      "ps4-fan + ge-0001 fan threshold"
+     ],
+     "needs": "orbis-hw status: fan threshold readable and writable, power button event",
+     "state": "awaiting-hardware"
+    },
+    "rtc": {
+     "implemented_by": [
+      "ge-0011 Aeolia/Belize RTC class device",
+      "ge-0010 loader wall clock"
+     ],
+     "needs": "orbis-time status shows source rtc-hardware or loader",
+     "state": "awaiting-hardware"
+    },
+    "southbridge-io": {
+     "implemented_by": [
+      "aeolia/belize apcie, ahci, xhci, sky2, sdhci drivers in the base tree"
+     ],
+     "needs": "lspci -nnk + dmesg showing every southbridge function bound",
+     "state": "awaiting-hardware"
+    },
+    "video-decode": {
+     "reason": "UVD on Liverpool is a research kernel only (--research-uvd, never packed)",
+     "state": "unsupported"
+    },
+    "wifi-bt": {
+     "implemented_by": [
+      "mwifiex (Marvell) or mt7668 depending on board"
+     ],
+     "needs": "association on the NickLabs LAN",
+     "state": "awaiting-hardware"
+    }
+   },
+   "chassis": "7200",
+   "family": "pro",
+   "file": "models/cuh-72xx-belize2.json",
+   "id": "cuh-72xx-belize2",
+   "kernel": {
+    "base": "feeRnt 6.15.4 crashnt-4.7 @108ef97 + Orbis 0001",
+    "evidence": "no community report of 6.15.4 on Belize 2; 5.15.15-belize reported on CUH-2216A (Belize) and a Belize 7.1.7 kernel on CUH-7116B (X-F1REBALL-X)",
+    "flavor": "aeolia-belize-6.15",
+    "state": "awaiting-hardware"
+   },
+   "kind": "model",
+   "models": [
+    "CUH-72??*"
+   ],
+   "motherboards": [
+    "NVG-001",
+    "NVG-003"
+   ],
+   "name": "PS4 Pro CUH-72xx (Belize 2 board)",
+   "notes": [],
+   "reference": false,
+   "sources": [
+    {
+     "name": "feeRnt/ps4-linux-12xx",
+     "role": "base kernel tree (6.15.4-aeolia-belize-crashniels @108ef97 for Orbis 0.2.0); model/southbridge/kernel table",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    },
+    {
+     "name": "sony-jaguar-devs/ps4-linux",
+     "role": "same lineage; branches 5.4.247-baikal-dfaus, 5.15.15-belize, 6.15.4-aeolia-belize-crashniels, 7.0-Clean",
+     "url": "https://github.com/sony-jaguar-devs/ps4-linux"
+    },
+    {
+     "name": "codedwrench/ps4-linux",
+     "role": "upstream of the feeRnt / sony-jaguar-devs forks",
+     "url": "https://github.com/codedwrench/ps4-linux"
+    },
+    {
+     "name": "psdevwiki PS4 Southbridge",
+     "role": "southbridge part numbers, motherboard and chassis mapping",
+     "url": "https://www.psdevwiki.com/ps4/Southbridge"
+    },
+    {
+     "name": "tomfitzhenry/ps4-which-southbridge",
+     "role": "hw.sce_subsys_subid values per southbridge stepping (read under OrbisOS)",
+     "url": "https://github.com/tomfitzhenry/ps4-which-southbridge"
+    },
+    {
+     "name": "X-F1REBALL-X/PS4-Linux",
+     "role": "binary Belize 7.1.7 / Baikal 7.0.8 kernels reported working on CUH-7116B / CUH-2116A; no pinned source",
+     "url": "https://github.com/X-F1REBALL-X/PS4-Linux"
+    },
+    {
+     "name": "kernel.org stable",
+     "role": "upstream/stable backports (stable-6.15/0001-0002), reproducible tarballs",
+     "url": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
+    },
+    {
+     "name": "kernel tree include/linux/pci_ids.h + drivers/gpu/drm/amd/amdgpu/ps4_bridge.c",
+     "role": "Sony southbridge PCI IDs; GPU PCI IDs 0x9920 (CUH-11xx), 0x9922 (CUH-12xx), 0x9923 (CUH-2xxx), 0x9924 (CUH-7xxx)",
+     "url": "https://github.com/feeRnt/ps4-linux-12xx"
+    }
+   ],
+   "southbridge": "belize2",
+   "southbridge_info": {
+    "id": "belize2",
+    "kernel": {
+     "aeolia-belize-6.15": {
+      "evidence": "no community report of 6.15.4 on Belize 2; 5.15.15-belize reported on CUH-2216A (Belize) and a Belize 7.1.7 kernel on CUH-7116B (X-F1REBALL-X)",
+      "state": "awaiting-hardware"
+     }
+    },
+    "name": "Belize 2 (CXD90046GG)",
+    "part_numbers": [
+     "CXD90046GG"
+    ],
+    "pci": {
+     "note": "PCI device IDs not documented in the sources used; assumed to present the Belize IDs (0x90c8-0x90cf) because Belize-labelled Slim/Pro consoles run Belize kernels. Needs lspci -nn from a Belize 2 console.",
+     "vendor": "0x104d"
+    },
+    "subsys_subid": {
+     "0x40100": "A0"
+    }
+   },
+   "status": "awaiting-hardware",
+   "unified_memory": {
+    "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+    "contract": "loader carve-out (vram.txt) + runtime GTT budget + dmem limits",
+    "cus": 36,
+    "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+    "note": "twice the CUs at higher bandwidth: the same carve-out leaves less headroom per CU; default carve-out to be decided from a Pro qualification run",
+    "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+    "pool": "8 GiB GDDR5 shared by CPU and GPU",
+    "pool_gib": 8,
+    "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+    "state": "awaiting-hardware",
+    "states_note": "per-target values below override",
+    "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+    "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console"
+   },
+   "wifi_bt": [
+    "unknown"
+   ]
+  }
+ }
+}

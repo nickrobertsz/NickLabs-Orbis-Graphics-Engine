@@ -2,64 +2,158 @@
 # NickLabs Orbis Graphics Engine 2.0.0 — the one command for Nobara.
 #
 #   ./orbis-ge all --orbis-src ~/orbis-release/nicklabs-ps4-orbis-linux \
-#                  --base-image ~/orbis-release/orbis-0.2.0-cuh1215a.img \
+#                  --target cuh-1215a --base-image ~/orbis-release/orbis-0.2.0-cuh1215a.img \
 #                  [--base-stage0-image ~/orbis-release/orbis-0.2.0-stage0.img] [--jobs N]
 #                  [--bore] [--research-uvd] [--research-sgdisplay]
 #
+#   several targets:  --target cuh-1215a,cuh-12xx --base-image cuh-1215a=A.img --base-image cuh-12xx=B.img
+#   (without --target the registry's reference target is used, and the run says so)
+#
 #   ./orbis-ge check | kernel | loader | pack | image | stage0 | verify | status   (single steps, same options)
+#   ./orbis-ge target list | inspect <id> | generate | check      the board-support registry (targets/)
+#   ./orbis-ge port probe <probe.json> | new <id> --probe <probe.json> | review ... | report <id>   (PortForge)
 #   ./orbis-ge runners [--only GE-Proton10-34,dxvk-2.7.1]   download + verify the pinned Proton/DXVK/VKD3D
 #              runners into out/runners/ (offline bundle; several GB; not part of 'all')
 #
 # Steps (each is skipped only when its output exists AND its input fingerprint is unchanged:
 # sources, patches, configs, locks, toolchain container and options; --rebuild forces it):
 #   0 check    host tests (Python always; Rust when cargo is installed)    -> out/logs/check.log
-#   1 kernel   kernel/build-ge-kernel.sh   -> out/kernel-ge/          (GE kernel, 20-60 min; --bore adds out/kernel-ge-bore/)
-#   2 loader   loader/build-loader.sh      -> out/loader-ge/          (GE loader payloads, 1 min)
-#   3 pack     build/build-pack.sh         -> out/release/ORBIS-GRAPHICS-ENGINE-v2.0.0.tar.zst (Mesa 1-3 h; cached per package)
-#   4 image    orbis-graphics integrate    -> out/images/orbis-0.2.0+ge-2.0.0.img (a COPY of --base-image)
-#   5 stage0   orbis-graphics stage0       -> out/images/orbis-0.2.0-stage0+ge-2.0.0.img (only with --base-stage0-image)
-#   6 verify   checksums + build receipt   -> out/images/SHA256SUMS, out/ORBIS-GE-RELEASE-RECEIPT.json
+#   1 kernel   kernel/build-ge-kernel.sh   -> out/kernel-ge/        (one per kernel flavor; shared by targets)
+#   2 loader   loader/build-loader.sh      -> out/loader-ge/        (GE loader payloads, 1 min)
+#   3 pack     build/build-pack.sh         -> out/release/ORBIS-GRAPHICS-ENGINE-v2.0.0.tar.zst (Mesa and userspace shared)
+#   4 image    orbis-graphics integrate    -> out/targets/<id>/images/orbis-0.2.0+ge-2.0.0-<id>.img (COPY of the base)
+#   5 stage0   orbis-graphics stage0       -> out/targets/<id>/images/orbis-0.2.0-stage0+ge-2.0.0-<id>.img
+#   6 verify   checksums + build receipt   -> out/targets/<id>/{images/SHA256SUMS,ORBIS-GE-RELEASE-RECEIPT.json},
+#                                             out/RELEASE-MANIFEST.json (all targets of the run)
 #
-# Every step logs to out/logs/<step>.log (also shown on screen); a failing step stops the run with
-# its exit code. Never modified: the Orbis 0.2.0 checkout, its images (--base-image is copied
-# first), the Graphics Pack 1.0.0 release, the Nobara system outside this folder (sudo is used only
-# for podman), any PS4. Research kernels (--research-uvd, --research-sgdisplay) are never packed.
+# Every output gets <file>.provenance.json (target, source revision, patch-set hash, config hash,
+# toolchain, options, fingerprint, sha256). The pack takes only artifacts selected for this run
+# (out/artifact-selection.json): an old BORE kernel or stage-0 image never slips in.
+# Every step logs to out/logs/<step>.log; a failing step stops the run with its exit code.
+# Never modified: the Orbis 0.2.0 checkout (checked before/after), its images (copied first), the
+# Graphics Pack 1.0.0 release, the Nobara system outside this folder (sudo only for podman), any PS4.
 set -euo pipefail
 R="$(cd "$(dirname "$0")" && pwd)"
 cd "$R"
 cmd="${1:-help}"; [ $# -gt 0 ] && shift
-orbis_src=""; base=""; base0=""; jobs=""; uvd=0; sgd=0; bore=0; rebuild=0; only=""; target=""
+targets_py() { PYTHONPATH="$R/diag${PYTHONPATH:+:$PYTHONPATH}" python3 -m orbis_targets "$@"; }
+
+# registry and PortForge commands take their own options
+case "$cmd" in
+  target) targets_py target "$@"; exit $? ;;
+  port)
+    sub="${1:-help}"; [ $# -gt 0 ] && shift
+    case "$sub" in
+      probe)
+        [ $# -ge 1 ] || { echo "usage: ./orbis-ge port probe <probe.json> [--log FILE] [--model CUH-....]" >&2; exit 2; }
+        f="$1"; shift
+        set +e; targets_py identify --probe "$f" "$@"; rc=$?; set -e
+        if [ "$rc" = 0 ]; then targets_py compatibility --probe "$f" "$@"; fi
+        exit "$rc" ;;
+      new|candidate|diff-trees|assist|check|review|report|promote)
+        ORBIS_PORTFORGE_DIR="$R/out/portforge" targets_py port "$sub" "$@"; exit $? ;;
+      *) echo "usage: ./orbis-ge port probe|new|candidate|diff-trees|assist|check|review|report|promote ..." >&2; exit 2 ;;
+    esac ;;
+esac
+
+orbis_src=""; jobs=""; uvd=0; sgd=0; bore=0; rebuild=0; only=""; target_opt=""
+declare -A BASE=() BASE0=()
 abspath() { realpath -m -- "$1"; }
 args=()
+add_base() {   # add_base <assoc-name> <value>: "path" (one target) or "id=path"
+  local -n m="$1"
+  case "$2" in
+    *=*) local k="${2%%=*}"; if [[ "$k" =~ ^[a-z0-9-]+$ ]]; then m["$k"]="$(abspath "${2#*=}")"; return; fi ;;
+  esac
+  m["*"]="$(abspath "$2")"
+}
 while [ $# -gt 0 ]; do
   case "$1" in
     --orbis-src) orbis_src="$(abspath "$2")"; shift 2 ;;
-    --base-image) base="$(abspath "$2")"; shift 2 ;;
-    --base-stage0-image) base0="$(abspath "$2")"; shift 2 ;;
+    --base-image) add_base BASE "$2"; shift 2 ;;
+    --base-stage0-image) add_base BASE0 "$2"; shift 2 ;;
     --jobs) jobs="$2"; shift 2 ;;
     --research-uvd) uvd=1; shift ;;
     --research-sgdisplay) sgd=1; shift ;;
     --bore) bore=1; shift ;;
     --rebuild) rebuild=1; shift ;;
     --only) only="$2"; shift 2 ;;
-    --target) target="$2"; shift 2 ;;
+    --target) target_opt="$2"; shift 2 ;;
     --*) echo "unknown option $1" >&2; exit 2 ;;
     *) args+=("$1"); shift ;;
   esac
 done
-# an optional input that was named must exist; leaving it out is how it is skipped
-if [ -n "$base0" ] && [ ! -f "$base0" ]; then
-  echo "--base-stage0-image $base0 does not exist (leave the option out to skip the stage-0 image)" >&2; exit 2
-fi
 ver="$(python3 -c "import json; print(json.load(open('manifest/release.json'))['version'])")"
 pfx="$(python3 -c "import json; print(json.load(open('manifest/release.json'))['archive_prefix'])")"
 PACK="out/release/$pfx-v$ver.tar.zst"
-IMG="out/images/orbis-0.2.0+ge-$ver.img"
-IMG0="out/images/orbis-0.2.0-stage0+ge-$ver.img"
 mkdir -p out/logs out/.fp
 say() { echo; echo "######## $*"; }
 need_src() { [ -n "$orbis_src" ] && [ -f "$orbis_src/kernel/build-kernel.sh" ] || {
   echo "--orbis-src <Orbis 0.2.0 checkout> is required for '$cmd'" >&2; exit 2; }; }
+
+# ---------------------------------------------------------------- targets (Porting Kit registry)
+TARGETS=()
+target_by=explicit
+resolve_targets() {
+  local list="$target_opt"
+  if [ -z "$list" ]; then
+    targets_py target check >/dev/null || { echo "!!! targets/ registry invalid or not generated: ./orbis-ge target check" >&2; exit 2; }
+    list="$(python3 -c "import json; print(json.load(open('targets/generated/registry.json'))['reference'])")"
+    target_by="default (registry reference target)"
+  fi
+  IFS=',' read -r -a TARGETS <<< "$list"
+  local t
+  for t in "${TARGETS[@]}"; do
+    targets_py target resolve "$t" status >/dev/null || exit 2
+  done
+  echo "   target(s): ${TARGETS[*]}  [$target_by]"
+}
+flavor_of() { targets_py target resolve "$1" kernel-flavor; }
+require_buildable() {   # a target whose kernel flavor is unsupported has no GE image
+  local t="$1"
+  if [ "$(targets_py target resolve "$t" buildable)" != yes ]; then
+    echo "!!! target $t is unsupported: $(python3 -c "import json,sys; e=json.load(open('targets/generated/registry.json'))['targets'][sys.argv[1]]; print(e['kernel'].get('reason'))" "$t")" >&2
+    echo "    PortForge can describe the gaps: ./orbis-ge port new $t-port --probe <probe.json>" >&2
+    exit 6
+  fi
+}
+FLAVOR=""
+resolve_flavor() {   # every target of one run must share the kernel flavor the pack carries
+  local t f
+  for t in "${TARGETS[@]}"; do
+    require_buildable "$t"
+    f="$(flavor_of "$t")"
+    if [ -z "$FLAVOR" ]; then FLAVOR="$f"; elif [ "$f" != "$FLAVOR" ]; then
+      echo "!!! targets need different kernel flavors ($FLAVOR, $f): build them in separate runs" >&2; exit 2; fi
+  done
+  if [ "$FLAVOR" != aeolia-belize-6.15 ]; then
+    echo "!!! kernel flavor $FLAVOR has no build recipe (only aeolia-belize-6.15 exists)" >&2; exit 6
+  fi
+}
+T=""; TDIR=""; IMG=""; IMG0=""; base=""; base0=""
+use_target() {
+  T="$1"; TDIR="out/targets/$T"
+  IMG="$TDIR/images/orbis-0.2.0+ge-$ver-$T.img"
+  IMG0="$TDIR/images/orbis-0.2.0-stage0+ge-$ver-$T.img"
+  base="${BASE[$T]:-}"; base0="${BASE0[$T]:-}"
+  if [ "${#TARGETS[@]}" = 1 ]; then
+    [ -n "$base" ] || base="${BASE["*"]:-}"
+    [ -n "$base0" ] || base0="${BASE0["*"]:-}"
+  fi
+  if [ -n "$base0" ] && [ ! -f "$base0" ]; then
+    echo "--base-stage0-image $base0 does not exist (leave the option out to skip the stage-0 image)" >&2; exit 2
+  fi
+}
+check_base_args() {
+  if [ "${#TARGETS[@]}" -gt 1 ] && { [ -n "${BASE["*"]:-}" ] || [ -n "${BASE0["*"]:-}" ]; }; then
+    echo "several targets: give base images as --base-image <target>=<file>" >&2; exit 2
+  fi
+  local k
+  for k in "${!BASE[@]}" "${!BASE0[@]}"; do
+    [ "$k" = "*" ] && continue
+    [[ " ${TARGETS[*]} " == *" $k "* ]] || { echo "base image given for $k, which is not a --target of this run" >&2; exit 2; }
+  done
+}
 
 # ---------------------------------------------------------------- fingerprints
 # sha256 over the names and contents of the given files/directories (out/, .git, target/ and
@@ -92,16 +186,16 @@ PY
 fp_str() { printf '%s' "$*" | sha256sum | cut -d' ' -f1; }
 image_id() { $SUDO "${ENGINE:-podman}" image inspect --format '{{.Id}}' "$1" 2>/dev/null || echo "absent:$1"; }
 SUDO=""; [ "$(id -u)" = 0 ] || SUDO="sudo"
-fp_of() {   # fp_of <step>  (the fingerprint the step would have now)
+fp_of() {   # fp_of <step>  (the fingerprint the step would have now); image/stage0 use the current target
   case "$1" in
     kernel*) fp_str "$(fp_files kernel manifest/sources.json)" "$(fp_files "$orbis_src/kernel")" "$(image_id orbis-build:0.2.0)" \
-                    "variant=$1" "rust=${RUST_KERNEL_TOOLCHAIN:-1.87.0}" "jobs-independent" ;;
+                    "variant=$1" "flavor=${FLAVOR:-aeolia-belize-6.15}" "rust=${RUST_KERNEL_TOOLCHAIN:-1.87.0}" "jobs-independent" ;;
     loader) fp_str "$(fp_files loader manifest/sources.json)" "$(image_id orbis-build:0.2.0)" ;;
     pack) fp_str "$(fp_files . )" "$(cat out/.fp/kernel 2>/dev/null)" "$(cat out/.fp/kernel-bore 2>/dev/null)" \
                  "$(cat out/.fp/loader 2>/dev/null)" "$(fp_files "$orbis_src/platform" "$orbis_src/out/repo/orbis.db.tar.zst")" \
-                 "$(image_id orbis-build:0.2.0)" "$(image_id "orbis-gfx-build:$ver")" "bore=$bore" "target=$target" ;;
-    image) fp_str "$(cat "$PACK.sha256" 2>/dev/null)" "$(stat -c '%s %Y %i' "$base" 2>/dev/null)" "$(fp_files integrator orbis-graphics)" ;;
-    stage0) fp_str "$(cat "$PACK.sha256" 2>/dev/null)" "$(stat -c '%s %Y %i' "$base0" 2>/dev/null)" "$(fp_files integrator orbis-graphics diag/stage0 diag/miniroot)" ;;
+                 "$(image_id orbis-build:0.2.0)" "$(image_id "orbis-gfx-build:$ver")" "bore=$bore" "flavor=${FLAVOR:-aeolia-belize-6.15}" ;;
+    image@*) fp_str "$(cat "$PACK.sha256" 2>/dev/null)" "$(stat -c '%s %Y %i' "$base" 2>/dev/null)" "$(fp_files integrator orbis-graphics)" "target=$T" ;;
+    stage0@*) fp_str "$(cat "$PACK.sha256" 2>/dev/null)" "$(stat -c '%s %Y %i' "$base0" 2>/dev/null)" "$(fp_files integrator orbis-graphics diag/stage0 diag/miniroot)" "target=$T" ;;
   esac
 }
 # fresh <step> <output>: true when the output exists and was built from the current inputs
@@ -122,16 +216,16 @@ art_of() {   # step -> "artifact-name main-file"
     kernel-sg) echo "kernel-ge-sg out/kernel-ge-sg/bzImage" ;;
     loader) echo "loader-ge out/loader-ge/build.json" ;;
     pack) echo "pack $PACK" ;;
-    image) echo "image $IMG" ;;
-    stage0) echo "stage0-image $IMG0" ;;
+    image@*) echo "image $IMG" ;;
+    stage0@*) echo "stage0-image $IMG0" ;;
   esac
 }
-opts_json() { printf '{"bore": %s, "research_uvd": %s, "research_sgdisplay": %s, "jobs": "%s", "rust_kernel_toolchain": "%s"}' \
+opts_json() { printf '{"bore": %s, "research_uvd": %s, "research_sgdisplay": %s, "jobs": "%s", "rust_kernel_toolchain": "%s", "kernel_flavor": "%s"}' \
   "$([ "$bore" = 1 ] && echo true || echo false)" "$([ "$uvd" = 1 ] && echo true || echo false)" \
-  "$([ "$sgd" = 1 ] && echo true || echo false)" "${jobs:-auto}" "${RUST_KERNEL_TOOLCHAIN:-1.87.0}"; }
-prov() {     # prov <step>
+  "$([ "$sgd" = 1 ] && echo true || echo false)" "${jobs:-auto}" "${RUST_KERNEL_TOOLCHAIN:-1.87.0}" "${FLAVOR:-aeolia-belize-6.15}"; }
+prov() {     # prov <step> [target]
   local a m; read -r a m <<< "$(art_of "$1")"
-  python3 build/provenance.py write "$a" "$(dirname "$m")" "$m" "$(cat "out/.fp/$1")" "$target" "$(opts_json)"
+  python3 build/provenance.py write "$a" "$(dirname "$m")" "$m" "$(cat "out/.fp/$1")" "${2:-flavor:${FLAVOR:-aeolia-belize-6.15}}" "$(opts_json)"
 }
 # GE-A05: the 0.2.0 checkout must be byte-for-byte the same after any step that reads it
 guard_begin() { [ -z "$orbis_src" ] || python3 build/orbis_src_guard.py snapshot "$orbis_src" "out/.orbis-src-guard-$1.json" >/dev/null; }
@@ -153,6 +247,7 @@ run() {
 step_check() {
   say "0 host checks (fast; no kernel/Mesa build)"
   run check-python python3 -m unittest discover -s tests/unit -q
+  run check-targets targets_py target check
   if command -v cargo >/dev/null; then
     run check-rust bash -c "cd rust && cargo test --offline --locked -q"
   else
@@ -167,7 +262,7 @@ kernel_variant() {   # kernel_variant <step-name> <outdir> [flag]
   mark "$1"; prov "$1"
 }
 step_kernel() {
-  say "1 kernel: Orbis 0.2.0 kernel + Graphics Engine series"
+  say "1 kernel: Orbis 0.2.0 kernel + Graphics Engine series (flavor $FLAVOR)"
   need_src
   kernel_variant kernel out/kernel-ge
   if [ "$bore" = 1 ]; then say "1b BORE kernel (optional package linux-orbis-ps4-ge-bore)"; kernel_variant kernel-bore out/kernel-ge-bore --bore; fi
@@ -184,7 +279,7 @@ step_loader() {
 select_artifacts() {
   local bw=not-requested; [ "$bore" = 1 ] && bw=requested
   local lw=optional; [ -e out/loader-ge/build.json ] && lw=requested
-  python3 build/provenance.py select out/artifact-selection.json "$target" "$(opts_json)" \
+  python3 build/provenance.py select out/artifact-selection.json "flavor:$FLAVOR" "$(opts_json)" \
     "kernel-ge=out/kernel-ge:out/kernel-ge/bzImage:$(fp_of kernel):required" \
     "kernel-ge-bore=out/kernel-ge-bore:out/kernel-ge-bore/bzImage:$(fp_of kernel-bore):$bw" \
     "kernel-ge-uvd=out/kernel-ge-uvd:out/kernel-ge-uvd/bzImage:$(fp_of kernel-uvd):research-never-packed" \
@@ -192,118 +287,56 @@ select_artifacts() {
     "loader-ge=out/loader-ge:out/loader-ge/build.json:$(fp_of loader):$lw"
 }
 step_pack() {
-  say "3 packages + pack"
+  say "3 packages + pack (shared by every target of flavor $FLAVOR)"
   need_src
   select_artifacts || { echo "!!! the pack would contain stale or missing artifacts; rebuild them (see above)" >&2; exit 5; }
   if fresh pack "$PACK"; then return 0; fi
   local bf=(); [ "$bore" = 1 ] && bf=(--bore)
-  run pack build/build-pack.sh --orbis-src "$orbis_src" --target "$target" "${bf[@]}"
+  run pack build/build-pack.sh --orbis-src "$orbis_src" --target "flavor:$FLAVOR" "${bf[@]}"
   mark pack; prov pack
 }
-step_image() {
-  say "4 bootable image (copy of the base, GE integrated)"
-  [ -n "$base" ] && [ -f "$base" ] || { echo "--base-image <Orbis 0.2.0 .img> is required" >&2; exit 2; }
-  mkdir -p out/images
-  if fresh image "$IMG"; then return 0; fi
+step_image() {   # current target (use_target)
+  say "4 bootable image for $T (copy of the base, GE integrated)"
+  [ -n "$base" ] && [ -f "$base" ] || { echo "--base-image <Orbis 0.2.0 .img for $T> is required" >&2; exit 2; }
+  mkdir -p "$TDIR/images"
+  if fresh "image@$T" "$IMG"; then return 0; fi
   rm -f "$IMG" "$IMG".*   # never the base image: it is only read
-  run image ./orbis-graphics integrate --base-image "$base" --pack "$PACK" --output "$IMG"
-  mark image; prov image
+  run "image-$T" ./orbis-graphics integrate --base-image "$base" --pack "$PACK" --output "$IMG"
+  mark "image@$T"; prov "image@$T" "$T"
 }
 step_stage0() {
-  say "5 stage-0 diagnostic image"
-  if [ -z "$base0" ]; then echo "   no --base-stage0-image given: skipped (optional)"; return 0; fi
-  mkdir -p out/images
-  if fresh stage0 "$IMG0"; then return 0; fi
+  say "5 stage-0 diagnostic image for $T"
+  if [ -z "$base0" ]; then echo "   no --base-stage0-image for $T: skipped (optional)"; return 0; fi
+  mkdir -p "$TDIR/images"
+  if fresh "stage0@$T" "$IMG0"; then return 0; fi
   rm -f "$IMG0" "$IMG0".*
-  run stage0 ./orbis-graphics stage0 --base-stage0-image "$base0" --pack "$PACK" --output "$IMG0"
-  mark stage0; prov stage0
+  run "stage0-$T" ./orbis-graphics stage0 --base-stage0-image "$base0" --pack "$PACK" --output "$IMG0"
+  mark "stage0@$T"; prov "stage0@$T" "$T"
 }
-step_verify() {
-  say "6 verify + receipt"
+step_verify_pack() {
+  say "6 verify pack"
   run verify-pack bash -c "./orbis-graphics verify --pack '$PACK' > out/pack-verify.json"
   ( cd out/release && sha256sum -c "$(basename "$PACK").sha256" )
+}
+step_verify() {   # current target
+  say "6 verify + receipt for $T"
   # GE-A06: only images of this run's inputs, each checked against its provenance; an old
-  # stage-0 image (or any other file in out/images) never slips into the checksums or receipt
+  # stage-0 image (or any other file) never slips into the checksums or the receipt
   local imgs=()
-  if [ -n "$base" ] && python3 build/provenance.py check image out/images "$IMG" "$(fp_of image)"; then imgs+=("$IMG"); fi
-  if [ -n "$base0" ] && python3 build/provenance.py check stage0-image out/images "$IMG0" "$(fp_of stage0)"; then imgs+=("$IMG0"); fi
+  if [ -n "$base" ] && python3 build/provenance.py check image "$TDIR/images" "$IMG" "$(fp_of "image@$T")"; then imgs+=("$IMG"); fi
+  if [ -n "$base0" ] && python3 build/provenance.py check stage0-image "$TDIR/images" "$IMG0" "$(fp_of "stage0@$T")"; then imgs+=("$IMG0"); fi
   if [ -z "$base0" ] && [ -f "$IMG0" ]; then echo "   $IMG0 exists from an earlier run but no --base-stage0-image was given: left out"; fi
+  local f
   for f in "${imgs[@]}"; do ./orbis-graphics inspect --image "$f" --json > "$f.inspect.json"; done
-  rm -f out/images/SHA256SUMS
-  if [ "${#imgs[@]}" -gt 0 ]; then ( cd out/images && for f in "${imgs[@]}"; do sha256sum -- "$(basename "$f")"; done > SHA256SUMS && cat SHA256SUMS ); fi
+  mkdir -p "$TDIR/images"; rm -f "$TDIR/images/SHA256SUMS"
+  if [ "${#imgs[@]}" -gt 0 ]; then ( cd "$TDIR/images" && for f in "${imgs[@]}"; do sha256sum -- "$(basename "$f")"; done > SHA256SUMS && cat SHA256SUMS ); fi
   local toolchain
   toolchain="$(printf '{"orbis-build:0.2.0": "%s", "orbis-gfx-build:%s": "%s", "engine": "%s", "host": "%s"}' \
     "$(image_id orbis-build:0.2.0)" "$ver" "$(image_id "orbis-gfx-build:$ver")" \
     "$(${ENGINE:-podman} --version 2>/dev/null || echo unknown)" "$(uname -srm)")"
   local sel_img="" sel_img0=""
   for f in "${imgs[@]}"; do [ "$f" = "$IMG" ] && sel_img="$IMG"; [ "$f" = "$IMG0" ] && sel_img0="$IMG0"; done
-  python3 - "$PACK" "$sel_img" "$sel_img0" "${base:-}" "${base0:-}" "$toolchain" "${orbis_src:-}" "$target" <<'PY'
-import glob, hashlib, json, os, subprocess, sys, time
-pack, img, img0, base, base0, toolchain, orbis_src, target = sys.argv[1:9]
-def h(p):
-    if not p or not os.path.isfile(p):
-        return None
-    d = hashlib.sha256()
-    with open(p, "rb") as f:
-        for c in iter(lambda: f.read(1 << 20), b""):
-            d.update(c)
-    return d.hexdigest()
-def j(p):
-    try:
-        return json.load(open(p))
-    except (OSError, ValueError):
-        return None
-def git(*a, cwd="."):
-    r = subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True)
-    return r.stdout.strip() if r.returncode == 0 else None
-def fp(step):
-    try:
-        return open(f"out/.fp/{step}").read().strip()
-    except OSError:
-        return None
-series = [l.strip() for l in open("kernel/patches/series") if l.strip() and not l.startswith("#")]
-sel = j("out/artifact-selection.json") or {}
-kernels, not_selected = {}, {}
-for name in ("kernel-ge", "kernel-ge-bore", "kernel-ge-uvd", "kernel-ge-sg"):
-    m = j(f"out/{name}/build-manifest.json")
-    a = (sel.get("artifacts") or {}).get(name) or {}
-    if m and a.get("selected"):
-        kernels[name] = {"release": m.get("kernel_release"), "bzImage_sha256": h(f"out/{name}/bzImage"),
-                         "packed": True, "boot_tested": False, "orbis": m.get("orbis_graphics_engine"),
-                         "provenance": a.get("provenance")}
-    elif m:
-        not_selected[name] = a.get("detail") or "present, not selected"
-repo_pkgs = [{"file": os.path.basename(f), "sha256": h(f)} for f in sorted(glob.glob("out/pack/repo/*.pkg.tar.zst"))]
-rec = {"schema": "orbis-ge-release-receipt/3", "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "target": target,
-       "artifact_selection": {"ok": sel.get("ok"), "errors": sel.get("errors"), "not_selected": not_selected},
-       "release": json.load(open("manifest/release.json")),
-       "source": {"commit": git("rev-parse", "HEAD"), "dirty": bool(git("status", "--porcelain")),
-                  "orbis_0_2_0_commit": git("rev-parse", "HEAD", cwd=orbis_src) if orbis_src else None},
-       "inputs": {"fingerprints": {s: fp(s) for s in ("kernel", "kernel-bore", "loader", "pack", "image", "stage0")},
-                  "kernel_patch_series": [{"patch": p, "sha256": h("kernel/patches/" + p)} for p in series],
-                  "kernel_config_fragments": {f: h(f) for f in sorted(glob.glob("kernel/config/*.fragment"))},
-                  "loader_patches": {f: h(f) for f in sorted(glob.glob("loader/*.patch"))},
-                  "locks": {f: h(f) for f in ("rust/Cargo.lock", "gaming/runners.lock.json", "gaming/runners.json",
-                                              "manifest/sources.json", "manifest/release.json")}},
-       "toolchain": json.loads(toolchain),
-       "kernels": kernels,
-       "loader": j("out/loader-ge/build.json"),
-       "pack": {"file": pack, "sha256": h(pack), "packages": repo_pkgs, "verify": (j("out/pack-verify.json") or {}).get("result")},
-       "image": ({"file": img, "sha256": h(img), "base_image": base or None, "base_sha256": h(base) if base else None,
-                  "receipt": (j(img + ".integration.json") or {}).get("result"), "provenance": j(img + ".provenance.json")}
-                 if img else {"skipped": "no current image for this run's inputs"}),
-       "stage0_image": ({"file": img0, "sha256": h(img0), "base_image": base0, "base_sha256": h(base0),
-                         "receipt": (j(img0 + ".integration.json") or {}).get("result"), "provenance": j(img0 + ".provenance.json")}
-                        if img0 else {"skipped": "no --base-stage0-image given" if not base0 else "stage-0 image not current"}),
-       "rollback": {"base_image_unchanged": "compare image.base_sha256 with the hash you recorded before",
-                    "console": "sudo /usr/lib/orbis-graphics/rollback-root.sh --root / --boot /boot/ps4",
-                    "kernel_only": "sudo orbis boot rollback-kernel",
-                    "image": "./orbis-graphics rollback --image <ge image> --output <restored image>"},
-       "next": ["write the image to the USB drive (Fedora Media Writer, or dd to the WHOLE USB device, never a PS4 drive)",
-                "boot it; on the console: sudo orbis-gpu qualify && sudo orbis-perf doctor && sudo orbis-debug collect"]}
-json.dump(rec, open("out/ORBIS-GE-RELEASE-RECEIPT.json", "w"), indent=1)
-print(json.dumps({k: rec[k] for k in ("source", "kernels", "pack", "image", "stage0_image")}, indent=1)[:4000])
-PY
+  python3 build/receipt.py "$PACK" "$sel_img" "$sel_img0" "${base:-}" "${base0:-}" "$toolchain" "${orbis_src:-}" "$T" "$TDIR" "$target_by"
 }
 step_runners() {
   say "runners: pinned GE-Proton / DXVK / VKD3D-Proton -> out/runners (verified: upstream SHA-512 + gaming/runners.lock.json)"
@@ -323,38 +356,56 @@ step_runners() {
   echo "   bundle: $R/out/runners (SHA256SUMS inside). New SHA-256 entries were added to gaming/runners.lock.json: review + commit."
   echo "   console: scp -r out/runners <user>@<ps4-ip>:~/runners && ssh <user>@<ps4-ip> orbis-games install --bundle ~/runners"
 }
+status_line() {
+  local s="$1" f="$2" st=missing
+  if [ -e "$f" ]; then
+    st=present
+    if [ -n "$orbis_src" ] || [ "$s" = loader ] || [[ "$s" == *@* ]]; then
+      [ "$(fp_of "$s")" = "$(cat "out/.fp/$s" 2>/dev/null || true)" ] && st="present, current" || st="present, STALE (inputs changed)"
+    fi
+  fi
+  printf '%-22s %-70s %s\n' "$s" "$f" "$st"
+}
 step_status() {
+  local pair
   for pair in kernel:out/kernel-ge/build-manifest.json kernel-bore:out/kernel-ge-bore/build-manifest.json \
               kernel-uvd:out/kernel-ge-uvd/build-manifest.json kernel-sg:out/kernel-ge-sg/build-manifest.json \
-              loader:out/loader-ge/build.json pack:"$PACK" image:"$IMG" stage0:"$IMG0"; do
-    local s="${pair%%:*}" f="${pair#*:}" st=missing
-    if [ -e "$f" ]; then
-      st=present
-      if [ -n "$orbis_src" ] || [ "$s" = loader ]; then
-        [ "$(fp_of "$s")" = "$(cat "out/.fp/$s" 2>/dev/null || true)" ] && st="present, current" || st="present, STALE (inputs changed)"
-      fi
-    fi
-    printf '%-12s %-60s %s\n' "$s" "$f" "$st"
+              loader:out/loader-ge/build.json pack:"$PACK"; do
+    status_line "${pair%%:*}" "${pair#*:}"
+  done
+  local t
+  for t in "${TARGETS[@]}"; do
+    use_target "$t"
+    status_line "image@$t" "$IMG"; status_line "stage0@$t" "$IMG0"
   done
 }
 
 case "$cmd" in
+  all|kernel|pack|image|stage0|verify|status) resolve_targets; check_base_args; resolve_flavor ;;
+esac
+case "$cmd" in
   all)
     command -v podman >/dev/null || { echo "need podman: sudo dnf install podman" >&2; exit 2; }
     need_src
-    [ -n "$base" ] && [ -f "$base" ] || { echo "--base-image <Orbis 0.2.0 .img> is required for 'all'" >&2; exit 2; }
-    step_check; step_kernel; step_loader; step_pack; step_image; step_stage0; step_verify
-    echo; echo "Done. Image: $R/$IMG"
-    if [ -f "$IMG0" ]; then echo "Stage-0: $R/$IMG0"; fi
-    echo "Receipt: $R/out/ORBIS-GE-RELEASE-RECEIPT.json" ;;
+    for t in "${TARGETS[@]}"; do use_target "$t"; [ -n "$base" ] && [ -f "$base" ] || {
+      echo "--base-image <Orbis 0.2.0 .img> is required for $t (several targets: --base-image $t=<file>)" >&2; exit 2; }; done
+    step_check; step_kernel; step_loader; step_pack; step_verify_pack
+    for t in "${TARGETS[@]}"; do use_target "$t"; step_image; step_stage0; step_verify; done
+    echo; echo "Done."
+    for t in "${TARGETS[@]}"; do
+      use_target "$t"; echo "  $t: $R/$IMG"
+      if [ -f "$IMG0" ]; then echo "  $t stage-0: $R/$IMG0"; fi
+      echo "  $t receipt: $R/$TDIR/ORBIS-GE-RELEASE-RECEIPT.json"
+    done
+    echo "  manifest: $R/out/RELEASE-MANIFEST.json" ;;
   check) step_check ;;
   kernel) step_kernel ;;
   loader) step_loader ;;
   pack) step_pack ;;
-  image) step_image ;;
-  stage0) step_stage0 ;;
-  verify) step_verify ;;
+  image) for t in "${TARGETS[@]}"; do use_target "$t"; step_image; done ;;
+  stage0) for t in "${TARGETS[@]}"; do use_target "$t"; step_stage0; done ;;
+  verify) step_verify_pack; for t in "${TARGETS[@]}"; do use_target "$t"; step_verify; done ;;
   status) step_status ;;
   runners) step_runners ;;
-  *) sed -n 2,27p "$0"; [ "$cmd" = help ] || exit 2 ;;
+  *) sed -n 2,37p "$0"; [ "$cmd" = help ] || exit 2 ;;
 esac

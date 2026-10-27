@@ -1,0 +1,16 @@
+{
+ "schema": "orbis-target/1",
+ "id": "cuh-1215a",
+ "kind": "model",
+ "name": "PS4 CUH-1215A (NickLabs reference console)",
+ "extends": "cuh-12xx",
+ "reference": true,
+ "models": [
+  "CUH-1215A"
+ ],
+ "owner_console": "NickLabs primary development console (firmware 13.50, GoldHEN)",
+ "notes": [
+  "Reference target of Orbis 0.2.0 (profile cuh-1215a: Liverpool + Marvell 88W8897 required, EDID optional) and of the Graphics Engine.",
+  "Nothing of Orbis 0.2.0 or the Graphics Engine has been booted on it yet: no capability is 'verified'."
+ ]
+}

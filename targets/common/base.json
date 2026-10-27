@@ -1,0 +1,164 @@
+{
+ "schema": "orbis-target/1",
+ "id": "common",
+ "kind": "common",
+ "name": "Shared software for every PS4 target",
+ "kernel": {
+  "base": "feeRnt 6.15.4 crashnt-4.7 @108ef97 + Orbis 0001",
+  "series": "kernel/patches/series (stable-6.15/0001-0002, ge-6.15/0001-0016)",
+  "flavors": {
+   "aeolia-belize-6.15": "the only GE kernel flavor that exists"
+  }
+ },
+ "capabilities": {
+  "boot": {
+   "state": "awaiting-hardware",
+   "implemented_by": [
+    "Orbis 0.2.0 loader + GE loader patch (memory contract, time handoff)",
+    "kernel flavor"
+   ],
+   "needs": "boot log (orbis-debug collect --hardware) from the console"
+  },
+  "southbridge-io": {
+   "state": "awaiting-hardware",
+   "implemented_by": [
+    "aeolia/belize apcie, ahci, xhci, sky2, sdhci drivers in the base tree"
+   ],
+   "needs": "lspci -nnk + dmesg showing every southbridge function bound"
+  },
+  "icc-power-fan": {
+   "state": "awaiting-hardware",
+   "implemented_by": [
+    "ps4-apcie-icc",
+    "ps4-fan + ge-0001 fan threshold"
+   ],
+   "needs": "orbis-hw status: fan threshold readable and writable, power button event"
+  },
+  "rtc": {
+   "state": "awaiting-hardware",
+   "implemented_by": [
+    "ge-0011 Aeolia/Belize RTC class device",
+    "ge-0010 loader wall clock"
+   ],
+   "needs": "orbis-time status shows source rtc-hardware or loader"
+  },
+  "cpufreq": {
+   "state": "awaiting-hardware",
+   "implemented_by": [
+    "ge-0007 Jaguar hardware P-state driver"
+   ],
+   "needs": "scaling_driver present, P-state switch observed"
+  },
+  "display-hdmi": {
+   "state": "awaiting-hardware",
+   "implemented_by": [
+    "ps4_bridge (MN86471A / MN864729) + ge-0005/0006 robustness knobs"
+   ],
+   "needs": "picture on HDMI at boot and after modeset"
+  },
+  "hdmi-audio": {
+   "state": "awaiting-hardware",
+   "implemented_by": [
+    "ge-0004 audio DTO"
+   ],
+   "needs": "speaker-test over HDMI"
+  },
+  "gpu-3d": {
+   "state": "awaiting-hardware",
+   "implemented_by": [
+    "amdgpu CIK Liverpool/Gladius",
+    "Mesa 26.2.5 radeonsi/RADV"
+   ],
+   "needs": "orbis-gpu qualify PASS"
+  },
+  "gpu-clocks": {
+   "state": "awaiting-hardware",
+   "implemented_by": [
+    "ge-0002 SCLK restore/control",
+    "ge-0009 SMU mailbox (opt-in)"
+   ],
+   "needs": "ps4_sclk state=max measured"
+  },
+  "ge-telemetry": {
+   "state": "awaiting-hardware",
+   "implemented_by": [
+    "ge-0008 engine activity + runtime GTT budget"
+   ],
+   "needs": "orbis_engine_busy readable under load"
+  },
+  "ge-unified-memory": {
+   "state": "awaiting-hardware",
+   "implemented_by": [
+    "ge-0014 shrinker/trim",
+    "ge-0015 GTT dmem region",
+    "ge-0016 corrections",
+    "stable-6.15/0001-0002 TTM fixes",
+    "orbis-memd",
+    "orbis-run admission"
+   ],
+   "needs": "orbis-mem bench PASS, set-budget enforced, admission ADMITTED on a game"
+  },
+  "wifi-bt": {
+   "state": "awaiting-hardware",
+   "implemented_by": [
+    "mwifiex (Marvell) or mt7668 depending on board"
+   ],
+   "needs": "association on the NickLabs LAN"
+  },
+  "video-decode": {
+   "state": "unsupported",
+   "reason": "UVD on Liverpool is a research kernel only (--research-uvd, never packed)"
+  }
+ },
+ "unified_memory": {
+  "pool": "8 GiB GDDR5 shared by CPU and GPU",
+  "contract": "loader carve-out (vram.txt) + runtime GTT budget + dmem limits",
+  "states_note": "per-target values below override"
+ },
+ "notes": [
+  "Shared across targets: Mesa 26.2.5 (+lib32), orbis-native (Rust), orbis-graphics-engine (Python), orbis-gaming. They do not depend on the southbridge.",
+  "Hardware-dependent: kernel flavor (southbridge drivers), HDMI bridge path, Wi-Fi/BT firmware, loader payload, the 0.2.0 base image profile."
+ ],
+ "sources": [
+  {
+   "name": "feeRnt/ps4-linux-12xx",
+   "url": "https://github.com/feeRnt/ps4-linux-12xx",
+   "role": "base kernel tree (6.15.4-aeolia-belize-crashniels @108ef97 for Orbis 0.2.0); model/southbridge/kernel table"
+  },
+  {
+   "name": "sony-jaguar-devs/ps4-linux",
+   "url": "https://github.com/sony-jaguar-devs/ps4-linux",
+   "role": "same lineage; branches 5.4.247-baikal-dfaus, 5.15.15-belize, 6.15.4-aeolia-belize-crashniels, 7.0-Clean"
+  },
+  {
+   "name": "codedwrench/ps4-linux",
+   "url": "https://github.com/codedwrench/ps4-linux",
+   "role": "upstream of the feeRnt / sony-jaguar-devs forks"
+  },
+  {
+   "name": "psdevwiki PS4 Southbridge",
+   "url": "https://www.psdevwiki.com/ps4/Southbridge",
+   "role": "southbridge part numbers, motherboard and chassis mapping"
+  },
+  {
+   "name": "tomfitzhenry/ps4-which-southbridge",
+   "url": "https://github.com/tomfitzhenry/ps4-which-southbridge",
+   "role": "hw.sce_subsys_subid values per southbridge stepping (read under OrbisOS)"
+  },
+  {
+   "name": "X-F1REBALL-X/PS4-Linux",
+   "url": "https://github.com/X-F1REBALL-X/PS4-Linux",
+   "role": "binary Belize 7.1.7 / Baikal 7.0.8 kernels reported working on CUH-7116B / CUH-2116A; no pinned source"
+  },
+  {
+   "name": "kernel.org stable",
+   "url": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git",
+   "role": "upstream/stable backports (stable-6.15/0001-0002), reproducible tarballs"
+  },
+  {
+   "name": "kernel tree include/linux/pci_ids.h + drivers/gpu/drm/amd/amdgpu/ps4_bridge.c",
+   "url": "https://github.com/feeRnt/ps4-linux-12xx",
+   "role": "Sony southbridge PCI IDs; GPU PCI IDs 0x9920 (CUH-11xx), 0x9922 (CUH-12xx), 0x9923 (CUH-2xxx), 0x9924 (CUH-7xxx)"
+  }
+ ]
+}

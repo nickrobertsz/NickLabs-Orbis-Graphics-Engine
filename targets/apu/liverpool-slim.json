@@ -1,0 +1,28 @@
+{
+ "schema": "orbis-target/1",
+ "id": "liverpool-slim",
+ "kind": "apu",
+ "name": "Liverpool 16 nm (CUH-2xxx Slim)",
+ "gpu": {
+  "pci_vendor": "0x1002",
+  "pci_device": "0x9923",
+  "amdgpu_chip": "CHIP_LIVERPOOL",
+  "compute_units": 18,
+  "process": "16 nm"
+ },
+ "hdmi_bridge": "MN864729",
+ "memory": {
+  "gddr5_bytes": 8589934592,
+  "peak_bandwidth_gbs": 176
+ },
+ "notes": [
+  "ps4_bridge.c: PCI_DEVICE_ID_CUH_2XXX"
+ ],
+ "sources": [
+  {
+   "name": "kernel tree include/linux/pci_ids.h + drivers/gpu/drm/amd/amdgpu/ps4_bridge.c",
+   "url": "https://github.com/feeRnt/ps4-linux-12xx",
+   "role": "Sony southbridge PCI IDs; GPU PCI IDs 0x9920 (CUH-11xx), 0x9922 (CUH-12xx), 0x9923 (CUH-2xxx), 0x9924 (CUH-7xxx)"
+  }
+ ]
+}

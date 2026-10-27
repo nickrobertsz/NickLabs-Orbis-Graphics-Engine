@@ -1,0 +1,35 @@
+{
+ "schema": "orbis-target/1",
+ "id": "cuh-71xx-belize2",
+ "kind": "model",
+ "name": "PS4 Pro CUH-71xx (Belize 2 board)",
+ "extends": "common",
+ "family": "pro",
+ "southbridge": "belize2",
+ "apu": "gladius",
+ "models": [
+  "CUH-71??*"
+ ],
+ "chassis": "7100",
+ "motherboards": [
+  "NVB-003"
+ ],
+ "wifi_bt": [
+  "unknown"
+ ],
+ "unified_memory": {
+  "pool_gib": 8,
+  "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+  "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+  "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+  "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+  "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console",
+  "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+  "cus": 36,
+  "note": "twice the CUs at higher bandwidth: the same carve-out leaves less headroom per CU; default carve-out to be decided from a Pro qualification run",
+  "state": "awaiting-hardware"
+ },
+ "notes": [
+  "X-F1REBALL-X reports a Belize 7.1.7 kernel working on CUH-7116B."
+ ]
+}
