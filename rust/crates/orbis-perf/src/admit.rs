@@ -111,7 +111,20 @@ pub fn prune(admitted: &Admitted) {
     }
 }
 
+/// The two directories (normally made by tmpfiles.d/orbis-native.conf): requests 1777 (sticky),
+/// replies 0755 root.
+fn ensure_dirs() {
+    use std::os::unix::fs::PermissionsExt;
+    for (d, mode) in [(admit::DIR, 0o1777), (admit::REPLY_DIR, 0o755)] {
+        let path = p(d);
+        if std::fs::create_dir_all(&path).is_ok() {
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode));
+        }
+    }
+}
+
 pub fn spawn(admitted: Admitted) {
+    ensure_dirs();
     let _ = std::thread::Builder::new().name("orbis-admit".into()).spawn(move || {
         let mut n = 0u32;
         loop {
