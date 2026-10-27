@@ -42,6 +42,9 @@ pub struct ModePolicy {
     pub background_cpus: Option<String>,
     pub irq_gpu_cpu: Option<u32>,
     pub max_map_count: i64,
+    /// vm.compaction_proactiveness: background compaction keeps huge pages available (THP, GPU
+    /// buffers) but costs CPU time; 0 in GAMING (no compaction stalls mid-frame)
+    pub compaction_proactiveness: i64,
     /// governor for game sessions (mode-level governor stays with orbisd)
     pub session_governor: String,
 }
@@ -62,6 +65,7 @@ pub fn builtin(mode: &str) -> ModePolicy {
         irq_gpu_cpu: None,
         // games and DXVK map many regions; SteamOS/Fedora use this value
         max_map_count: 2147483642,
+        compaction_proactiveness: 20,
         session_governor: "performance".into(),
     };
     match mode {
@@ -72,12 +76,15 @@ pub fn builtin(mode: &str) -> ModePolicy {
             io_scheduler: vec!["adios".into(), "mq-deadline".into(), "bfq".into()],
             background_cpus: Some("0-1".into()),
             irq_gpu_cpu: Some(0),
+            compaction_proactiveness: 0,
             ..base
         },
         "ai" => ModePolicy {
             gpu: GpuPolicy::Max,
             fan_threshold_c: Some(72),
             thp_enabled: "always".into(),
+            // THP=always for llama.cpp: keep large contiguous blocks available
+            compaction_proactiveness: 40,
             io_scheduler: vec!["mq-deadline".into(), "none".into()],
             background_cpus: Some("0-1".into()),
             ..base
@@ -128,6 +135,9 @@ pub fn mode_policy(mode: &str) -> ModePolicy {
         }
         if let Some(v) = m.get("irq_gpu_cpu") {
             pol.irq_gpu_cpu = v.as_i64().map(|x| x as u32);
+        }
+        if let Some(x) = m.get("compaction_proactiveness").and_then(Value::as_i64) {
+            pol.compaction_proactiveness = x.clamp(0, 100);
         }
     }
     pol

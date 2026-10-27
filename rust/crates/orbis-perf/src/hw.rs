@@ -289,6 +289,25 @@ pub fn protect_vram(j: &mut Journal, cgroup: &str, bytes: u64) -> Vec<Value> {
     out
 }
 
+/// dmem.max for the GPU's VRAM region on one cgroup (the game's own scope; limits are not
+/// propagated to ancestors). Journalled so the session end restores "max".
+pub fn limit_vram(j: &mut Journal, cgroup: &str, bytes: u64) -> Value {
+    let Some(region) = dmem_region() else {
+        return act("dmem_max", "UNSUPPORTED", "no dmem VRAM region (kernel without CONFIG_CGROUP_DMEM)");
+    };
+    let f = p(&format!("/sys/fs/cgroup/{}/dmem.max", cgroup.trim_matches('/')));
+    if !f.exists() {
+        return act("dmem_max", "UNSUPPORTED", format!("{cgroup}: dmem controller not enabled here"));
+    }
+    let cur = fsx::read_raw(&f).unwrap_or_default();
+    let cur_v = cur.lines().find(|l| l.starts_with(&region)).and_then(|l| l.split_whitespace().nth(1)).unwrap_or("max").to_string();
+    let _ = j.remember(&f.display().to_string(), &format!("{region} {cur_v}"));
+    match fsx::write_value(&f, &format!("{region} {bytes}")) {
+        Ok(()) => act("dmem_max", "APPLIED", format!("{cgroup} {region} {bytes}")),
+        Err(e) => act("dmem_max", "FAILED", format!("{cgroup}: {e}")),
+    }
+}
+
 pub fn vram_total() -> Option<u64> {
     fsx::read_u64(&gpu_dir()?.join("mem_info_vram_total"))
 }

@@ -96,9 +96,15 @@ GTT pages are counted once, on the GPU side.
 | AMD SVM (amdkfd, GFX9+ with XNACK) | shared virtual memory with retry faults | needs amdkfd and retry faults; the PS4 kernel has no HSA/KFD and GFX7 has no retry → **not possible** |
 | Integrated AMD APUs on PCs (radeonsi/RADV) | small BIOS carve-out + large GTT | the same model as here; the GE adds a runtime budget and pressure policy, which stock amdgpu does not have |
 
-**Software alternatives implemented:** a small or right-sized carve-out chosen per mode (boot
-plan), a GTT budget that tracks mode and pressure, explicit eviction by TTM when the budget
-shrinks, and per-process accounting so a runaway GPU client can be identified.
+**Software alternatives implemented:**
+* a small or right-sized carve-out chosen per mode (boot plan);
+* a GTT budget that tracks mode and pressure;
+* per-process accounting, so a runaway GPU client can be identified.
+
+A lower budget applies to the *next* allocation: TTM then evicts other GTT buffers instead of
+failing. Nothing is trimmed actively yet, and evicted buffers stay in RAM until something swaps
+them out. The full classification, including the planned amdgpu shrinker that makes idle GPU
+buffers reclaimable, is in [UNIFIED-MEMORY-ARCHITECTURE.md](UNIFIED-MEMORY-ARCHITECTURE.md).
 
 ## Commands
 

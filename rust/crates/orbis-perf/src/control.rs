@@ -104,6 +104,9 @@ impl Controller {
             out.push(hw::set_sysctl(j, "vm.workingset_protection", if pol.workingset_protection { "1" } else { "0" }, &owned));
         }
         out.push(hw::set_sysctl(j, "vm.max_map_count", &pol.max_map_count.to_string(), &owned));
+        if hw::sysctl_path("vm.compaction_proactiveness").exists() {
+            out.push(hw::set_sysctl(j, "vm.compaction_proactiveness", &pol.compaction_proactiveness.to_string(), &owned));
+        }
         out.extend(hw::set_io_scheduler(j, &pol.io_scheduler));
         out.push(hw::set_background_cpus(j, pol.background_cpus.as_deref()));
         if let Some(cpu) = pol.irq_gpu_cpu {
@@ -137,6 +140,12 @@ impl Controller {
             }
         }
         out
+    }
+
+    /// VRAM ceiling for one game (profile memory.dmem_max_mb): above it TTM places the game's
+    /// buffers in GTT (same GDDR5, through GART) instead of evicting other clients' VRAM.
+    fn session_vram_max(s: &Session) -> Option<u64> {
+        s.profile.as_ref().and_then(|p| p.int("memory.dmem_max_mb")).filter(|mb| *mb > 0).map(|mb| (mb as u64) << 20)
     }
 
     fn session_policy(&self, s: &Session) -> (String, Vec<String>, String, String, Option<i64>, i32, Option<u64>) {
@@ -181,6 +190,11 @@ impl Controller {
         if let Some(b) = dmem {
             if !s.root_cgroup.is_empty() {
                 acts.extend(hw::protect_vram(&mut self.sess_j, &s.root_cgroup, b));
+            }
+        }
+        if let Some(b) = Self::session_vram_max(s) {
+            if !s.root_cgroup.is_empty() {
+                acts.push(hw::limit_vram(&mut self.sess_j, &s.root_cgroup, b));
             }
         }
         self.note(jobj! {"event" => "game-start", "session" => s.key.clone(), "title" => s.title.clone(), "via" => s.via.clone(),
@@ -464,6 +478,9 @@ mod tests {
         w(r, "proc/sys/vm/max_map_count", "65530\n");
         w(r, "proc/sys/vm/workingset_protection", "1\n");
         w(r, "proc/sys/vm/swappiness", "60\n");
+        w(r, "proc/sys/vm/compaction_proactiveness", "20\n");
+        w(r, "sys/fs/cgroup/user.slice/user-1000.slice/app-22.scope/dmem.max", "drm/0000:00:01.0/vram max\n");
+        w(r, "etc/orbis/games.d/elden.json", r#"{"name":"Elden Ring","match":{"steam_appid":["1245620"]},"memory":{"dmem_max_mb":512}}"#);
         w(r, "sys/block/sda/queue/scheduler", "[mq-deadline] kyber bfq adios none\n");
         w(r, "sys/fs/cgroup/cgroup.controllers", "cpuset cpu io memory pids dmem\n");
         w(r, "sys/fs/cgroup/dmem.capacity", "drm/0000:00:01.0/vram 1073741824\n");
@@ -495,6 +512,7 @@ mod tests {
         assert_eq!(rd(&format!("{dev}/ps4_sclk")), "max");
         assert_eq!(rd("sys/class/hwmon/hwmon2/temp1_crit"), "70000");
         assert_eq!(rd("sys/fs/cgroup/user.slice/user-1000.slice/app-22.scope/dmem.low"), format!("drm/0000:00:01.0/vram {}", (1u64 << 30) / 4 * 3));
+        assert_eq!(rd("sys/fs/cgroup/user.slice/user-1000.slice/app-22.scope/dmem.max"), format!("drm/0000:00:01.0/vram {}", 512u64 << 20));
         let st = c.state();
         assert_eq!(st.at("sessions").and_then(|s| s.as_arr()).map(|a| a.len()), Some(1));
 
@@ -519,6 +537,8 @@ mod tests {
         assert_eq!(rd("sys/devices/system/cpu/cpufreq/policy0/scaling_governor"), "schedutil");
         assert_eq!(rd("sys/class/hwmon/hwmon2/temp1_crit"), "79000");
         assert_eq!(rd("sys/fs/cgroup/user.slice/user-1000.slice/app-22.scope/dmem.low"), "drm/0000:00:01.0/vram 0");
+        assert_eq!(rd("sys/fs/cgroup/user.slice/user-1000.slice/app-22.scope/dmem.max"), "drm/0000:00:01.0/vram max");
+        assert_eq!(rd("proc/sys/vm/compaction_proactiveness"), "20");
 
         // gaming mode
         w(r, "var/lib/orbis/desired-mode", "gaming\n");
@@ -526,6 +546,7 @@ mod tests {
         c.tick();
         assert_eq!(rd("sys/block/sda/queue/scheduler"), "adios");
         assert_eq!(rd("proc/irq/40/smp_affinity_list"), "0");
+        assert_eq!(rd("proc/sys/vm/compaction_proactiveness"), "0"); // no compaction stalls while gaming
 
         // full restore returns to the boot values
         w(r, "sys/block/sda/queue/scheduler", "mq-deadline kyber bfq [adios] none\n");

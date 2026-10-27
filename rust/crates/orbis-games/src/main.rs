@@ -21,7 +21,8 @@ fn cmd_caps(save: bool) -> Result<Value, String> {
         "schema" => "orbis-vulkan-caps/1", "time" => orbis_core::sys::now_unix().0,
         "device" => jobj! {"name" => c.device_name.clone(), "driver" => c.driver_name.clone(), "api_version" => c.api_str(),
                            "software" => c.software, "extensions" => c.extensions.len(), "source" => c.source.clone()},
-        "selection" => sel
+        "selection" => sel,
+        "memory" => caps::memory_report(&c, &caps::probe_heaps(&c.device_name))
     };
     if save {
         // keep the raw probe so orbis-run (unprivileged) can re-evaluate without running vulkaninfo
@@ -81,7 +82,8 @@ fn main() {
             }
             let doc = jobj! {"name" => name.clone(), "match" => m, "runner" => "auto", "dxvk" => "auto", "renderer" => "auto",
                 "scheduler" => "auto", "governor" => "performance", "gpu_sclk" => "max", "nice" => -4i64,
-                "memory" => jobj! {"dmem_low_mb" => Value::Null}, "shader_cache" => jobj! {"max_mb" => 2048i64},
+                "memory" => jobj! {"dmem_low_mb" => Value::Null, "dmem_max_mb" => Value::Null, "vulkan_heaps" => "auto"},
+                "telemetry" => jobj! {"frametimes" => false}, "shader_cache" => jobj! {"max_mb" => 2048i64},
                 "audio" => jobj! {"pulse_latency_msec" => Value::Null}, "controller" => jobj! {"sdl_mapping" => Value::Null},
                 "env" => Value::obj(), "log" => jobj! {"dxvk" => "warn", "proton" => false}};
             let f = catalog::home().join(".config/orbis/games.d").join(format!("{}.json", run::slug(name)));

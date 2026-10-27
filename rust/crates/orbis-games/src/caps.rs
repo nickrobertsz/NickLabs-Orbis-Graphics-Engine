@@ -195,3 +195,117 @@ pub fn probe() -> Result<Caps, String> {
     }
     Ok(from_text(&String::from_utf8_lossy(&o.stdout)))
 }
+
+/// One Vulkan memory heap as the driver reports it. On the PS4 (an APU) RADV builds its heaps from
+/// the VRAM carve-out plus the GTT budget, so the heaps describe the same physical GDDR5 that
+/// Linux also uses: their sizes are GPU-addressable limits, never extra memory, and are not added
+/// to physical RAM anywhere in Orbis.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Heap {
+    pub index: u32,
+    pub size: u64,
+    pub budget: Option<u64>,
+    pub usage: Option<u64>,
+    pub device_local: bool,
+}
+
+/// Parse the memoryHeaps of one GPU from `vulkaninfo` text output. With several GPUs the section
+/// whose deviceName matches `device` is used (the text output lists all GPUs as GPU0:, GPU1:, ...).
+pub fn heaps_from_text(text: &str, device: &str) -> Vec<Heap> {
+    let mut sections: Vec<String> = vec![String::new()];
+    for l in text.lines() {
+        let t = l.trim();
+        if t.starts_with("GPU") && t.ends_with(':') && t[3..t.len() - 1].chars().all(|c| c.is_ascii_digit()) {
+            sections.push(String::new());
+        }
+        let last = sections.last_mut().unwrap();
+        last.push_str(l);
+        last.push('\n');
+    }
+    let pick = sections
+        .iter()
+        .find(|s| !device.is_empty() && s.lines().any(|l| l.trim_start().starts_with("deviceName") && l.contains(device)))
+        .or_else(|| sections.iter().find(|s| s.contains("memoryHeaps[")))
+        .cloned()
+        .unwrap_or_default();
+    let num = |l: &str| l.split('=').nth(1).and_then(|v| v.split_whitespace().next()).and_then(|v| v.parse::<u64>().ok());
+    let mut out: Vec<Heap> = vec![];
+    let mut in_heaps = false;
+    for l in pick.lines() {
+        let t = l.trim();
+        if t.starts_with("memoryTypes") {
+            in_heaps = false;
+        }
+        if let Some(rest) = t.strip_prefix("memoryHeaps[") {
+            if let Some(i) = rest.split(']').next().and_then(|x| x.parse().ok()) {
+                out.push(Heap { index: i, size: 0, budget: None, usage: None, device_local: false });
+                in_heaps = true;
+                continue;
+            }
+        }
+        if !in_heaps {
+            continue;
+        }
+        if let Some(h) = out.last_mut() {
+            if t.starts_with("size") {
+                h.size = num(t).unwrap_or(0);
+            } else if t.starts_with("budget") {
+                h.budget = num(t);
+            } else if t.starts_with("usage") {
+                h.usage = num(t);
+            } else if t.contains("MEMORY_HEAP_DEVICE_LOCAL_BIT") {
+                h.device_local = true;
+            }
+        }
+    }
+    out
+}
+
+/// Heaps of the GPU `device` (runs plain `vulkaninfo`; empty when it is unavailable).
+pub fn probe_heaps(device: &str) -> Vec<Heap> {
+    Command::new("vulkaninfo")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| heaps_from_text(&String::from_utf8_lossy(&o.stdout), device))
+        .unwrap_or_default()
+}
+
+/// The memory part of the capability report.
+pub fn memory_report(c: &Caps, heaps: &[Heap]) -> Value {
+    let mib = |b: u64| (b >> 20) as i64;
+    orbis_core::jobj! {
+        "heaps" => Value::Arr(heaps.iter().map(|h| orbis_core::jobj! {
+            "index" => h.index as i64, "size_mib" => mib(h.size), "budget_mib" => h.budget.map(mib),
+            "usage_mib" => h.usage.map(mib), "device_local" => h.device_local}).collect()),
+        "heaps_note" => "APU: heaps are views of the shared GDDR5 (VRAM carve-out + GTT budget). They overlap Linux RAM and are not added to it.",
+        // zero-copy: the GPU reads/writes ordinary process memory (amdgpu userptr, HMM mirror)
+        "external_memory_host" => c.has_ext("VK_EXT_external_memory_host"),
+        // per-heap budget that follows the runtime GTT budget (orbis-memd)
+        "memory_budget" => c.has_ext("VK_EXT_memory_budget"),
+        "memory_priority" => c.has_ext("VK_EXT_memory_priority"),
+        "pageable_device_local_memory" => c.has_ext("VK_EXT_pageable_device_local_memory"),
+        "dma_buf" => c.has_ext("VK_EXT_external_memory_dma_buf")
+    }
+}
+
+#[cfg(test)]
+mod heap_tests {
+    use super::*;
+
+    #[test]
+    fn heaps_parse_per_gpu() {
+        let t = "GPU0:\n\tdeviceName = llvmpipe (LLVM 21.1.0, 256 bits)\nVkPhysicalDeviceMemoryProperties:\nmemoryHeaps: count = 1\n\
+                 \tmemoryHeaps[0]:\n\t\tsize   = 8589934592 (0x200000000) (8.00 GiB)\n\t\tflags: count = 1\n\t\t\tMEMORY_HEAP_DEVICE_LOCAL_BIT\n\
+                 GPU1:\n\tdeviceName = AMD Radeon Graphics (RADV LIVERPOOL)\nmemoryHeaps: count = 2\n\
+                 \tmemoryHeaps[0]:\n\t\tsize   = 3221225472 (0xc0000000) (3.00 GiB)\n\t\tbudget = 3000000000 (0xb2d05e00) (2.79 GiB)\n\
+                 \t\tusage  = 1048576 (0x00100000) (1.00 MiB)\n\t\tflags: count = 1\n\t\t\tMEMORY_HEAP_DEVICE_LOCAL_BIT\n\
+                 \tmemoryHeaps[1]:\n\t\tsize   = 1610612736 (0x60000000) (1.50 GiB)\n\t\tflags:\n\t\t\tNone\n\
+                 memoryTypes: count = 4\n\tmemoryTypes[0]:\n\t\theapIndex = 0\n\t\tsize = 1\n";
+        let h = heaps_from_text(t, "AMD Radeon Graphics (RADV LIVERPOOL)");
+        assert_eq!(h.len(), 2);
+        assert_eq!(h[0], Heap { index: 0, size: 3 << 30, budget: Some(3000000000), usage: Some(1 << 20), device_local: true });
+        assert_eq!((h[1].size, h[1].device_local), (1536 << 20, false));
+        assert_eq!(heaps_from_text(t, "llvmpipe").len(), 1);
+    }
+}

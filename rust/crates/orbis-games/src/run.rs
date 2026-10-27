@@ -179,6 +179,26 @@ pub fn plan(cmd: &[String], prof: &Profile, title_opt: Option<&str>, runner_opt:
     if let Some(m) = prof.s("controller.sdl_mapping") {
         env.insert("SDL_GAMECONTROLLERCONFIG".into(), m);
     }
+    // Shared GDDR5: RADV builds its heaps from the VRAM carve-out + GTT budget. By default it shows
+    // 2/3 as device-local; "unified" shows the whole GPU-addressable pool as one device-local heap
+    // (for games that refuse to start below a VRAM size). Mesa driconf options can be set from the
+    // environment under their own name.
+    match prof.s("memory.vulkan_heaps").as_deref() {
+        Some("unified") => {
+            env.insert("radv_enable_unified_heap_on_apu".into(), "true".into());
+            notes.push("memory: one unified Vulkan heap (carve-out + GTT budget; same physical GDDR5 as Linux RAM)".into());
+        }
+        Some("split") => {
+            env.insert("radv_enable_unified_heap_on_apu".into(), "false".into());
+        }
+        _ => {}
+    }
+    // frame-time telemetry: MangoHud logging without the overlay, summarised into last.json
+    if prof.doc.at("telemetry.frametimes").and_then(Value::as_bool).unwrap_or(false) {
+        env.insert("MANGOHUD".into(), "1".into());
+        env.insert("MANGOHUD_CONFIG".into(), format!("no_display,autostart_log=1,log_interval=0,output_folder={}", state.display()));
+        notes.push("telemetry: MangoHud frame-time log (no overlay)".into());
+    }
     // Windows synchronisation: NTSYNC (kernel driver, Proton 10+/Wine 10.15+ use it by themselves
     // when /dev/ntsync is accessible), else fsync (futex_waitv, Proton default), else esync.
     let ntsync = Path::new("/dev/ntsync").exists();
@@ -409,6 +429,7 @@ pub fn main_run(argv: Vec<String>) -> i32 {
             }
         }));
     }
+    let started = std::time::SystemTime::now() - std::time::Duration::from_secs(2);
     let status = child.wait();
     for h in hs {
         let _ = h.join();
@@ -429,6 +450,9 @@ pub fn main_run(argv: Vec<String>) -> i32 {
     }
     let mut rep = classify::classify(code, sig, &text);
     rep.set("plan", summary).set("log", logf.display().to_string());
+    if let Some(ft) = newest_mangohud_csv(&pl.logdir, started).and_then(|f| fsx::read_raw(&f)).and_then(|t| frametime_summary(&t)) {
+        rep.set("frametimes", ft);
+    }
     let _ = fsx::atomic_write(&pl.logdir.join("last.json"), rep.to_string_pretty().as_bytes());
     let cat = rep.get("category").and_then(Value::as_str).unwrap_or("").to_string();
     if cat != "ok" {
@@ -441,9 +465,63 @@ pub fn main_run(argv: Vec<String>) -> i32 {
     code.unwrap_or(128 + sig.unwrap_or(0))
 }
 
+/// MangoHud CSV written during this run (newest file modified after `since`).
+fn newest_mangohud_csv(dir: &Path, since: std::time::SystemTime) -> Option<PathBuf> {
+    fsx::list_dir(dir)
+        .into_iter()
+        .filter(|f| f.extension().map(|e| e == "csv").unwrap_or(false))
+        .filter_map(|f| std::fs::metadata(&f).and_then(|m| m.modified()).ok().filter(|m| *m >= since).map(|m| (m, f)))
+        .max_by_key(|(m, _)| *m)
+        .map(|(_, f)| f)
+}
+
+/// Frame-time statistics from a MangoHud log: the table after the header row naming "frametime".
+pub fn frametime_summary(csv: &str) -> Option<Value> {
+    let mut col = None;
+    let mut ft: Vec<f64> = vec![];
+    for l in csv.lines() {
+        let cells: Vec<&str> = l.split(',').map(str::trim).collect();
+        match col {
+            None => col = cells.iter().position(|c| *c == "frametime"),
+            Some(i) => {
+                if let Some(v) = cells.get(i).and_then(|x| x.parse::<f64>().ok()).filter(|v| *v > 0.0) {
+                    ft.push(v);
+                }
+            }
+        }
+    }
+    if ft.len() < 10 {
+        return None;
+    }
+    let n = ft.len();
+    let mean = ft.iter().sum::<f64>() / n as f64;
+    let mut sorted = ft.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let pct = |q: f64| sorted[((n as f64 - 1.0) * q).round() as usize];
+    let r = |x: f64| (x * 100.0).round() / 100.0;
+    Some(jobj! {"frames" => n as i64, "avg_fps" => r(1000.0 / mean), "frametime_ms_p50" => r(pct(0.5)),
+                "frametime_ms_p99" => r(pct(0.99)), "frametime_ms_max" => r(sorted[n - 1]),
+                "fps_1pct_low" => r(1000.0 / pct(0.99)), "source" => "MangoHud log"})
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mangohud_frametimes() {
+        let mut csv = String::from("os,cpu,gpu,ram,kernel,driver,cpuscheduler\nArch,AMD Jaguar,Liverpool,8GB,6.15.4,Mesa 26.2.5,eevdf\n\
+                                    fps,frametime,cpu_load,gpu_load,cpu_temp,gpu_temp,elapsed\n");
+        for i in 0..99 {
+            csv.push_str(&format!("60,16.6,50,90,60,70,{i}\n"));
+        }
+        csv.push_str("20,50.0,50,90,60,70,100\n");
+        let v = frametime_summary(&csv).unwrap();
+        assert_eq!(v.get("frames").and_then(Value::as_i64), Some(100));
+        assert_eq!(v.get("frametime_ms_p50").and_then(Value::as_f64), Some(16.6));
+        assert_eq!(v.get("frametime_ms_max").and_then(Value::as_f64), Some(50.0));
+        assert!(frametime_summary("fps,frametime\n60,16\n").is_none());
+    }
 
     #[test]
     fn kinds_and_slug() {
