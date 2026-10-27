@@ -344,6 +344,16 @@ class MemoryTest(EngineBase):
         self.assertIn("device reports", bad["vram"]["violation"])
         self.assertFalse(memory.accounting_check(tot, {"vram_used": None, "gtt_used": 1})["vram"]["checked"])
 
+    def test_budget_clamped_to_capacity(self):
+        """ge-0017: the kernel refuses budgets above the manager's capacity; orbis-mem clamps first."""
+        self.tree()
+        f = self.gpu_dir() / "orbis_gtt_budget"
+        f.write_text("budget=2147483648 requested=0 usage=0 state=enforced ttm_pages_limit=8589934592 min=268435456 "
+                     "capacity=4294967296 vram_carveout=1073741824\n")
+        rec = memory.set_gtt_budget(6 * GiB, "test")
+        self.assertEqual((rec["to"], rec["clamped_to_capacity"]), (4 * GiB, 4 * GiB))
+        self.assertEqual(int(f.read_text()), 4 * GiB)
+
     def test_gtt_region_unavailable_is_explicit(self):
         """GE-A09: a missing gtt region is reported with the kernel's reason, never silently."""
         self.tree()

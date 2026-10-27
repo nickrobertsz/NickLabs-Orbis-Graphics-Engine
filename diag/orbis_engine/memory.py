@@ -393,6 +393,11 @@ def set_gtt_budget(nbytes: int, why: str, dry_run: bool = False) -> dict:
     nbytes -= nbytes % PAGE
     rec = {"time": now_iso(), "action": "gtt-budget", "from": before.get("budget"), "to": nbytes,
            "usage": before.get("usage"), "why": why, "dry_run": dry_run}
+    cap = before.get("capacity")   # ge-0017: the GTT manager's constant capacity bounds the budget
+    if isinstance(cap, int) and cap and nbytes > cap:
+        rec["clamped_to_capacity"] = cap
+        nbytes = cap - cap % PAGE
+        rec["to"] = nbytes
     if limit and nbytes > limit:
         # TTM's global page limit caps every GTT budget; it is a runtime parameter too
         rec["ttm"] = set_ttm_pages_limit(nbytes // PAGE, f"raise TTM limit for: {why}", dry_run)

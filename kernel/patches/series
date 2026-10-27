@@ -18,3 +18,4 @@ ge-6.15/0013-x86-ps4-optional-Jaguar-btver2-kernel-code-generatio.patch
 ge-6.15/0014-drm-amdgpu-PS4-GPU-buffer-shrinker-and-active-GTT-tr.patch
 ge-6.15/0015-drm-amdgpu-PS4-GTT-as-a-dmem-cgroup-region-Orbis-ge-.patch
 ge-6.15/0016-drm-amdgpu-PS4-GTT-reclaim-corrections-Orbis-ge-0016.patch
+ge-6.15/0017-drm-amdgpu-PS4-GTT-runtime-budget-as-its-own-value-t.patch

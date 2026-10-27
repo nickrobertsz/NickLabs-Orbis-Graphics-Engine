@@ -1,0 +1,292 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 27 Oct 2026 12:05:39 -0700
+Subject: [PATCH] drm/amdgpu: PS4 GTT runtime budget as its own value; teardown
+ order (Orbis ge-0017)
+
+NickLabs Orbis Graphics Engine 2.0.0-r3.1, audit P1 (kernel).
+
+Dynamic GTT budget:
+- ge-0008/0016 wrote ttm_resource_manager.size at runtime, which TTM documents as constant
+  and which amdgpu also reads in amdgpu_bo_validate_size(), the info ioctl and sysfs.
+- The budget is now struct amdgpu_gtt_mgr.orbis_budget (atomic64), written only under
+  orbis_budget_lock and read lock-free by amdgpu_gtt_mgr_new() through amdgpu_gtt_mgr_limit().
+- On PS4 manager.size is the constant capacity (max(boot GTT size, TTM page limit at init),
+  the same capacity the "gtt" dmem region is registered with); the budget starts at the boot
+  GTT size, so the default behaviour is unchanged. Writes are bounded by the smaller of the
+  capacity and the current TTM page limit.
+- AMDGPU_INFO_MEMORY gtt.total_heap_size and mem_info_gtt_total report the effective budget
+  (as before, but without touching TTM's field). orbis_gtt_budget also reports capacity.
+- Non-PS4 devices: no change (budget inactive, limit = manager.size).
+
+Device state: orbis_gtt_budget and orbis_gtt_reclaim stores run inside drm_dev_enter() and
+refuse with -EBUSY during a GPU reset or suspend, -ENODEV after unplug.
+
+Teardown: the budget mutex was destroyed before ttm_resource_manager_evict_all(), and skipped
+when eviction failed. It is now destroyed last on every path. The sysfs files are removed in
+cik_common_hw_fini (amdgpu_device_fini_hw), and sysfs removal drains running stores, before
+amdgpu_ttm_fini() unregisters the shrinker and tears the manager down.
+
+Status: source-checked against 6.15.4 (apply + checkpatch); not compiled here.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01CcGqiWDFgL3MdbGzpXfrDZ
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu_gtt_mgr.c  | 25 ++++++++--
+ drivers/gpu/drm/amd/amdgpu/amdgpu_kms.c      |  3 +-
+ drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.h      | 17 ++++++-
+ drivers/gpu/drm/amd/amdgpu/liverpool_orbis.c | 48 +++++++++++++++-----
+ 4 files changed, 75 insertions(+), 18 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_gtt_mgr.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_gtt_mgr.c
+index e0f99f8e9..266628c5b 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_gtt_mgr.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_gtt_mgr.c
+@@ -66,7 +66,7 @@ static ssize_t amdgpu_mem_info_gtt_total_show(struct device *dev,
+ 	struct ttm_resource_manager *man;
+ 
+ 	man = ttm_manager_type(&adev->mman.bdev, TTM_PL_TT);
+-	return sysfs_emit(buf, "%llu\n", man->size);
++	return sysfs_emit(buf, "%llu\n", amdgpu_gtt_mgr_limit(to_gtt_mgr(man)));
+ }
+ 
+ /**
+@@ -143,7 +143,7 @@ static int amdgpu_gtt_mgr_new(struct ttm_resource_manager *man,
+ 
+ 	ttm_resource_init(tbo, place, &node->base);
+ 	if (!(place->flags & TTM_PL_FLAG_TEMPORARY) &&
+-	    ttm_resource_manager_usage(man) > READ_ONCE(man->size)) {
++	    ttm_resource_manager_usage(man) > amdgpu_gtt_mgr_limit(mgr)) {
+ 		r = -ENOSPC;
+ 		goto err_free;
+ 	}
+@@ -303,11 +303,18 @@ int amdgpu_gtt_mgr_init(struct amdgpu_device *adev, uint64_t gtt_size)
+ 	 * requires per-app GTT enforcement can refuse instead of running without it. A failed
+ 	 * registration does not fail the driver: GTT then works exactly as upstream (no region).
+ 	 */
++	u64 man_size = gtt_size;
++
+ 	mutex_init(&mgr->orbis_budget_lock);
++	mgr->orbis_budget_active = false;
++	atomic64_set(&mgr->orbis_budget, gtt_size);
+ 	mgr->orbis_cg_state = AMDGPU_ORBIS_GTT_CG_NOT_PS4;
+ 	if (adev->asic_type == CHIP_LIVERPOOL || adev->asic_type == CHIP_GLADIUS) {
+ 		u64 cap = max_t(u64, gtt_size, (u64)ttm_tt_pages_limit() << PAGE_SHIFT);
+ 
++		/* ge-0017: manager.size = capacity (constant); the budget starts at the boot size */
++		man_size = cap;
++		mgr->orbis_budget_active = true;
+ 		mgr->orbis_cg_capacity = cap;
+ 		if (!amdgpu_orbis_gtt_cgroup) {
+ 			mgr->orbis_cg_state = AMDGPU_ORBIS_GTT_CG_DISABLED;
+@@ -328,7 +335,7 @@ int amdgpu_gtt_mgr_init(struct amdgpu_device *adev, uint64_t gtt_size)
+ 		}
+ 	}
+ 
+-	ttm_resource_manager_init(man, &adev->mman.bdev, gtt_size);
++	ttm_resource_manager_init(man, &adev->mman.bdev, man_size);
+ 
+ 	start = AMDGPU_GTT_MAX_TRANSFER_SIZE * AMDGPU_GTT_NUM_TRANSFER_WINDOWS;
+ 	size = (adev->gmc.gart_size >> PAGE_SHIFT) - start;
+@@ -354,12 +361,17 @@ void amdgpu_gtt_mgr_fini(struct amdgpu_device *adev)
+ 	struct ttm_resource_manager *man = &mgr->manager;
+ 	int ret;
+ 
++	/*
++	 * ge-0017 teardown order: the orbis_gtt_budget/orbis_gtt_reclaim sysfs files are removed in
++	 * cik_common_hw_fini (amdgpu_device_fini_hw), long before this, and sysfs removal waits for
++	 * running store() calls; the shrinker is unregistered at the start of amdgpu_ttm_fini. The
++	 * budget mutex is destroyed last, on every path, after the manager stops being used.
++	 */
+ 	ttm_resource_manager_set_used(man, false);
+-	mutex_destroy(&mgr->orbis_budget_lock);
+ 
+ 	ret = ttm_resource_manager_evict_all(&adev->mman.bdev, man);
+ 	if (ret)
+-		return;
++		goto out;
+ 
+ 	spin_lock(&mgr->lock);
+ 	drm_mm_takedown(&mgr->mm);
+@@ -367,4 +379,7 @@ void amdgpu_gtt_mgr_fini(struct amdgpu_device *adev)
+ 
+ 	ttm_resource_manager_cleanup(man);
+ 	ttm_set_driver_manager(&adev->mman.bdev, TTM_PL_TT, NULL);
++out:
++	mgr->orbis_budget_active = false;
++	mutex_destroy(&mgr->orbis_budget_lock);
+ }
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_kms.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_kms.c
+index 27bfe9c8a..cf9e16259 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_kms.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_kms.c
+@@ -768,7 +768,8 @@ int amdgpu_info_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
+ 		mem.cpu_accessible_vram.max_allocation =
+ 			mem.cpu_accessible_vram.usable_heap_size * 3 / 4;
+ 
+-		mem.gtt.total_heap_size = gtt_man->size;
++		/* ge-0017: the effective GTT limit (the Orbis runtime budget on PS4) */
++		mem.gtt.total_heap_size = amdgpu_gtt_mgr_limit(&adev->mman.gtt_mgr);
+ 		mem.gtt.usable_heap_size = mem.gtt.total_heap_size -
+ 			atomic64_read(&adev->gart_pin_size);
+ 		mem.gtt.heap_usage = ttm_resource_manager_usage(gtt_man);
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.h b/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.h
+index eac23d82a..e3ca6863e 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.h
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.h
+@@ -62,14 +62,29 @@ struct amdgpu_gtt_mgr {
+ 	enum amdgpu_orbis_gtt_cg_state orbis_cg_state;
+ 	int orbis_cg_error;
+ 	u64 orbis_cg_capacity;
+-	struct mutex orbis_budget_lock;		/* serialises orbis_gtt_budget writes */
++	struct mutex orbis_budget_lock;		/* serialises orbis_gtt_budget writes and trims */
+ 	u64 orbis_requested;			/* last budget written (0 = boot value) */
++	/*
++	 * ge-0017: the runtime GTT budget is its own value. manager.size stays constant as TTM
++	 * documents (on PS4 it is the capacity: the most the budget can reach); allocation checks,
++	 * the info ioctl and mem_info_gtt_total read the budget through amdgpu_gtt_mgr_limit().
++	 */
++	bool orbis_budget_active;
++	atomic64_t orbis_budget;
+ 	struct amdgpu_orbis_trim_result orbis_last_trim;
+ 	bool orbis_trim_valid;
+ };
+ 
+ struct amdgpu_orbis_shrinker;
+ 
++/* effective GTT limit for new allocations (the Orbis runtime budget on PS4, else manager.size) */
++static inline u64 amdgpu_gtt_mgr_limit(struct amdgpu_gtt_mgr *mgr)
++{
++	if (mgr->orbis_budget_active)
++		return atomic64_read(&mgr->orbis_budget);
++	return mgr->manager.size;
++}
++
+ struct amdgpu_mman {
+ 	struct ttm_device		bdev;
+ 	struct ttm_pool			*ttm_pools;
+diff --git a/drivers/gpu/drm/amd/amdgpu/liverpool_orbis.c b/drivers/gpu/drm/amd/amdgpu/liverpool_orbis.c
+index 9af7673c9..8bac02004 100644
+--- a/drivers/gpu/drm/amd/amdgpu/liverpool_orbis.c
++++ b/drivers/gpu/drm/amd/amdgpu/liverpool_orbis.c
+@@ -21,6 +21,8 @@
+  *                           ge-0016: reads report the effective budget, the requested
+  *                           value, the enforcement state and the last trim's account; a
+  *                           write returns -EBUSY when usage could not be brought under it.
++ *                           ge-0017: the budget is a separate atomic value; the GTT
++ *                           manager's size stays constant (the capacity, also reported).
+  *   orbis_gtt_reclaim (rw)  ge-0014 shrinker counters (see liverpool_orbis_shrinker.c);
+  *                           writing "scan <pages> [writeback]" runs one reclaim pass for
+  *                           verification without waiting for memory pressure.
+@@ -33,6 +35,7 @@
+ 
+ #include <linux/delay.h>
+ #include <linux/sysfs.h>
++#include <drm/drm_drv.h>
+ #include <drm/ttm/ttm_tt.h>
+ #include <drm/ttm/ttm_resource.h>
+ 
+@@ -114,7 +117,7 @@ static ssize_t orbis_gtt_budget_show(struct device *dev, struct device_attribute
+ 	n = mutex_lock_interruptible(&mgr->orbis_budget_lock);
+ 	if (n)
+ 		return n;
+-	budget = READ_ONCE(man->size);
++	budget = amdgpu_gtt_mgr_limit(mgr);
+ 	usage = ttm_resource_manager_usage(man);
+ 	/*
+ 	 * budget    = effective limit amdgpu applies to new GTT allocations
+@@ -122,9 +125,9 @@ static ssize_t orbis_gtt_budget_show(struct device *dev, struct device_attribute
+ 	 * state     = enforced | over_budget | incomplete | interrupted (usage vs budget, see trim)
+ 	 * last_trim = account of the most recent active trim, so partial progress stays visible
+ 	 */
+-	n = sysfs_emit(buf, "budget=%llu requested=%llu usage=%llu state=%s ttm_pages_limit=%llu min=%llu vram_carveout=%llu\n",
++	n = sysfs_emit(buf, "budget=%llu requested=%llu usage=%llu state=%s ttm_pages_limit=%llu min=%llu capacity=%llu vram_carveout=%llu\n",
+ 		       budget, mgr->orbis_requested, usage, orbis_trim_state(mgr, usage, budget),
+-		       (u64)ttm_tt_pages_limit() << PAGE_SHIFT, ORBIS_GTT_MIN_BYTES,
++		       (u64)ttm_tt_pages_limit() << PAGE_SHIFT, ORBIS_GTT_MIN_BYTES, man->size,
+ 		       adev->gmc.real_vram_size);
+ 	if (mgr->orbis_trim_valid)
+ 		n += sysfs_emit_at(buf, n, "last_trim requested=%llu usage_before=%llu usage_after=%llu evicted=%u failed=%u skipped=%u first_failure=%d error=%d limit_hit=%d enforced=%d\n",
+@@ -143,7 +146,12 @@ static ssize_t orbis_gtt_budget_show(struct device *dev, struct device_attribute
+  *                buffers, or the per-call cap); see "state" and "last_trim" in the file
+  *   -EINTR/-ERESTARTSYS  interrupted by a signal; the budget is set, the trim is partial
+  *   -ERANGE / -EINVAL     rejected, nothing changed
++ *   -EBUSY (no change)    the GPU is resetting, suspended or unplugged
+  * A writer can retry the same value to continue a partial trim.
++ *
++ * ge-0017: the budget is mgr->orbis_budget (atomic, read by amdgpu_gtt_mgr_new without locks);
++ * ttm_resource_manager.size is no longer written at runtime. Range: 256 MiB to the smaller of the
++ * manager's capacity (manager.size) and the TTM page limit at the time of the write.
+  */
+ static ssize_t orbis_gtt_budget_store(struct device *dev, struct device_attribute *attr,
+ 				      const char *buf, size_t count)
+@@ -151,10 +159,12 @@ static ssize_t orbis_gtt_budget_store(struct device *dev, struct device_attribut
+ 	struct amdgpu_device *adev = drm_to_adev(dev_get_drvdata(dev));
+ 	struct amdgpu_gtt_mgr *mgr = &adev->mman.gtt_mgr;
+ 	struct ttm_resource_manager *man = &mgr->manager;
+-	u64 val, limit = (u64)ttm_tt_pages_limit() << PAGE_SHIFT, old, usage;
++	u64 val, limit = min_t(u64, man->size, (u64)ttm_tt_pages_limit() << PAGE_SHIFT), old, usage;
+ 	struct amdgpu_orbis_trim_result res;
+-	int r;
++	int r, idx;
+ 
++	if (!mgr->orbis_budget_active)
++		return -ENODEV;
+ 	r = kstrtou64(buf, 0, &val);
+ 	if (r)
+ 		return r;
+@@ -162,14 +172,21 @@ static ssize_t orbis_gtt_budget_store(struct device *dev, struct device_attribut
+ 		return -ERANGE;
+ 	val = round_down(val, PAGE_SIZE);
+ 
++	/* no evictions while the device is going away, resetting or suspended */
++	if (!drm_dev_enter(adev_to_drm(adev), &idx))
++		return -ENODEV;
++	if (amdgpu_in_reset(adev) || adev->in_suspend) {
++		drm_dev_exit(idx);
++		return -EBUSY;
++	}
+ 	r = mutex_lock_interruptible(&mgr->orbis_budget_lock);
+-	if (r)
++	if (r) {
++		drm_dev_exit(idx);
+ 		return r;
+-	old = READ_ONCE(man->size);
+-	/* ttm_resource_manager.size is documented as constant; amdgpu only uses it as the
+-	 * budget compared against usage in amdgpu_gtt_mgr_new() and for reporting, so a
+-	 * new value applies to later allocations only. */
+-	WRITE_ONCE(man->size, val);
++	}
++	old = atomic64_read(&mgr->orbis_budget);
++	/* applies to every later allocation at once (amdgpu_gtt_mgr_new reads it atomically) */
++	atomic64_set(&mgr->orbis_budget, val);
+ 	mgr->orbis_requested = val;
+ 	usage = ttm_resource_manager_usage(man);
+ 	dev_info(adev->dev, "Orbis: GTT budget %llu MiB -> %llu MiB (usage %llu MiB)\n",
+@@ -190,6 +207,7 @@ static ssize_t orbis_gtt_budget_store(struct device *dev, struct device_attribut
+ 				 res.evicted, res.usage_after >> 20);
+ 	}
+ 	mutex_unlock(&mgr->orbis_budget_lock);
++	drm_dev_exit(idx);
+ 	return r ? r : count;
+ }
+ static DEVICE_ATTR_RW(orbis_gtt_budget);
+@@ -206,10 +224,18 @@ static ssize_t orbis_gtt_reclaim_store(struct device *dev, struct device_attribu
+ 	unsigned long pages;
+ 	char wb[16] = "";
+ 	long freed;
++	int idx;
+ 
+ 	if (sscanf(buf, "scan %lu %15s", &pages, wb) < 1 || !pages)
+ 		return -EINVAL;
++	if (!drm_dev_enter(adev_to_drm(adev), &idx))
++		return -ENODEV;
++	if (amdgpu_in_reset(adev) || adev->in_suspend) {
++		drm_dev_exit(idx);
++		return -EBUSY;
++	}
+ 	freed = amdgpu_orbis_shrinker_scan(adev, pages, !strcmp(wb, "writeback"));
++	drm_dev_exit(idx);
+ 	if (freed < 0)
+ 		return freed;
+ 	dev_info(adev->dev, "Orbis: reclaim scan of %lu pages: %ld backed up or purged\n", pages, freed);
