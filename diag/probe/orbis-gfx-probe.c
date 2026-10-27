@@ -19,6 +19,13 @@
  *   --pipeline-cache  compute pipeline creation time without/with a VkPipelineCache.
  *   --opencl   OpenCL (e.g. Mesa RustiCL with RUSTICL_ENABLE=radeonsi): platforms,
  *              devices and an integer vector kernel checked against the CPU.
+ *   --membench Shared-GDDR5 characterisation (NickLabs Orbis unified-memory U6/U27):
+ *              GPU write/read/read-write bandwidth per Vulkan memory type (VRAM
+ *              carve-out, GTT write-combined, GTT cached/snooped), CPU access to the
+ *              mapped types, CPU->GPU and GPU->CPU copies, and an end-to-end zero-copy
+ *              check with VK_EXT_external_memory_host (the GPU writes and reads a plain
+ *              malloc'ed buffer; the CPU checks it in place, no staging copy).
+ *              --membench-mb N sets the buffer size (default 128).
  *
  * Every GPU wait is bounded (--timeout-ms). A timeout or VK_ERROR_DEVICE_LOST
  * stops the suite and is reported as such; the caller (orbisd / the
@@ -52,7 +59,8 @@
 #endif
 
 #define PROBE_VERSION "1.0.0"
-static bool opt_gl_bench, opt_vk_raster, opt_pcache, opt_opencl;
+static bool opt_gl_bench, opt_vk_raster, opt_pcache, opt_opencl, opt_membench;
+static unsigned opt_membench_mb = 128;
 static int opt_frames = 120;
 
 /* ------------------------------------------------------------------ JSON */
@@ -837,6 +845,24 @@ static void t_reduce(struct ctx *c, uint32_t n) {
 
 static void t_pipeline_cache(struct ctx *c);
 
+static void load_dev_fns(struct ctx *cp, PFN_vkGetDeviceProcAddr vkGetDeviceProcAddr) {
+    struct ctx *c_ = cp;
+#define DF(field, name) c_->field = (PFN_##name)vkGetDeviceProcAddr(c_->dev, #name)
+    DF(CreateBuffer, vkCreateBuffer); DF(DestroyBuffer, vkDestroyBuffer); DF(GetBufMemReq, vkGetBufferMemoryRequirements);
+    DF(AllocateMemory, vkAllocateMemory); DF(FreeMemory, vkFreeMemory); DF(BindBufferMemory, vkBindBufferMemory);
+    DF(MapMemory, vkMapMemory); DF(UnmapMemory, vkUnmapMemory); DF(AllocCB, vkAllocateCommandBuffers);
+    DF(FreeCB, vkFreeCommandBuffers); DF(BeginCB, vkBeginCommandBuffer); DF(EndCB, vkEndCommandBuffer);
+    DF(CmdFill, vkCmdFillBuffer); DF(CmdCopy, vkCmdCopyBuffer); DF(CmdBarrier, vkCmdPipelineBarrier);
+    DF(CmdBindPipe, vkCmdBindPipeline); DF(CmdBindDS, vkCmdBindDescriptorSets); DF(CmdPush, vkCmdPushConstants);
+    DF(CmdDispatch, vkCmdDispatch); DF(QueueSubmit, vkQueueSubmit); DF(CreateFence, vkCreateFence);
+    DF(DestroyFence, vkDestroyFence); DF(WaitFences, vkWaitForFences); DF(CreateSM, vkCreateShaderModule);
+    DF(DestroySM, vkDestroyShaderModule); DF(CreateDSL, vkCreateDescriptorSetLayout); DF(DestroyDSL, vkDestroyDescriptorSetLayout);
+    DF(CreatePL, vkCreatePipelineLayout); DF(DestroyPL, vkDestroyPipelineLayout); DF(CreateCP, vkCreateComputePipelines);
+    DF(DestroyPipe, vkDestroyPipeline); DF(CreateDP, vkCreateDescriptorPool); DF(DestroyDP, vkDestroyDescriptorPool);
+    DF(AllocDS, vkAllocateDescriptorSets); DF(UpdateDS, vkUpdateDescriptorSets); DF(DeviceWaitIdle, vkDeviceWaitIdle);
+#undef DF
+}
+
 static int run_compute(VkPhysicalDevice pd, uint32_t devidx, int want_qfam, uint64_t timeout_ms, int level) {
     struct ctx c = {.pd = pd, .timeout_ns = timeout_ms * 1000000ull};
     n_pass = n_fail = 0;
@@ -870,19 +896,7 @@ static int run_compute(VkPhysicalDevice pd, uint32_t devidx, int want_qfam, uint
     VkDeviceCreateInfo dci = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .queueCreateInfoCount = 1, .pQueueCreateInfos = &qci};
     VkResult r = vkCreateDevice(pd, &dci, NULL, &c.dev);
     if (r) { j_kstr("error", vkres(r)); j_close('}'); return 1; }
-#define DF(field, name) c.field = (PFN_##name)vkGetDeviceProcAddr(c.dev, #name)
-    DF(CreateBuffer, vkCreateBuffer); DF(DestroyBuffer, vkDestroyBuffer); DF(GetBufMemReq, vkGetBufferMemoryRequirements);
-    DF(AllocateMemory, vkAllocateMemory); DF(FreeMemory, vkFreeMemory); DF(BindBufferMemory, vkBindBufferMemory);
-    DF(MapMemory, vkMapMemory); DF(UnmapMemory, vkUnmapMemory); DF(AllocCB, vkAllocateCommandBuffers);
-    DF(FreeCB, vkFreeCommandBuffers); DF(BeginCB, vkBeginCommandBuffer); DF(EndCB, vkEndCommandBuffer);
-    DF(CmdFill, vkCmdFillBuffer); DF(CmdCopy, vkCmdCopyBuffer); DF(CmdBarrier, vkCmdPipelineBarrier);
-    DF(CmdBindPipe, vkCmdBindPipeline); DF(CmdBindDS, vkCmdBindDescriptorSets); DF(CmdPush, vkCmdPushConstants);
-    DF(CmdDispatch, vkCmdDispatch); DF(QueueSubmit, vkQueueSubmit); DF(CreateFence, vkCreateFence);
-    DF(DestroyFence, vkDestroyFence); DF(WaitFences, vkWaitForFences); DF(CreateSM, vkCreateShaderModule);
-    DF(DestroySM, vkDestroyShaderModule); DF(CreateDSL, vkCreateDescriptorSetLayout); DF(DestroyDSL, vkDestroyDescriptorSetLayout);
-    DF(CreatePL, vkCreatePipelineLayout); DF(DestroyPL, vkDestroyPipelineLayout); DF(CreateCP, vkCreateComputePipelines);
-    DF(DestroyPipe, vkDestroyPipeline); DF(CreateDP, vkCreateDescriptorPool); DF(DestroyDP, vkDestroyDescriptorPool);
-    DF(AllocDS, vkAllocateDescriptorSets); DF(UpdateDS, vkUpdateDescriptorSets); DF(DeviceWaitIdle, vkDeviceWaitIdle);
+    load_dev_fns(&c, vkGetDeviceProcAddr);
     PFN_vkGetDeviceQueue gdq = (PFN_vkGetDeviceQueue)vkGetDeviceProcAddr(c.dev, "vkGetDeviceQueue");
     PFN_vkCreateCommandPool ccp = (PFN_vkCreateCommandPool)vkGetDeviceProcAddr(c.dev, "vkCreateCommandPool");
     gdq(c.dev, c.qfam, 0, &c.queue);
@@ -921,6 +935,302 @@ static int run_compute(VkPhysicalDevice pd, uint32_t devidx, int want_qfam, uint
     return n_fail ? 1 : 0;
 }
 
+
+/* ------------------------------------------------------------------ shared-memory bench (U6/U27) */
+/* Buffer in one specific memory type (or imported host memory when hostp != NULL). */
+static VkResult mkbuf_type(struct ctx *c, struct buf *o, VkDeviceSize size, int type, void *hostp,
+                           PFN_vkGetMemoryHostPointerPropertiesEXT hpp, int *used_type) {
+    memset(o, 0, sizeof *o);
+    o->size = size;
+    VkExternalMemoryBufferCreateInfo eb = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
+                                           .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT};
+    VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = hostp ? &eb : NULL, .size = size,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+    VkResult r = c->CreateBuffer(c->dev, &bi, NULL, &o->b);
+    if (r) return r;
+    VkMemoryRequirements mr;
+    c->GetBufMemReq(c->dev, o->b, &mr);
+    uint32_t bits = mr.memoryTypeBits;
+    VkImportMemoryHostPointerInfoEXT imp = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT,
+                                            .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
+                                            .pHostPointer = hostp};
+    if (hostp) {
+        VkMemoryHostPointerPropertiesEXT hp = {.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
+        r = hpp(c->dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, hostp, &hp);
+        if (r) return r;
+        bits &= hp.memoryTypeBits;
+        type = -1;
+        for (uint32_t i = 0; i < c->mem.memoryTypeCount; i++)
+            if (bits & (1u << i)) { type = (int)i; break; }
+    }
+    if (type < 0 || !(bits & (1u << type))) return VK_ERROR_FEATURE_NOT_PRESENT;
+    if (used_type) *used_type = type;
+    VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = hostp ? &imp : NULL,
+                               .allocationSize = hostp ? size : mr.size, .memoryTypeIndex = (uint32_t)type};
+    if ((r = c->AllocateMemory(c->dev, &ai, NULL, &o->m))) return r;
+    if ((r = c->BindBufferMemory(c->dev, o->b, o->m, 0))) return r;
+    if (!hostp && (c->mem.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
+        r = c->MapMemory(c->dev, o->m, 0, VK_WHOLE_SIZE, 0, &o->map);
+    return r;
+}
+
+static const char *mem_label(VkMemoryPropertyFlags f) {
+    bool dl = f & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, hv = f & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+         hc = f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    if (dl && !hv) return "vram (device-local, not CPU-mapped)";
+    if (dl && hv) return "vram, CPU-mapped (write-combined)";
+    if (hv && hc) return "gtt cached (CPU-snooped)";
+    if (hv) return "gtt write-combined";
+    return "other";
+}
+
+/* best-of-N GPU time of one dispatch (wall clock around submit + fence; includes submit overhead) */
+static double gpu_dispatch(struct ctx *c, struct pipe *p, const void *pc, uint32_t pcs, uint32_t gx, uint32_t gy, int reps) {
+    double best = 1e9;
+    for (int i = 0; i < reps && !c->fatal; i++) {
+        VkCommandBuffer cb = cb_begin(c);
+        c->CmdBindPipe(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p->p);
+        c->CmdBindDS(cb, VK_PIPELINE_BIND_POINT_COMPUTE, p->pl, 0, 1, &p->ds, 0, NULL);
+        c->CmdPush(cb, p->pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, pcs, pc);
+        c->CmdDispatch(cb, gx, gy, 1);
+        barrier_all(c, cb);
+        double el = 0;
+        if (cb_submit(c, cb, &el)) return -1;
+        if (el < best) best = el;
+    }
+    return best;
+}
+
+static void grid(uint64_t groups, uint32_t *gx, uint32_t *gy) {
+    *gx = groups > 65535 ? 65535 : (uint32_t)groups;
+    *gy = (uint32_t)((groups + *gx - 1) / *gx);
+}
+
+static double gbs(double bytes, double s) { return s > 0 ? bytes / s / 1e9 : 0; }
+
+static void bench_type(struct ctx *c, int type, VkDeviceSize size, struct pipe *pw, struct pipe *pr, struct pipe *ps) {
+    VkMemoryPropertyFlags f = c->mem.memoryTypes[type].propertyFlags;
+    j_open(NULL, '{');
+    j_kint("type", type);
+    j_kint("heap", c->mem.memoryTypes[type].heapIndex);
+    j_kuint("flags", f);
+    j_kstr("kind", mem_label(f));
+    struct buf a, b, acc;
+    if (mkbuf_type(c, &a, size, type, NULL, NULL, NULL) || mkbuf_type(c, &b, size, type, NULL, NULL, NULL) ||
+        mkbuf(c, &acc, 8, false)) {
+        j_kstr("not_run", "allocation in this memory type failed (size or budget)");
+        rmbuf(c, &a); rmbuf(c, &b); rmbuf(c, &acc);
+        j_close('}');
+        return;
+    }
+    uint32_t n = (uint32_t)(size / 4), gx, gy;
+    uint32_t pcw = n, pcs[2] = {n, 1};
+    bindbufs(c, pw, &a, NULL);
+    grid((n + 63) / 64, &gx, &gy);
+    double tw = gpu_dispatch(c, pw, &pcw, 4, gx, gy, 4);
+    bindbufs(c, pr, &a, &acc);
+    uint32_t rgx, rgy;
+    grid((n + 255) / 256, &rgx, &rgy);
+    double tr = gpu_dispatch(c, pr, &pcw, 4, rgx, rgy, 4);
+    bindbufs(c, ps, &a, &b);
+    double trw = gpu_dispatch(c, ps, pcs, 8, gx, gy, 4);
+    j_kdbl("gpu_write_gbs", gbs((double)size, tw));
+    j_kdbl("gpu_read_gbs", gbs((double)size, tr));
+    j_kdbl("gpu_read_write_gbs", gbs(3.0 * (double)size, trw));   /* saxpy: read x, read y, write y */
+    if (a.map) {
+        double t0 = now_s();
+        memset(a.map, 0x5A, size);
+        double cw = now_s() - t0;
+        volatile uint64_t sum = 0;
+        const uint64_t *q = a.map;
+        t0 = now_s();
+        for (VkDeviceSize i = 0; i < size / 8; i++) sum += q[i];
+        double cr = now_s() - t0;
+        (void)sum;
+        j_kdbl("cpu_write_gbs", gbs((double)size, cw));
+        j_kdbl("cpu_read_gbs", gbs((double)size, cr));
+    }
+    if (c->fatal) j_kstr("fatal", c->fatal_why);
+    j_close('}');
+    if (!c->fatal) { rmbuf(c, &a); rmbuf(c, &b); rmbuf(c, &acc); }
+}
+
+/* GPU-side copies between memory kinds (transfer path) */
+static void bench_copy(struct ctx *c, const char *name, int from, int to, VkDeviceSize size) {
+    struct buf s, d;
+    j_open(NULL, '{');
+    j_kstr("copy", name);
+    if (from < 0 || to < 0 || mkbuf_type(c, &s, size, from, NULL, NULL, NULL) || mkbuf_type(c, &d, size, to, NULL, NULL, NULL)) {
+        j_kstr("not_run", "memory type not available");
+        j_close('}');
+        return;
+    }
+    double best = 1e9;
+    for (int i = 0; i < 4 && !c->fatal; i++) {
+        VkCommandBuffer cb = cb_begin(c);
+        VkBufferCopy cp = {0, 0, size};
+        c->CmdCopy(cb, s.b, d.b, 1, &cp);
+        barrier_all(c, cb);
+        double el = 0;
+        if (cb_submit(c, cb, &el)) break;
+        if (el < best) best = el;
+    }
+    j_kint("from_type", from); j_kint("to_type", to);
+    j_kdbl("gbs", c->fatal ? 0 : gbs((double)size, best));
+    j_close('}');
+    if (!c->fatal) { rmbuf(c, &s); rmbuf(c, &d); }
+}
+
+/* U6 end to end: the GPU writes into and reads from ordinary process memory, the CPU checks it in place. */
+static void zero_copy(struct ctx *c, VkDeviceSize size, struct pipe *pw, struct pipe *pr, bool has_ext, VkDeviceSize align,
+                      PFN_vkGetMemoryHostPointerPropertiesEXT hpp) {
+    j_open("zero_copy_host_memory", '{');
+    j_kbool("extension_advertised", has_ext);
+    if (!has_ext || !hpp) { j_kstr("result", "NOT_RUN"); j_kstr("why", "VK_EXT_external_memory_host not available"); j_close('}'); return; }
+    if (align < 4096) align = 4096;
+    size = (size + align - 1) / align * align;
+    void *host = NULL;
+    if (posix_memalign(&host, (size_t)align, (size_t)size) || !host) { j_kstr("result", "NOT_RUN"); j_kstr("why", "host allocation failed"); j_close('}'); return; }
+    memset(host, 0xFF, size);
+    struct buf h, acc, hacc;
+    int type = -1;
+    VkResult r = mkbuf_type(c, &h, size, -1, host, hpp, &type);
+    j_kuint("min_imported_host_pointer_alignment", align);
+    if (r) {
+        j_kstr("result", "FAIL"); j_kstr("why", vkres(r)); j_kstr("step", "import host pointer");
+        j_close('}'); free(host); return;
+    }
+    j_kint("imported_memory_type", type);
+    j_kuint("imported_memory_flags", c->mem.memoryTypes[type].propertyFlags);
+    j_kstr("imported_kind", mem_label(c->mem.memoryTypes[type].propertyFlags));
+    /* 1. GPU writes, CPU reads the same pages (GPU -> CPU without a copy) */
+    uint32_t n = (uint32_t)(size / 4), gx, gy;
+    bindbufs(c, pw, &h, NULL);
+    grid((n + 63) / 64, &gx, &gy);
+    double tw = gpu_dispatch(c, pw, &n, 4, gx, gy, 1);
+    long bad = 0;
+    const uint32_t *q = host;
+    if (tw >= 0)
+        for (uint32_t i = 0; i < n; i++) bad += q[i] != i;
+    j_kdbl("gpu_write_into_host_memory_gbs", tw > 0 ? gbs((double)size, tw) : 0);
+    j_kint("gpu_written_words_wrong", tw >= 0 ? bad : -1);
+    /* 2. CPU writes, GPU reads the same pages (CPU -> GPU without a copy) */
+    uint32_t *w = host, s = 99;
+    uint32_t expect = 0;
+    for (uint32_t i = 0; i < n; i++) { w[i] = xs32(&s) & 0xFFFFu; expect += w[i]; }
+    bool ok_read = false;
+    double trd = -1;
+    if (!c->fatal && !mkbuf(c, &acc, 8, false) && !mkbuf(c, &hacc, 8, true)) {
+        bindbufs(c, pr, &h, &acc);
+        uint32_t rgx, rgy;
+        grid((n + 255) / 256, &rgx, &rgy);
+        VkCommandBuffer cb = cb_begin(c);
+        c->CmdFill(cb, acc.b, 0, 8, 0);
+        barrier_all(c, cb);
+        c->CmdBindPipe(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pr->p);
+        c->CmdBindDS(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pr->pl, 0, 1, &pr->ds, 0, NULL);
+        c->CmdPush(cb, pr->pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, 4, &n);
+        c->CmdDispatch(cb, rgx, rgy, 1);
+        barrier_all(c, cb);
+        VkBufferCopy ca = {0, 0, 8};
+        c->CmdCopy(cb, acc.b, hacc.b, 1, &ca);
+        barrier_all(c, cb);
+        if (!cb_submit(c, cb, &trd)) ok_read = ((uint32_t *)hacc.map)[0] == expect;
+        if (!c->fatal) { rmbuf(c, &acc); rmbuf(c, &hacc); }
+    }
+    j_kbool("gpu_read_of_cpu_written_data_ok", ok_read);
+    bool pass = !c->fatal && tw >= 0 && bad == 0 && ok_read;
+    j_kstr("result", c->fatal ? "FAIL" : pass ? "PASS" : "FAIL");
+    if (c->fatal) j_kstr("fatal", c->fatal_why);
+    j_kstr("note", "PASS means verified end to end on this device: GPU and CPU used the same pages without a staging copy");
+    j_close('}');
+    if (!c->fatal) { rmbuf(c, &h); free(host); }
+}
+
+static int run_membench(VkPhysicalDevice pd, uint32_t devidx, uint64_t timeout_ms, unsigned size_mb) {
+    struct ctx c = {.pd = pd, .timeout_ns = timeout_ms * 1000000ull};
+    IF(vkGetPhysicalDeviceQueueFamilyProperties);
+    IF(vkGetPhysicalDeviceMemoryProperties);
+    IF(vkCreateDevice);
+    IF(vkGetDeviceProcAddr);
+    IF(vkGetPhysicalDeviceProperties2);
+    vkGetPhysicalDeviceMemoryProperties(pd, &c.mem);
+    uint32_t qn = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(pd, &qn, NULL);
+    VkQueueFamilyProperties q[16];
+    if (qn > 16) qn = 16;
+    vkGetPhysicalDeviceQueueFamilyProperties(pd, &qn, q);
+    int fam = -1;
+    for (uint32_t i = 0; fam < 0 && i < qn; i++) if (q[i].queueFlags & VK_QUEUE_COMPUTE_BIT) fam = (int)i;
+    bool has_host = has_dev_ext(pd, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
+    VkPhysicalDeviceExternalMemoryHostPropertiesEXT hostp = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT};
+    VkPhysicalDeviceProperties2 p2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = has_host ? &hostp : NULL};
+    vkGetPhysicalDeviceProperties2(pd, &p2);
+    j_open("membench", '{');
+    j_kint("device_index", devidx);
+    j_kstr("device", p2.properties.deviceName);
+    j_kuint("buffer_bytes", (unsigned long long)size_mb << 20);
+    j_kstr("timing", "best of 4, wall clock around submit+fence (includes submit overhead, a lower bound on bandwidth)");
+    if (fam < 0) { j_kstr("error", "no compute queue"); j_close('}'); return 2; }
+    c.qfam = (uint32_t)fam;
+    float prio = 1.0f;
+    const char *exts[1] = {VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME};
+    VkDeviceQueueCreateInfo qci = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, .queueFamilyIndex = c.qfam, .queueCount = 1, .pQueuePriorities = &prio};
+    VkDeviceCreateInfo dci = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .queueCreateInfoCount = 1, .pQueueCreateInfos = &qci,
+                              .enabledExtensionCount = has_host ? 1 : 0, .ppEnabledExtensionNames = exts};
+    VkResult r = vkCreateDevice(pd, &dci, NULL, &c.dev);
+    if (r) { j_kstr("error", vkres(r)); j_close('}'); return 2; }
+    load_dev_fns(&c, vkGetDeviceProcAddr);
+    PFN_vkGetMemoryHostPointerPropertiesEXT hpp = has_host ?
+        (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(c.dev, "vkGetMemoryHostPointerPropertiesEXT") : NULL;
+    PFN_vkGetDeviceQueue gdq = (PFN_vkGetDeviceQueue)vkGetDeviceProcAddr(c.dev, "vkGetDeviceQueue");
+    PFN_vkCreateCommandPool ccp = (PFN_vkCreateCommandPool)vkGetDeviceProcAddr(c.dev, "vkCreateCommandPool");
+    gdq(c.dev, c.qfam, 0, &c.queue);
+    VkCommandPoolCreateInfo pci = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, .queueFamilyIndex = c.qfam,
+                                   .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT};
+    ccp(c.dev, &pci, NULL, &c.pool);
+    struct pipe pw, pr, ps;
+    if (mkpipe(&c, &pw, spv_index_write, spv_index_write_size, 1, 4) || mkpipe(&c, &pr, spv_reduce, spv_reduce_size, 2, 4) ||
+        mkpipe(&c, &ps, spv_saxpy_u32, spv_saxpy_u32_size, 2, 8)) {
+        j_kstr("error", "pipeline creation failed"); j_close('}'); return 2;
+    }
+    VkDeviceSize size = (VkDeviceSize)size_mb << 20;
+    /* one representative memory type per kind (the first of each) */
+    int seen_vram = -1, seen_vram_vis = -1, seen_wc = -1, seen_cached = -1;
+    j_open("memory_types", '[');
+    for (uint32_t t = 0; t < c.mem.memoryTypeCount && !c.fatal; t++) {
+        VkMemoryPropertyFlags f = c.mem.memoryTypes[t].propertyFlags;
+        if (f & (VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT | VK_MEMORY_PROPERTY_PROTECTED_BIT)) continue;
+        if (f & 0x40 /* VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD */) continue;
+        int *slot = (f & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ? ((f & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ? &seen_vram_vis : &seen_vram)
+                  : (f & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) ? &seen_cached
+                  : (f & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ? &seen_wc : NULL;
+        if (!slot || *slot >= 0) continue;
+        *slot = (int)t;
+        bench_type(&c, (int)t, size, &pw, &pr, &ps);
+    }
+    j_close(']');
+    j_open("copies", '[');
+    if (!c.fatal) bench_copy(&c, "cpu-visible gtt (write-combined) -> vram", seen_wc, seen_vram >= 0 ? seen_vram : seen_vram_vis, size);
+    if (!c.fatal) bench_copy(&c, "vram -> gtt cached (readback)", seen_vram >= 0 ? seen_vram : seen_vram_vis, seen_cached, size);
+    if (!c.fatal) bench_copy(&c, "gtt write-combined -> gtt cached", seen_wc, seen_cached, size);
+    j_close(']');
+    if (!c.fatal) zero_copy(&c, size / 4, &pw, &pr, has_host, hostp.minImportedHostPointerAlignment, hpp);
+    j_kbool("fatal", c.fatal);
+    if (c.fatal) j_kstr("fatal_reason", c.fatal_why);
+    j_close('}');
+    if (!c.fatal) {
+        c.DeviceWaitIdle(c.dev);
+        rmpipe(&c, &pw); rmpipe(&c, &pr); rmpipe(&c, &ps);
+        PFN_vkDestroyCommandPool dcp = (PFN_vkDestroyCommandPool)vkGetDeviceProcAddr(c.dev, "vkDestroyCommandPool");
+        PFN_vkDestroyDevice dd = (PFN_vkDestroyDevice)vkGetDeviceProcAddr(c.dev, "vkDestroyDevice");
+        dcp(c.dev, c.pool, NULL);
+        dd(c.dev, NULL);
+        return 0;
+    }
+    return 3;
+}
 
 /* ------------------------------------------------------------------ Vulkan raster */
 #ifdef ORBIS_HAVE_RASTER_SPV
@@ -1330,7 +1640,7 @@ static void usage(void) {
     fprintf(stderr,
         "orbis-gfx-probe " PROBE_VERSION "\n"
         "usage: orbis-gfx-probe [--json] [--gl] [--gl-bench] [--frames N] [--vk] [--compute] [--vk-raster]\n"
-        "                       [--pipeline-cache] [--opencl] [--all]\n"
+        "                       [--pipeline-cache] [--opencl] [--membench [--membench-mb N]] [--all]\n"
         "                       [--device N] [--queue-family N] [--timeout-ms MS] [--level 1|2]\n"
         "exit: 0 ok, 1 test failure, 2 setup error, 3 GPU timeout/device lost\n");
 }
@@ -1350,6 +1660,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--vk-raster")) vk = opt_vk_raster = true;
         else if (!strcmp(argv[i], "--pipeline-cache")) vk = comp = opt_pcache = true;
         else if (!strcmp(argv[i], "--opencl")) opt_opencl = true;
+        else if (!strcmp(argv[i], "--membench")) vk = opt_membench = true;
+        else if (!strcmp(argv[i], "--membench-mb") && i + 1 < argc) opt_membench_mb = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--device") && i + 1 < argc) dev = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--queue-family") && i + 1 < argc) qfam = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--timeout-ms") && i + 1 < argc) timeout_ms = strtoull(argv[++i], NULL, 10);
@@ -1398,6 +1710,12 @@ int main(int argc, char **argv) {
             int rr = run_raster(pds[rpick], (uint32_t)rpick, timeout_ms);
             if (rr) rc = rr;
             if (rr == 3) goto out;
+        }
+        if (opt_membench && rpick >= 0 && (uint32_t)rpick < n) {
+            if (opt_membench_mb < 4) opt_membench_mb = 4;
+            int mr = run_membench(pds[rpick], (uint32_t)rpick, timeout_ms, opt_membench_mb);
+            if (mr) rc = mr;
+            if (mr == 3) goto out;
         }
         if (comp) {
             int pick = dev;

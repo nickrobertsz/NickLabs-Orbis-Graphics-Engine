@@ -1,0 +1,9 @@
+[Unit]
+Description=NickLabs Orbis: prune shader caches of orbis-run games (per-game, age and total limits)
+Documentation=file:///usr/share/doc/orbis-graphics/GAMING.md
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/orbis-games cache prune
+Nice=10
+IOSchedulingClass=idle

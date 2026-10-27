@@ -6,6 +6,7 @@ use crate::games::{self, Session};
 use crate::hw::{self, act};
 use crate::policy::{self, GameProfile, GpuPolicy, ModePolicy};
 use crate::sched::{self, Failures};
+use crate::workload::{self, Bound};
 use orbis_core::fsx::{self, p};
 use orbis_core::procs::{self, Proc};
 use orbis_core::restore::Journal;
@@ -18,6 +19,7 @@ pub const COOL_MC: i64 = 78_000;
 const GPU_BUSY_HI: i64 = 15;
 const GPU_BUSY_LO: i64 = 5;
 const GPU_SAMPLE_EVERY: u32 = 5; // ticks (10 s at 2 s)
+const WORKLOAD_EVERY: u32 = 3; // ticks (6 s at 2 s) while a game runs
 
 pub fn log_path() -> std::path::PathBuf {
     p("/var/log/orbis/perf.jsonl")
@@ -51,6 +53,9 @@ pub struct Controller {
     pub gpu_busy: Option<i64>,
     pub recent: Vec<Value>,
     pub mode_applied: bool,
+    pub wl: workload::Sampler,
+    /// background slice narrowed to CPU 0 because the game is CPU-bound
+    bg_tight: bool,
 }
 
 impl Controller {
@@ -76,6 +81,8 @@ impl Controller {
             gpu_busy: None,
             recent: vec![],
             mode_applied: false,
+            wl: workload::Sampler::default(),
+            bg_tight: false,
         }
     }
 
@@ -148,6 +155,11 @@ impl Controller {
         s.profile.as_ref().and_then(|p| p.int("memory.dmem_max_mb")).filter(|mb| *mb > 0).map(|mb| (mb as u64) << 20)
     }
 
+    /// GTT ceiling for one game (profile memory.gtt_max_mb, GE kernel ge-0015).
+    fn session_gtt_max(s: &Session) -> Option<u64> {
+        s.profile.as_ref().and_then(|p| p.int("memory.gtt_max_mb")).filter(|mb| *mb > 0).map(|mb| (mb as u64) << 20)
+    }
+
     fn session_policy(&self, s: &Session) -> (String, Vec<String>, String, String, Option<i64>, i32, Option<u64>) {
         let g = policy::mode_policy("gaming");
         let prof = s.profile.as_ref();
@@ -197,11 +209,70 @@ impl Controller {
                 acts.push(hw::limit_vram(&mut self.sess_j, &s.root_cgroup, b));
             }
         }
+        if let Some(b) = Self::session_gtt_max(s) {
+            if !s.root_cgroup.is_empty() {
+                acts.push(hw::limit_dmem(&mut self.sess_j, &s.root_cgroup, "gtt", b));
+            }
+        }
         self.note(jobj! {"event" => "game-start", "session" => s.key.clone(), "title" => s.title.clone(), "via" => s.via.clone(),
                          "profile" => s.profile.as_ref().map(|g| g.source.clone()), "actions" => Value::Arr(acts)});
     }
 
+    fn profile_str(&self, key: &str) -> Vec<String> {
+        self.sessions.values().filter_map(|s| s.profile.as_ref().and_then(|p| p.str(key))).collect()
+    }
+
+    /// React to a change of the game's workload class (see workload.rs). Only knobs that
+    /// orbis-perf already owns are touched, all journalled, and manual overrides win.
+    fn on_bound(&mut self, b: Bound) {
+        let ov = policy::manual_overrides();
+        let sclk_ok = !self.hot && !ov.iter().any(|k| k == "gpu_sclk");
+        let auto_sclk = !self.sessions.is_empty() && self.profile_str("gpu_sclk").iter().any(|v| v == "auto");
+        let mut acts = vec![];
+        match b {
+            // the GPU waits for the CPU: give the game every core but CPU 0
+            Bound::Cpu => {
+                if self.pol.background_cpus.as_deref().map(|bg| bg != "0").unwrap_or(false) {
+                    acts.push(hw::set_background_cpus(&mut self.mode_j, Some("0")));
+                    self.bg_tight = true;
+                }
+            }
+            // the CPU waits for the GPU: the engine clock must be at full speed
+            Bound::Gpu => {
+                if sclk_ok && hw::sclk_state().as_deref() != Some("max") {
+                    acts.push(hw::set_sclk(&mut self.sess_j, "max"));
+                }
+            }
+            // menus / loading: with gpu_sclk "auto" the GPU drops to its startup clock (less heat)
+            Bound::Light => {
+                if sclk_ok && auto_sclk && hw::sclk_state().as_deref() == Some("max") {
+                    acts.push(hw::set_sclk(&mut self.sess_j, "startup"));
+                }
+            }
+            Bound::Balanced => {}
+        }
+        if b != Bound::Cpu && self.bg_tight {
+            let bg = self.pol.background_cpus.clone();
+            acts.push(hw::set_background_cpus(&mut self.mode_j, bg.as_deref()));
+            self.bg_tight = false;
+        }
+        if b != Bound::Light && auto_sclk && sclk_ok && hw::sclk_state().as_deref() == Some("startup") {
+            acts.push(hw::set_sclk(&mut self.sess_j, "max"));
+        }
+        let s = self.wl.last;
+        self.note(jobj! {"event" => "workload", "class" => b.name(), "gpu_busy" => s.gpu_busy,
+                         "max_thread_pct" => (s.max_thread_pct * 10.0).round() / 10.0,
+                         "total_cpu_pct" => (s.total_pct * 10.0).round() / 10.0, "actions" => Value::Arr(acts)});
+    }
+
     fn end_sessions_restore(&mut self) {
+        self.wl.reset();
+        if self.bg_tight {
+            let bg = self.pol.background_cpus.clone();
+            let a = hw::set_background_cpus(&mut self.mode_j, bg.as_deref());
+            self.note(a);
+            self.bg_tight = false;
+        }
         let (ok, err) = self.sess_j.restore_files(|_| true);
         for (pid, (nice, pol)) in std::mem::take(&mut self.tweaked).into_iter().chain(std::mem::take(&mut self.demoted)) {
             if sys::process_alive(pid) {
@@ -316,6 +387,19 @@ impl Controller {
                 self.demote_pid(pid);
             }
         }
+        // CPU/GPU workload coordination while a game runs (profile "coordination": "off" disables)
+        if !self.sessions.is_empty() && self.tick_n % WORKLOAD_EVERY == 0
+            && !self.profile_str("coordination").iter().any(|v| v == "off")
+        {
+            let pids: BTreeSet<u32> = self.sessions.values().flat_map(|s| s.pids.iter().copied()).collect();
+            let (max_thread_pct, total_pct) = self.wl.cpu(&pids, Instant::now());
+            self.gpu_busy = hw::gpu_busy();
+            let cpus = std::thread::available_parallelism().map(|n| n.get() as f64).unwrap_or(8.0);
+            let s = workload::Sample { gpu_busy: self.gpu_busy, max_thread_pct, total_pct };
+            if let Some(b) = self.wl.feed(s, cpus) {
+                self.on_bound(b);
+            }
+        }
         self.tweaked.retain(|pid, _| sys::process_alive(*pid));
         self.demoted.retain(|pid, _| sys::process_alive(*pid));
         // scheduler supervision
@@ -378,6 +462,10 @@ impl Controller {
             "sessions" => Value::Arr(sessions), "thermal_guard" => self.hot,
             "cpu_util_percent" => self.cpu_util, "gpu_busy_gfx_percent" => self.gpu_busy,
             "gamemode_running" => gamemode_active(),
+            "workload" => jobj! {"class" => self.wl.current.map(|b| b.name()), "gpu_busy" => self.wl.last.gpu_busy,
+                                 "max_thread_pct" => (self.wl.last.max_thread_pct * 10.0).round() / 10.0,
+                                 "total_cpu_pct" => (self.wl.last.total_pct * 10.0).round() / 10.0,
+                                 "background_narrowed" => self.bg_tight},
             "tweaked_pids" => self.tweaked.len(), "demoted_pids" => self.demoted.len(),
             "recent" => Value::Arr(self.recent.iter().rev().take(12).cloned().collect())
         }
@@ -480,10 +568,10 @@ mod tests {
         w(r, "proc/sys/vm/swappiness", "60\n");
         w(r, "proc/sys/vm/compaction_proactiveness", "20\n");
         w(r, "sys/fs/cgroup/user.slice/user-1000.slice/app-22.scope/dmem.max", "drm/0000:00:01.0/vram max\n");
-        w(r, "etc/orbis/games.d/elden.json", r#"{"name":"Elden Ring","match":{"steam_appid":["1245620"]},"memory":{"dmem_max_mb":512}}"#);
+        w(r, "etc/orbis/games.d/elden.json", r#"{"name":"Elden Ring","match":{"steam_appid":["1245620"]},"memory":{"dmem_max_mb":512,"gtt_max_mb":2048}}"#);
         w(r, "sys/block/sda/queue/scheduler", "[mq-deadline] kyber bfq adios none\n");
         w(r, "sys/fs/cgroup/cgroup.controllers", "cpuset cpu io memory pids dmem\n");
-        w(r, "sys/fs/cgroup/dmem.capacity", "drm/0000:00:01.0/vram 1073741824\n");
+        w(r, "sys/fs/cgroup/dmem.capacity", "drm/0000:00:01.0/vram 1073741824\ndrm/0000:00:01.0/gtt 4294967296\n");
         for cg in ["user.slice", "user.slice/user-1000.slice", "user.slice/user-1000.slice/app-22.scope"] {
             w(r, &format!("sys/fs/cgroup/{cg}/dmem.low"), "drm/0000:00:01.0/vram 0\n");
         }
@@ -512,7 +600,10 @@ mod tests {
         assert_eq!(rd(&format!("{dev}/ps4_sclk")), "max");
         assert_eq!(rd("sys/class/hwmon/hwmon2/temp1_crit"), "70000");
         assert_eq!(rd("sys/fs/cgroup/user.slice/user-1000.slice/app-22.scope/dmem.low"), format!("drm/0000:00:01.0/vram {}", (1u64 << 30) / 4 * 3));
-        assert_eq!(rd("sys/fs/cgroup/user.slice/user-1000.slice/app-22.scope/dmem.max"), format!("drm/0000:00:01.0/vram {}", 512u64 << 20));
+        // a fixture file keeps only the last write (the kernel keeps one line per region): GTT came last
+        assert_eq!(rd("sys/fs/cgroup/user.slice/user-1000.slice/app-22.scope/dmem.max"), format!("drm/0000:00:01.0/gtt {}", 2048u64 << 20));
+        let j = fs::read_to_string(r.join("var/lib/orbis/perf/restore-session.json")).unwrap();
+        assert!(j.contains("dmem.max#vram") && j.contains("dmem.max#gtt"), "{j}");
         let st = c.state();
         assert_eq!(st.at("sessions").and_then(|s| s.as_arr()).map(|a| a.len()), Some(1));
 
@@ -537,6 +628,7 @@ mod tests {
         assert_eq!(rd("sys/devices/system/cpu/cpufreq/policy0/scaling_governor"), "schedutil");
         assert_eq!(rd("sys/class/hwmon/hwmon2/temp1_crit"), "79000");
         assert_eq!(rd("sys/fs/cgroup/user.slice/user-1000.slice/app-22.scope/dmem.low"), "drm/0000:00:01.0/vram 0");
+        // both regions restored (the last restore write in key order is vram)
         assert_eq!(rd("sys/fs/cgroup/user.slice/user-1000.slice/app-22.scope/dmem.max"), "drm/0000:00:01.0/vram max");
         assert_eq!(rd("proc/sys/vm/compaction_proactiveness"), "20");
 

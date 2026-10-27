@@ -206,6 +206,66 @@ class MemoryTest(EngineBase):
         st = json.loads((self.root / "var/lib/orbis-graphics/memory/boot-default.json").read_text())
         self.assertEqual(st["budget"], int(3.5 * GiB))
 
+    def test_accounting_shared_reclaim_zram_dmem(self):
+        self.tree(psi_some=25.0)
+        pr = self.root / "proc/5151"
+        (pr / "fdinfo").mkdir(parents=True)
+        (pr / "comm").write_text("game.exe\n")
+        (pr / "status").write_text("VmRSS: 1024 kB\n")
+        # 6.15 fdinfo: totals with a shared part; the compositor holds the same 64 MiB shared buffer
+        (pr / "fdinfo/5").write_text("drm-driver: amdgpu\ndrm-client-id: 20\ndrm-total-gtt: 1048576 KiB\n"
+                                     "drm-shared-gtt: 65536 KiB\ndrm-total-vram: 262144 KiB\ndrm-shared-vram: 0\n")
+        pc = self.root / "proc/6161"
+        (pc / "fdinfo").mkdir(parents=True)
+        (pc / "comm").write_text("gamescope\n")
+        (pc / "fdinfo/3").write_text("drm-driver: amdgpu\ndrm-client-id: 21\ndrm-total-gtt: 131072 KiB\n"
+                                     "drm-shared-gtt: 65536 KiB\ndrm-total-vram: 0\ndrm-shared-vram: 0\n")
+        (self.gpu_dir() / "orbis_gtt_reclaim").write_text(
+            "enabled=1 shrinkable_pages=262144 purgeable_pages=0 backed_up_pages=1024 shrunk_total=2048 "
+            "purged_total=0 restored_total=1024 scans=3 trim_evictions=2 backup_bytes_avail=8589934592 page_size=4096\n")
+        z = self.root / "sys/block/zram0"
+        z.mkdir(parents=True)
+        (z / "mm_stat").write_text("41943040 10485760 12582912 0 12582912 0 0 0 0\n")
+        (z / "comp_algorithm").write_text("lzo [zstd]\n")
+        (self.root / "sys/fs/cgroup").mkdir(parents=True, exist_ok=True)
+        (self.root / "sys/fs/cgroup/dmem.capacity").write_text(
+            "drm/0000:00:01.0/vram 1073741824\ndrm/0000:00:01.0/gtt 4294967296\n")
+        o = memory.ownership()
+        t = o["client_totals"]["gtt"]
+        self.assertEqual(t["private_sum"], (1024 - 64 + 128 - 64) * MiB)   # exact, no double count
+        self.assertEqual((t["shared_min"], t["shared_max"]), (64 * MiB, 128 * MiB))
+        # llama-server (1 GiB, older fdinfo format) ahead of the game's 960 MiB private GTT
+        self.assertEqual([x["comm"] for x in o["top_gtt_owners"][:2]], ["llama-server", "game.exe"])
+        self.assertEqual(o["client_totals"]["gtt"]["unsplit_sum"], 1 * GiB)
+        r = o["reclaim"]
+        self.assertTrue(r["enabled"])
+        self.assertEqual(r["backed_up_bytes"], 1024 * 4096)
+        zr = o["compressed"]["zram"][0]
+        self.assertEqual((zr["ratio"], zr["algorithm"]), (4.0, "zstd"))
+        self.assertIn("gtt", o["dmem"]["regions"])
+        # with the shrinker the pressure step may go below current usage (trim + reclaim)
+        (self.gpu_dir() / "mem_info_gtt_used").write_text(str(int(2.9 * GiB)) + "\n")
+        d = memory.Policy("ai").tick()
+        self.assertEqual(d["decision"], "shrink")
+        self.assertEqual(int((self.gpu_dir() / "orbis_gtt_budget").read_text()), int(3 * GiB * 0.9) // 4096 * 4096)
+        self.assertEqual(d["top_gtt_owners"][1]["comm"], "game.exe")
+        b = memory.reclaim_bootarg(True)
+        self.assertIn("amdgpu.orbis_shrinker=1", b["new"])
+        self.assertEqual(memory.reclaim_bootarg(True)["reboot_required"], False)
+
+    def test_membench_records_zero_copy_result(self):
+        self.tree()
+        from orbis_gfx.runner import Run
+        out = json.dumps({"membench": {"memory_types": [{"type": 0, "kind": "vram (device-local, not CPU-mapped)",
+                                                          "gpu_write_gbs": 80.0}],
+                                       "zero_copy_host_memory": {"extension_advertised": True, "result": "PASS"}},
+                          "exit_code": 0})
+        got = memory.membench(16, run=lambda argv, timeout: Run(argv, 0, out, "", False, 1.0))
+        self.assertEqual(got["zero_copy"], "PASS")
+        self.assertTrue((self.root / "var/lib/orbis-graphics/membench.json").exists())
+        miss = memory.membench(16, run=lambda argv, timeout: Run(argv, None, "", "", False, 0, missing=True))
+        self.assertEqual(miss["result"], "NOT_RUN")
+
     def test_no_interface_no_decision(self):
         self.tree(ge=False)
         self.assertEqual(memory.Policy("pc").tick()["decision"], "none")

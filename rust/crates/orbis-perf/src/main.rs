@@ -19,6 +19,7 @@ mod games;
 mod hw;
 mod policy;
 mod sched;
+mod workload;
 
 /// Tests that point ORBIS_ROOT at a fixture tree take this lock (the variable is process-wide).
 #[cfg(test)]

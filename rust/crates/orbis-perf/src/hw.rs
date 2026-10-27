@@ -253,10 +253,16 @@ pub fn set_background_cpus(j: &mut Journal, cpus: Option<&str>) -> Value {
 
 /// dmem.low for the GPU's VRAM region on a cgroup and its ancestors (protection is hierarchical).
 pub fn dmem_region() -> Option<String> {
+    dmem_region_for("vram")
+}
+
+/// dmem region of the GPU for one memory kind: "vram" (amdgpu) or "gtt" (GE kernel ge-0015).
+pub fn dmem_region_for(kind: &str) -> Option<String> {
     let caps = fsx::read_raw(&p("/sys/fs/cgroup/dmem.capacity"))?;
+    let suffix = format!("/{kind}");
     caps.lines().find_map(|l| {
         let name = l.split_whitespace().next()?;
-        (name.starts_with("drm/") && name.ends_with("/vram")).then(|| name.to_string())
+        (name.starts_with("drm/") && name.ends_with(&suffix)).then(|| name.to_string())
     })
 }
 
@@ -292,19 +298,29 @@ pub fn protect_vram(j: &mut Journal, cgroup: &str, bytes: u64) -> Vec<Value> {
 /// dmem.max for the GPU's VRAM region on one cgroup (the game's own scope; limits are not
 /// propagated to ancestors). Journalled so the session end restores "max".
 pub fn limit_vram(j: &mut Journal, cgroup: &str, bytes: u64) -> Value {
-    let Some(region) = dmem_region() else {
-        return act("dmem_max", "UNSUPPORTED", "no dmem VRAM region (kernel without CONFIG_CGROUP_DMEM)");
+    limit_dmem(j, cgroup, "vram", bytes)
+}
+
+/// dmem.max for one region kind ("vram" or "gtt") on the game's own cgroup. VRAM and GTT limits
+/// are separate: a VRAM ceiling sends buffers to GTT, a GTT ceiling makes TTM evict that
+/// game's own GTT buffers (and, with ge-0014, lets the shrinker reclaim them).
+pub fn limit_dmem(j: &mut Journal, cgroup: &str, kind: &str, bytes: u64) -> Value {
+    let knob = format!("dmem_max_{kind}");
+    let Some(region) = dmem_region_for(kind) else {
+        let why = if kind == "gtt" { "no dmem GTT region (GE kernel ge-0015 needed)" } else { "no dmem VRAM region (kernel without CONFIG_CGROUP_DMEM)" };
+        return act(&knob, "UNSUPPORTED", why);
     };
     let f = p(&format!("/sys/fs/cgroup/{}/dmem.max", cgroup.trim_matches('/')));
     if !f.exists() {
-        return act("dmem_max", "UNSUPPORTED", format!("{cgroup}: dmem controller not enabled here"));
+        return act(&knob, "UNSUPPORTED", format!("{cgroup}: dmem controller not enabled here"));
     }
     let cur = fsx::read_raw(&f).unwrap_or_default();
     let cur_v = cur.lines().find(|l| l.starts_with(&region)).and_then(|l| l.split_whitespace().nth(1)).unwrap_or("max").to_string();
-    let _ = j.remember(&f.display().to_string(), &format!("{region} {cur_v}"));
+    // one dmem.max file holds a line per region: journal each region separately
+    let _ = j.remember(&format!("{}#{kind}", f.display()), &format!("{region} {cur_v}"));
     match fsx::write_value(&f, &format!("{region} {bytes}")) {
-        Ok(()) => act("dmem_max", "APPLIED", format!("{cgroup} {region} {bytes}")),
-        Err(e) => act("dmem_max", "FAILED", format!("{cgroup}: {e}")),
+        Ok(()) => act(&knob, "APPLIED", format!("{cgroup} {region} {bytes}")),
+        Err(e) => act(&knob, "FAILED", format!("{cgroup}: {e}")),
     }
 }
 

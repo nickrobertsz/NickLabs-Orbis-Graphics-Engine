@@ -113,6 +113,7 @@ def collect(out: Path | None = None, run=runner.run) -> Path:
                      ("var/lib/orbis-graphics/video-test.json", "graphics/video-test.json"),
                      ("var/lib/orbis-graphics/ai-vulkan-tuning.json", "graphics/ai-vulkan-tuning.json"),
                      ("var/lib/orbis/gpu-gate.json", "graphics/gpu-gate.json"),
+                     ("var/lib/orbis-graphics/membench.json", "graphics/membench.json"),
                      ("run/orbis/time-source.json", "native/time-source.json"),
                      ("run/orbis/perf/state.json", "native/perf-state.json"),
                      ("run/orbis/perf/scx-failures.json", "native/scx-failures.json"),

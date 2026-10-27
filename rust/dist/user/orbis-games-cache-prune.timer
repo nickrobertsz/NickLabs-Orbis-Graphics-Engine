@@ -1,0 +1,10 @@
+[Unit]
+Description=NickLabs Orbis: weekly shader-cache housekeeping
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target

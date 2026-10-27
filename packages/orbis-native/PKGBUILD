@@ -58,7 +58,7 @@ package() {
   for d in "$D"/system/*.d; do
     install -Dm644 -t "$pkgdir/usr/lib/systemd/system/$(basename "$d")" "$d"/*.conf
   done
-  install -m644 "$D"/user/*.slice "$pkgdir/usr/lib/systemd/user/"
+  install -m644 "$D"/user/*.slice "$D"/user/*.service "$D"/user/*.timer "$pkgdir/usr/lib/systemd/user/"
   install -Dm644 "$D/tmpfiles.d/orbis-native.conf" "$pkgdir/usr/lib/tmpfiles.d/orbis-native.conf"
   install -Dm644 "$R/gaming/runners.json" "$pkgdir/usr/share/orbis/games/runners.json"
   install -Dm644 "$R/gaming/runners.lock.json" "$pkgdir/usr/share/orbis/games/runners.lock.json"

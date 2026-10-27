@@ -87,9 +87,16 @@ def gpu_clients() -> list[dict]:
                    "vram": _bytes(info.get("drm-memory-vram", "0")), "gtt": _bytes(info.get("drm-memory-gtt", "0")),
                    "cpu": _bytes(info.get("drm-memory-cpu", "0")),
                    "gfx_busy_ns": int(info.get("drm-engine-gfx", "0 ns").split()[0] or 0)}
-            for k in ("drm-total-vram", "drm-resident-vram", "drm-total-gtt", "drm-resident-gtt"):
+            for k in ("drm-total-vram", "drm-resident-vram", "drm-total-gtt", "drm-resident-gtt",
+                      "drm-shared-vram", "drm-shared-gtt", "drm-total-cpu", "drm-shared-cpu",
+                      "drm-purgeable-gtt", "drm-purgeable-cpu"):
                 if k in info:
                     rec[k.replace("drm-", "").replace("-", "_")] = _bytes(info[k])
+            # private = buffers only this client holds; shared ones also appear in other clients
+            for r in ("vram", "gtt", "cpu"):
+                tot = rec.get(f"total_{r}")
+                if tot is not None:
+                    rec[f"private_{r}"] = max(0, tot - (rec.get(f"shared_{r}") or 0))
             status = read(d / "status") or ""
             m = re.search(r"VmRSS:\s+(\d+) kB", status)
             rec["rss"] = int(m.group(1)) * 1024 if m else None
@@ -101,6 +108,81 @@ def gpu_clients() -> list[dict]:
                 continue
             out[key] = rec
     return sorted(out.values(), key=lambda r: -(r["vram"] + r["gtt"]))
+
+
+def client_totals(clients: list[dict]) -> dict:
+    """Per-client sums without double counting: private buffers are summed exactly; shared
+    buffers appear in every client that holds them, so only a range is known (largest single
+    client .. sum). The device counters (gpu.vram_used / gpu.gtt_used) remain the truth."""
+    out = {}
+    for r in ("vram", "gtt", "cpu"):
+        split = [c for c in clients if c.get(f"private_{r}") is not None]
+        legacy = [c for c in clients if c.get(f"private_{r}") is None]
+        shared = [c.get(f"shared_{r}") or 0 for c in split]
+        out[r] = {"private_sum": sum(c[f"private_{r}"] for c in split),
+                  "shared_min": max(shared, default=0), "shared_max": sum(shared),
+                  # clients whose fdinfo has no drm-total/drm-shared split (older format):
+                  # their value may include buffers shared with others
+                  "unsplit_sum": sum(c.get(r) or 0 for c in legacy)}
+    return out
+
+
+def reclaim_status(g) -> dict:
+    """ge-0014 shrinker counters (pages -> bytes) and what really happened to the pages:
+    backed-up GPU pages live in shmem; they only leave RAM when the core VM swaps them (zram)."""
+    raw = read(g.sysdir / "orbis_gtt_reclaim") if g else None
+    if raw is None:
+        return {"available": False, "why": "kernel without ge-0014 (orbis_gtt_reclaim)"}
+    d = kv(raw)
+    if d.get("enabled") != 1:
+        return {"available": True, "enabled": False, "why": d.get("reason"),
+                "enable": "add amdgpu.orbis_shrinker=1 to bootargs.txt (orbis-mem reclaim enable) and reboot"}
+    ps = d.get("page_size") or PAGE
+    b = {k: (d.get(k) or 0) * ps for k in ("shrinkable_pages", "purgeable_pages", "backed_up_pages",
+                                            "shrunk_total", "purged_total", "restored_total")}
+    return {"available": True, "enabled": True,
+            "shrinkable_bytes": b["shrinkable_pages"], "purgeable_bytes": b["purgeable_pages"],
+            "backed_up_bytes": b["backed_up_pages"], "shrunk_total_bytes": b["shrunk_total"],
+            "purged_total_bytes": b["purged_total"], "restored_total_bytes": b["restored_total"],
+            "scans": d.get("scans"), "trim_evictions": d.get("trim_evictions"),
+            "note": "backed_up_bytes are in shmem (still RAM until swapped); see swap/zram for what was actually compressed"}
+
+
+def compressed_status() -> dict:
+    """Swap and zram as the kernel reports them (actual compression, not estimates)."""
+    mi = telemetry.meminfo_full()
+    out = {"swap_total": mi.get("SwapTotal"), "swap_used": (mi.get("SwapTotal") or 0) - (mi.get("SwapFree") or 0),
+           "shmem": mi.get("Shmem"), "zram": []}
+    for z in sorted(p("sys/block").glob("zram*")) if p("sys/block").is_dir() else []:
+        f = read(z / "mm_stat")
+        if not f:
+            continue
+        v = [int(x) for x in f.split()[:3] if x.isdigit()]
+        if len(v) == 3:
+            out["zram"].append({"dev": z.name, "orig_data_bytes": v[0], "compressed_bytes": v[1],
+                                "mem_used_bytes": v[2], "ratio": round(v[0] / v[1], 2) if v[1] else None,
+                                "algorithm": (read(z / "comp_algorithm") or "").split("[")[-1].split("]")[0] or None})
+    return out
+
+
+def dmem_regions() -> dict:
+    """cgroup v2 device-memory regions (amdgpu 'vram'; 'gtt' with ge-0015)."""
+    raw = read(p("sys/fs/cgroup/dmem.capacity"))
+    if raw is None:
+        return {"available": False, "why": "kernel without CONFIG_CGROUP_DMEM"}
+    regs = {}
+    for line in raw.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].startswith("drm/"):
+            regs[parts[0].rsplit("/", 1)[-1]] = {"region": parts[0], "capacity": int(parts[1]) if parts[1].isdigit() else parts[1]}
+    return {"available": True, "regions": regs,
+            "gtt_limits": "gtt" in regs or "kernel without ge-0015: per-app limits cover VRAM only"}
+
+
+def top_owners(clients: list[dict], n: int = 3) -> list[dict]:
+    key = lambda c: c.get("private_gtt") if c.get("private_gtt") is not None else c.get("gtt") or 0
+    return [{"pid": c["pid"], "comm": c.get("comm"), "private_gtt": c.get("private_gtt"), "gtt": c.get("gtt"),
+             "vram": c.get("vram")} for c in sorted(clients, key=key, reverse=True)[:n] if key(c)]
 
 
 def ownership() -> dict:
@@ -117,16 +199,24 @@ def ownership() -> dict:
     return {
         "schema": "orbis-memory-ownership/1", "time": now_iso(),
         "pool": {"vram_carveout": gm.get("mem_info_vram_total"), "linux_ram": total_ram,
-                 "physical_estimate": total_ram + (gm.get("mem_info_vram_total") or 0)},
+                 "physical_estimate": total_ram + (gm.get("mem_info_vram_total") or 0),
+                 "physical_note": "Linux RAM + carve-out; firmware/OrbisOS reservations of the 8 GiB are not visible to Linux"},
         "gpu": {"vram_used": gm.get("mem_info_vram_used"), "vis_vram_used": gm.get("mem_info_vis_vram_used"),
+                # x86-64 APU: amdgpu maps the whole carve-out for the CPU (no small-BAR window)
+                "cpu_visible_vram": gm.get("mem_info_vis_vram_total"),
                 "gtt_used": gtt_used, "gtt_total": gm.get("mem_info_gtt_total"),
                 "gtt_budget": budget.get("budget"), "ttm_pages_limit_bytes": (mem.get("ttm_pages_limit") or 0) * PAGE or None},
         "linux": {"available": avail, "in_use_excluding_gtt": max(0, total_ram - avail - gtt_used),
                   "psi_memory": mem.get("psi_memory")},
         "clients": clients,
-        "client_totals": {"vram": sum(c["vram"] for c in clients), "gtt": sum(c["gtt"] for c in clients)},
+        "client_totals": client_totals(clients),
+        "top_gtt_owners": top_owners(clients),
+        "reclaim": reclaim_status(g),
+        "compressed": compressed_status(),
+        "dmem": dmem_regions(),
         "boot_contract": mem.get("boot_contract"),
-        "note": "GTT pages are counted once (in gpu.gtt_used); they are ordinary RAM pages pinned for the GPU.",
+        "note": ("GTT pages are counted once (in gpu.gtt_used); they are ordinary RAM pages mapped for the GPU. "
+                 "Vulkan heaps and the GTT budget are limits over the same pool, never added to it."),
     }
 
 
@@ -283,9 +373,15 @@ class Policy:
         now = self.clock()
         if psi is not None and psi >= PSI_HIGH:
             self.calm_since = None
-            new = max(GTT_FLOOR, used, int(cur * (1 - STEP_FRACTION)))
+            new = max(GTT_FLOOR, int(cur * (1 - STEP_FRACTION)))
+            # with ge-0014 a budget below usage trims at once and the shrinker can reclaim the
+            # evicted buffers; without it, stay at usage (a lower budget would only fail allocations)
+            if not own["reclaim"].get("enabled"):
+                new = max(new, used)
             if new < cur:
-                return {"decision": "shrink", **set_gtt_budget(new, f"memory pressure some.avg10={psi}%", dry_run)}
+                return {"decision": "shrink", "top_gtt_owners": own["top_gtt_owners"],
+                        "reclaim": {k: own["reclaim"].get(k) for k in ("backed_up_bytes", "shrunk_total_bytes")},
+                        **set_gtt_budget(new, f"memory pressure some.avg10={psi}%", dry_run)}
             return {"decision": "hold", "why": f"pressure {psi}% but budget already at floor/usage"}
         if psi is None or psi <= PSI_LOW:
             self.calm_since = self.calm_since if self.calm_since is not None else now
@@ -296,6 +392,55 @@ class Policy:
             return {"decision": "hold", "why": "calm; waiting" if cur != target else "at target"}
         self.calm_since = None
         return {"decision": "hold", "why": f"moderate pressure {psi}%"}
+
+
+def membench(size_mb: int = 128, timeout_s: float = 300.0, run=None) -> dict:
+    """U27/U6 on the console: orbis-gfx-probe --membench (bandwidth per memory kind, copies and the
+    end-to-end zero-copy check). Short and bounded; the result is stored for orbis-debug collect."""
+    from orbis_gfx import runner
+    run = run or runner.run
+    r = run([runner.probe_path(), "--membench", "--membench-mb", str(int(size_mb)), "--timeout-ms", "10000"], timeout=timeout_s)
+    if r.missing:
+        return {"result": "NOT_RUN", "why": "orbis-gfx-probe not installed (orbis-graphics package)"}
+    try:
+        doc = json.loads(r.stdout)
+    except ValueError:
+        return {"result": "FAIL", "why": "probe output was not JSON", "stderr": (r.stderr or "")[-2000:], "rc": r.rc}
+    mb = doc.get("membench") or {"error": (doc.get("vulkan") or {}).get("error", "no membench section")}
+    out = {"schema": "orbis-membench/1", "time": now_iso(), "membench": mb, "probe_exit": doc.get("exit_code")}
+    zc = (mb.get("zero_copy_host_memory") or {}).get("result")
+    out["zero_copy"] = zc or "NOT_RUN"
+    try:
+        atomic_write(p("var/lib/orbis-graphics/membench.json"), json.dumps(out, indent=1) + "\n")
+    except OSError:
+        pass
+    return out
+
+
+def reclaim_scan(pages: int, writeback: bool = False, dry_run: bool = False) -> dict:
+    g = sysfs.primary_gpu()
+    f = g.sysdir / "orbis_gtt_reclaim" if g else None
+    if not f or not f.exists():
+        raise OSError("orbis_gtt_reclaim not present (GE kernel with ge-0014 required)")
+    before = reclaim_status(g)
+    cmd = f"scan {int(pages)}" + (" writeback" if writeback else "")
+    if not dry_run:
+        write_sysfs(f, cmd)
+    return {"command": cmd, "before": before, "after": reclaim_status(g), "dry_run": dry_run}
+
+
+def reclaim_bootarg(enable: bool, dry_run: bool = False) -> dict:
+    """amdgpu.orbis_shrinker=1 in bootargs.txt (the capability is fixed at buffer creation, so a reboot is needed)."""
+    f = boot_dir() / "bootargs.txt"
+    cur = (read(f) or "").splitlines()[0] if read(f) else ""
+    toks = [t for t in cur.split() if not t.startswith("amdgpu.orbis_shrinker=")]
+    if enable:
+        toks.append("amdgpu.orbis_shrinker=1")
+    new = " ".join(toks)
+    if not dry_run and new != cur:
+        atomic_write(f.with_name("bootargs.txt.orbis-prev"), cur + "\n")
+        atomic_write(f, new + "\n")
+    return {"file": str(f), "old": cur, "new": new, "dry_run": dry_run, "reboot_required": new != cur}
 
 
 def current_mode() -> str:

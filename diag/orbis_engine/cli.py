@@ -93,6 +93,13 @@ def main_mem(argv=None) -> int:
     g = sub.add_parser("set-budget", help="runtime GTT budget in MiB")
     g.add_argument("mib", type=int)
     g.add_argument("--dry-run", action="store_true")
+    rc = sub.add_parser("reclaim", help="GPU buffer reclaim (ge-0014): status | scan <pages> [--writeback] | enable | disable")
+    rc.add_argument("action", nargs="?", default="status", choices=("status", "scan", "enable", "disable"))
+    rc.add_argument("pages", nargs="?", type=int, default=65536)
+    rc.add_argument("--writeback", action="store_true")
+    rc.add_argument("--dry-run", action="store_true")
+    mb = sub.add_parser("bench", help="bandwidth per memory kind + zero-copy check on this GPU (orbis-gfx-probe --membench)")
+    mb.add_argument("--mb", type=int, default=128)
     d = sub.add_parser("daemon", help="pressure/mode-driven GTT budget loop (orbis-memd)")
     d.add_argument("--interval", type=float, default=5.0)
     d.add_argument("--once", action="store_true")
@@ -106,6 +113,16 @@ def main_mem(argv=None) -> int:
             out = memory.apply_boot(a.mode, a.vram_mb, a.gtt_mb, dry_run=a.dry_run)
         elif a.cmd == "set-budget":
             out = memory.set_gtt_budget(a.mib << 20, "manual (orbis-mem)", dry_run=a.dry_run)
+        elif a.cmd == "bench":
+            out = memory.membench(a.mb)
+        elif a.cmd == "reclaim":
+            if a.action == "scan":
+                out = memory.reclaim_scan(a.pages, a.writeback, a.dry_run)
+            elif a.action in ("enable", "disable"):
+                out = memory.reclaim_bootarg(a.action == "enable", a.dry_run)
+            else:
+                g = memory.sysfs.primary_gpu()
+                out = {"reclaim": memory.reclaim_status(g), "compressed": memory.compressed_status()}
         else:
             return memory.daemon(a.interval, a.once)
     except ValueError as e:

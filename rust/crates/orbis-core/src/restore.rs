@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 
 pub struct Journal {
     file: PathBuf,
-    /// key (path or "nice:<pid>" etc.) -> original value
+    /// key (path, "path#tag" for several values written to one file such as per-region
+    /// cgroup dmem files, or "nice:<pid>" etc.) -> original value
     orig: BTreeMap<String, String>,
 }
 
@@ -76,7 +77,8 @@ impl Journal {
         let keys: Vec<String> = self.orig.keys().filter(|k| k.starts_with('/') && filter(k)).cloned().collect();
         for k in keys {
             let v = self.orig[&k].clone();
-            match write_value(Path::new(&k), &v) {
+            let path = k.split('#').next().unwrap_or(&k);
+            match write_value(Path::new(path), &v) {
                 Ok(()) => {
                     ok.push(format!("{k} = {v}"));
                     self.orig.remove(&k);

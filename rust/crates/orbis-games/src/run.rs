@@ -165,8 +165,14 @@ pub fn plan(cmd: &[String], prof: &Profile, title_opt: Option<&str>, runner_opt:
     env.insert("DXVK_STATE_CACHE_PATH".into(), cache.join("dxvk").display().to_string());
     env.insert("VKD3D_SHADER_CACHE_PATH".into(), cache.join("vkd3d").display().to_string());
     env.insert("MESA_SHADER_CACHE_DIR".into(), cache.join("mesa").display().to_string());
-    let max_mb = prof.doc.at("shader_cache.max_mb").and_then(Value::as_i64).unwrap_or(2048);
-    env.insert("MESA_SHADER_CACHE_MAX_SIZE".into(), format!("{max_mb}M"));
+    // shader_cache.max_mb is the whole per-game budget: Mesa limits its part to half of it,
+    // DXVK/VKD3D caches (no upstream limit) are pruned to the rest before each launch
+    let max_mb = prof.doc.at("shader_cache.max_mb").and_then(Value::as_i64).unwrap_or(2048).max(64);
+    env.insert("MESA_SHADER_CACHE_MAX_SIZE".into(), format!("{}M", max_mb / 2));
+    let (freed, nfiles) = crate::cache::prune_game(&cache, (max_mb as u64) << 20, false);
+    if freed > 0 {
+        notes.push(format!("shader cache: pruned {nfiles} old entries ({} MiB) to stay within {max_mb} MiB", freed >> 20));
+    }
     env.insert("DXVK_LOG_LEVEL".into(), prof.s("log.dxvk").unwrap_or_else(|| "warn".into()));
     env.insert("DXVK_LOG_PATH".into(), state.display().to_string());
     if prof.doc.at("log.proton").and_then(Value::as_bool).unwrap_or(false) {

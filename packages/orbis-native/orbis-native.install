@@ -16,6 +16,7 @@ post_install() {
   systemd-tmpfiles --create /usr/lib/tmpfiles.d/orbis-native.conf >/dev/null 2>&1 || true
   _retire_gpu_profiles
   systemctl enable orbis-time.service orbis-time-save.timer orbis-perf.service orbis-games-caps.service >/dev/null 2>&1 || true
+  systemctl --global enable orbis-games-cache-prune.timer >/dev/null 2>&1 || true
   echo ":: orbis-native: orbis-perf status | orbis-time status | orbis-games caps | orbis-run --help"
   echo ":: sched_ext: 'sudo orbis-perf sched bench' then 'sudo orbis-perf sched set auto' (needs scx-scheds + the GE kernel)"
   echo ":: LAN NTP (off by default): sudo orbis-time ntp enable --server <Nobara IP>"
@@ -28,6 +29,7 @@ post_upgrade() {
 pre_remove() {
   # orbis-perf.service runs 'orbis-perf restore' when it stops
   systemctl disable --now orbis-perf.service orbis-games-caps.service orbis-time-save.timer >/dev/null 2>&1 || true
+  systemctl --global disable orbis-games-cache-prune.timer >/dev/null 2>&1 || true
   systemctl stop 'orbis-scx@*.service' >/dev/null 2>&1 || true
   /usr/bin/orbis-time save >/dev/null 2>&1 || true
   systemctl disable orbis-time.service >/dev/null 2>&1 || true

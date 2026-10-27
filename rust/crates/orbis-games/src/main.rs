@@ -7,11 +7,13 @@
 //!   orbis-games profile new <name> [--appid N] [--exe x.exe]     write ~/.config/orbis/games.d/<name>.json
 //!   orbis-games last <name>                 the last orbis-run diagnosis for a game
 //!   orbis-games network                     what the LAN-only policy means for Steam and downloads
+//!   orbis-games cache [status|prune] [--max-total-mb 8192] [--older-than-days 90] [--dry-run]
+//!                                           shader caches of orbis-run games (per-game, age and total limits)
 
 use orbis_core::fsx::{self, p};
 use orbis_core::json::{self, Value};
 use orbis_core::{emit, jobj, Args};
-use orbis_games::{caps, catalog, rules, run};
+use orbis_games::{cache, caps, catalog, rules, run};
 use std::path::PathBuf;
 
 fn cmd_caps(save: bool) -> Result<Value, String> {
@@ -52,7 +54,7 @@ fn cmd_runners() -> Result<Value, String> {
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    let a = Args::parse(&argv, &["json", "save"]);
+    let a = Args::parse(&argv, &["json", "save", "dry-run"]);
     let only: Vec<String> = a.get("only").map(|s| s.split(',').map(str::to_string).collect()).unwrap_or_default();
     let res: Result<Value, String> = match a.pos.first().map(String::as_str).unwrap_or("caps") {
         "caps" => cmd_caps(a.flag("save")),
@@ -98,6 +100,41 @@ fn main() {
             let f = catalog::home().join(".local/state/orbis/games").join(run::slug(name)).join("last.json");
             fsx::read_raw(&f).and_then(|t| json::parse(&t).ok()).ok_or_else(|| format!("no report at {}", f.display()))
         })(),
+        "cache" => {
+            let home = catalog::home();
+            let root = cache::cache_root(&home);
+            match a.pos.get(1).map(String::as_str).unwrap_or("status") {
+                "status" => Ok(cache::status(&root, &home)),
+                "prune" => {
+                    // per-game limits from the profiles (by the same slug orbis-run uses)
+                    let mut limits: std::collections::BTreeMap<String, u64> = Default::default();
+                    for d in run::profile_dirs() {
+                        for f in fsx::list_dir(&d) {
+                            if let Some(doc) = fsx::read_raw(&f).and_then(|t| json::parse(&t).ok()) {
+                                if let (Some(n), Some(mb)) = (doc.get("name").and_then(Value::as_str),
+                                                              doc.at("shader_cache.max_mb").and_then(Value::as_i64)) {
+                                    limits.insert(run::slug(n), (mb.max(64) as u64) << 20);
+                                }
+                            }
+                        }
+                    }
+                    let running: Vec<String> = fsx::list_dir(&p("/run/orbis/games"))
+                        .iter()
+                        .filter_map(|f| fsx::read_raw(f).and_then(|t| json::parse(&t).ok()))
+                        .filter_map(|m| m.get("title").and_then(Value::as_str).map(run::slug))
+                        .collect();
+                    let num = |k: &str, d: u64| a.get(k).and_then(|v| v.parse::<u64>().ok()).unwrap_or(d);
+                    let pol = cache::Policy {
+                        total_max_bytes: num("max-total-mb", 8192) << 20,
+                        max_age_days: num("older-than-days", 90),
+                        per_game_max: Box::new(move |g| limits.get(g).copied().unwrap_or(2048 << 20)),
+                        running,
+                    };
+                    Ok(cache::prune(&root, &pol, a.flag("dry-run")))
+                }
+                x => Err(format!("orbis-games cache status|prune, not {x}")),
+            }
+        }
         "network" => Ok(jobj! {
             "policy" => "The PS4 stays off the public internet (NickLabs rule). Nothing in Orbis opens it.",
             "steam" => "Steam needs the internet to sign in, verify licences and download. Options: (1) sign in once on a temporarily \
