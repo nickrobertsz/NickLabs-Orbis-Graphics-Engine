@@ -1,4 +1,4 @@
-# Reproducible build recipes (2.0.0-r3)
+# Reproducible build recipes (2.0.0-r3.1)
 
 Everything is built on the Nobara machine with `./orbis-ge`. This page lists:
 - the inputs that are pinned;
@@ -11,7 +11,7 @@ Everything is built on the Nobara machine with `./orbis-ge`. This page lists:
 |---|---|---|
 | Kernel base | feeRnt/ps4-linux-12xx 108ef9764583 (6.15.4 crashnt-4.7) + Orbis 0.2.0 0001 | the 0.2.0 checkout, `manifest/sources.json` → orbis_base |
 | Stable backports | stable-6.15/0001 (upstream b2ed01e7ad), 0002 (upstream 1d59f36e95f7, CVE-2026-52949) | `kernel/patches/stable-6.15/`, provenance in each patch header |
-| GE kernel series | ge-6.15/0001-0016 | `kernel/patches/series` (applied in that order after the backports) |
+| GE kernel series | ge-6.15/0001-0017 | `kernel/patches/series` (applied in that order after the backports) |
 | Kernel config | `kernel/config/*.fragment` | hashed into every kernel provenance record |
 | Loader | ps4-linux-loader d0f4d4c + GE patch | `manifest/sources.json` → loader |
 | Mesa | 26.2.5 (archive sha256 794b3d17…a0a5) + `mesa/stable/patches/series` | `manifest/sources.json` → mesa |
