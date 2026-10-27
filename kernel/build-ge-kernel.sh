@@ -66,8 +66,10 @@ pdir="$work/kernel/patches/$t"
 [ -z "$(tail -c1 "$pdir/series")" ] || echo >> "$pdir/series"
 grep -v '^[[:space:]]*\(#\|$\)' "$series" | while read -r p; do
   [ -f "$here/patches/$p" ] || { echo "kernel/patches/$p listed in series but missing" >&2; exit 2; }
-  cp "$here/patches/$p" "$pdir/ge-$(basename "$p")"
-  echo "ge-$(basename "$p")" >> "$pdir/series"
+  q="ge-$(printf '%s' "$p" | tr '/' '-')"     # directory in the name: stable-6.15/0001 and ge-6.15/0001 never collide
+  [ ! -e "$pdir/$q" ] || { echo "duplicate patch name $q in kernel/patches/series" >&2; exit 2; }
+  cp "$here/patches/$p" "$pdir/$q"
+  echo "$q" >> "$pdir/series"
 done
 command -v pahole >/dev/null || pacman -Sy --noconfirm --needed pahole   # BTF for sched_ext
 if [ "$rust" = 1 ]; then

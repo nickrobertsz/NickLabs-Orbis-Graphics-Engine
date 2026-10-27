@@ -1,3 +1,7 @@
+# Orbis GE kernel series, applied in order on feeRnt 6.15.4 crashnt-4.7 @108ef97 + Orbis 0001.
+# stable-6.15/: upstream/stable backports (provenance in each patch header), applied first.
+stable-6.15/0001-drm-ttm-Fix-ttm_bo_swapout-infinite-LRU-walk-on-swap.patch
+stable-6.15/0002-drm-ttm-Fix-ttm_bo_shrink-infinite-LRU-walk-on-backu.patch
 ge-6.15/0001-drivers-ps4-add-Aeolia-Belize-fan-threshold-APU-temp.patch
 ge-6.15/0002-drm-amdgpu-restore-and-control-the-PS4-Liverpool-Gla.patch
 ge-6.15/0003-drm-amdgpu-report-the-PS4-GDDR5-type-and-real-defaul.patch
@@ -13,3 +17,4 @@ ge-6.15/0012-CachyOS-tweaks-for-PS4-selected-from-Nobara-s-6.15-c.patch
 ge-6.15/0013-x86-ps4-optional-Jaguar-btver2-kernel-code-generatio.patch
 ge-6.15/0014-drm-amdgpu-PS4-GPU-buffer-shrinker-and-active-GTT-tr.patch
 ge-6.15/0015-drm-amdgpu-PS4-GTT-as-a-dmem-cgroup-region-Orbis-ge-.patch
+ge-6.15/0016-drm-amdgpu-PS4-GTT-reclaim-corrections-Orbis-ge-0016.patch

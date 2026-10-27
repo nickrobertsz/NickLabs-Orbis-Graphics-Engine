@@ -1,0 +1,553 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 27 Oct 2026 08:56:50 -0700
+Subject: [PATCH] drm/amdgpu: PS4 GTT reclaim corrections (Orbis ge-0016)
+
+NickLabs Orbis Graphics Engine 2.0.0-r3, audit findings GE-A01, GE-A02, GE-A09.
+
+GE-A01 (reconciliation with the CVE-2026-52949 TTM fix):
+- amdgpu_ttm_orbis_shrink_bo() no longer lets ttm_bo_shrink() move the buffer
+  (allow_move=false). It first calls the new amdgpu_ttm_orbis_evict_to_system(),
+  which validates to SYSTEM and then marks the move as an eviction
+  (amdgpu_vm_bo_invalidate(bo, true)). A plain ttm_bo_validate() move notifies with
+  evict=false, which leaves per-VM always-valid buffers only "moved": the next
+  submission would update page tables to an unpopulated buffer.
+- Backup failure handling relies on the backported TTM fixes (stable-6.15/0001,
+  0002): the LRU walk advances past a buffer whose backup failed.
+
+GE-A02 (active GTT trim):
+- amdgpu_orbis_gtt_trim() walks the GTT LRU with the trylock cursor (two passes),
+  skips buffers it cannot move (busy, no memory, not eviction-valuable) instead of
+  stopping, is capped per call, and returns a full struct amdgpu_orbis_trim_result
+  (requested, usage before/after, evicted, failed, skipped, first failure,
+  interruption, cap, enforced). It returns 0 only when usage <= target.
+- orbis_gtt_budget writes are serialised. The effective budget, the requested value,
+  the state (enforced/over_budget/incomplete/interrupted) and the last trim are
+  readable. A write whose trim did not bring usage under the budget returns -EBUSY
+  (or -EINTR/-ERESTARTSYS); the new limit for allocations stays applied.
+
+GE-A09 (GTT dmem cgroup region):
+- The registration outcome is recorded and exposed in the read-only orbis_gtt_cgroup
+  attribute: "registered region=gtt capacity=N" or "unavailable reason=param_off |
+  no_cgroup_dmem | register_failed error=E | not_ps4".
+
+Status: source-checked against 6.15.4 interfaces and checkpatch; not compiled here
+(kernel compilation is done on the Nobara build machine).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01CcGqiWDFgL3MdbGzpXfrDZ
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu_gtt_mgr.c   |  34 +++--
+ drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c       |  47 ++++++-
+ drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.h       |  18 +++
+ drivers/gpu/drm/amd/amdgpu/liverpool_orbis.c  | 122 +++++++++++++++---
+ .../drm/amd/amdgpu/liverpool_orbis_shrinker.c |  83 +++++++++---
+ .../drm/amd/amdgpu/liverpool_orbis_shrinker.h |  18 ++-
+ 6 files changed, 268 insertions(+), 54 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_gtt_mgr.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_gtt_mgr.c
+index 72913ba62..e0f99f8e9 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_gtt_mgr.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_gtt_mgr.c
+@@ -298,16 +298,33 @@ int amdgpu_gtt_mgr_init(struct amdgpu_device *adev, uint64_t gtt_size)
+ 	man->use_tt = true;
+ 	man->func = &amdgpu_gtt_mgr_func;
+ 
+-	/* ge-0015: capacity = the TTM page limit, the most the runtime GTT budget can reach */
+-	if (amdgpu_orbis_gtt_cgroup &&
+-	    (adev->asic_type == CHIP_LIVERPOOL || adev->asic_type == CHIP_GLADIUS)) {
++	/* ge-0015: capacity = the TTM page limit, the most the runtime GTT budget can reach.
++	 * ge-0016: the outcome is recorded and reported (orbis_gtt_cgroup sysfs) so userspace that
++	 * requires per-app GTT enforcement can refuse instead of running without it. A failed
++	 * registration does not fail the driver: GTT then works exactly as upstream (no region).
++	 */
++	mutex_init(&mgr->orbis_budget_lock);
++	mgr->orbis_cg_state = AMDGPU_ORBIS_GTT_CG_NOT_PS4;
++	if (adev->asic_type == CHIP_LIVERPOOL || adev->asic_type == CHIP_GLADIUS) {
+ 		u64 cap = max_t(u64, gtt_size, (u64)ttm_tt_pages_limit() << PAGE_SHIFT);
+ 
+-		man->cg = drmm_cgroup_register_region(adev_to_drm(adev), "gtt", cap);
+-		if (IS_ERR(man->cg)) {
+-			dev_warn(adev->dev, "Orbis: GTT dmem region not registered (%ld)\n",
+-				 PTR_ERR(man->cg));
+-			man->cg = NULL;
++		mgr->orbis_cg_capacity = cap;
++		if (!amdgpu_orbis_gtt_cgroup) {
++			mgr->orbis_cg_state = AMDGPU_ORBIS_GTT_CG_DISABLED;
++		} else {
++			man->cg = drmm_cgroup_register_region(adev_to_drm(adev), "gtt", cap);
++			if (IS_ERR(man->cg)) {
++				mgr->orbis_cg_error = PTR_ERR(man->cg);
++				mgr->orbis_cg_state = AMDGPU_ORBIS_GTT_CG_FAILED;
++				dev_warn(adev->dev, "Orbis: GTT dmem region not registered (%d); per-app GTT limits unavailable\n",
++					 mgr->orbis_cg_error);
++				man->cg = NULL;
++			} else if (!man->cg) {
++				/* the !CONFIG_CGROUP_DMEM stub returns NULL */
++				mgr->orbis_cg_state = AMDGPU_ORBIS_GTT_CG_NO_KERNEL_SUPPORT;
++			} else {
++				mgr->orbis_cg_state = AMDGPU_ORBIS_GTT_CG_REGISTERED;
++			}
+ 		}
+ 	}
+ 
+@@ -338,6 +355,7 @@ void amdgpu_gtt_mgr_fini(struct amdgpu_device *adev)
+ 	int ret;
+ 
+ 	ttm_resource_manager_set_used(man, false);
++	mutex_destroy(&mgr->orbis_budget_lock);
+ 
+ 	ret = ttm_resource_manager_evict_all(&adev->mman.bdev, man);
+ 	if (ret)
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c
+index 3f3630a8c..98ae7300b 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c
+@@ -1277,6 +1277,33 @@ static void amdgpu_ttm_tt_unpopulate(struct ttm_device *bdev,
+ static bool amdgpu_ttm_bo_eviction_valuable(struct ttm_buffer_object *bo,
+ 					    const struct ttm_place *place);
+ 
++/**
++ * amdgpu_ttm_orbis_evict_to_system - NickLabs Orbis: move one reserved buffer out of GTT
++ * @bo: buffer object, reserved by the caller
++ * @ctx: operation context (no_wait_gpu decides whether busy buffers are skipped)
++ *
++ * ttm_bo_validate() to SYSTEM is a non-eviction move, which leaves per-VM (always valid)
++ * buffers on the VM's "moved" list: the next submission would only update page tables and
++ * the GPU would reach an unpopulated buffer. Mark the move as an eviction afterwards, exactly
++ * as TTM's own eviction path does, so the next submission revalidates (and repopulates) it.
++ * The TT->SYSTEM move itself waits for the buffer's fences (amdgpu_bo_move).
++ */
++int amdgpu_ttm_orbis_evict_to_system(struct ttm_buffer_object *bo, struct ttm_operation_ctx *ctx)
++{
++	static const struct ttm_place sys_place = { .mem_type = TTM_PL_SYSTEM };
++	static struct ttm_placement sys_placement = { .num_placement = 1, .placement = &sys_place };
++	int r;
++
++	dma_resv_assert_held(bo->base.resv);
++	if (bo->resource->mem_type == TTM_PL_SYSTEM)
++		return 0;
++	r = ttm_bo_validate(bo, &sys_placement, ctx);
++	if (r)
++		return r;
++	amdgpu_vm_bo_invalidate(ttm_to_amdgpu_bo(bo), true);
++	return 0;
++}
++
+ /**
+  * amdgpu_ttm_orbis_shrink_bo - NickLabs Orbis ge-0014: back up or purge one buffer
+  * @ctx: operation context of the shrinker walk
+@@ -1285,10 +1312,12 @@ static bool amdgpu_ttm_bo_eviction_valuable(struct ttm_buffer_object *bo,
+  * @writeback: ask for immediate writeout of the backup to swap
+  * @scanned: incremented by the pages examined
+  *
+- * Moves the buffer to SYSTEM through ttm_bo_shrink() (the regular TT->SYSTEM move: VM
+- * invalidation via move_notify, GART unbind) and backs its pages up into shmem, or purges
+- * them. Imported or exported dma-bufs, userptr buffers, kernel buffers and TTM ghost objects
+- * are never touched. Returns pages backed up/purged, or a negative error (-EBUSY: skip).
++ * Moves the buffer to SYSTEM as an eviction (amdgpu_ttm_orbis_evict_to_system: waits for
++ * fences, GART unbind, VM revalidation on next use), then ttm_bo_shrink() backs its pages up
++ * into shmem, or purges them. Requires the CVE-2026-52949 TTM fix (series stable-6.15/0002):
++ * without it a failed backup could make the LRU walk loop forever. Imported or exported
++ * dma-bufs, userptr buffers, kernel buffers and TTM ghost objects are never touched.
++ * Returns pages backed up/purged, or a negative error (-EBUSY: skip).
+  */
+ long amdgpu_ttm_orbis_shrink_bo(struct ttm_operation_ctx *ctx, struct ttm_buffer_object *bo,
+ 				bool purge, bool writeback, unsigned long *scanned)
+@@ -1314,6 +1343,14 @@ long amdgpu_ttm_orbis_shrink_bo(struct ttm_operation_ctx *ctx, struct ttm_buffer
+ 	if (!amdgpu_ttm_bo_eviction_valuable(bo, &place))
+ 		return -EBUSY;
+ 
++	/* out of GTT first, as an eviction (see amdgpu_ttm_orbis_evict_to_system) */
++	if (bo->resource->mem_type != TTM_PL_SYSTEM) {
++		int r = amdgpu_ttm_orbis_evict_to_system(bo, ctx);
++
++		if (r)
++			return (r == -ENOMEM || r == -ENOSPC) ? -EBUSY : r;
++	}
++
+ 	*scanned += ttm->num_pages;
+ 
+ 	/* freed pages must not keep the device mapping (set in amdgpu_ttm_tt_populate) */
+@@ -1322,7 +1359,7 @@ long amdgpu_ttm_orbis_shrink_bo(struct ttm_operation_ctx *ctx, struct ttm_buffer
+ 			ttm->pages[i]->mapping = NULL;
+ 
+ 	lret = ttm_bo_shrink(ctx, bo, (struct ttm_bo_shrink_flags)
+-			     { .purge = purge, .writeback = writeback, .allow_move = true });
++			     { .purge = purge, .writeback = writeback, .allow_move = false });
+ 
+ 	if (lret > 0) {
+ 		/* the tt is no longer populated: its pages left the shrinkable count */
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.h b/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.h
+index 28a1b2bfb..eac23d82a 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.h
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.h
+@@ -28,6 +28,7 @@
+ #include <drm/gpu_scheduler.h>
+ #include <drm/ttm/ttm_placement.h>
+ #include "amdgpu_vram_mgr.h"
++#include "liverpool_orbis_shrinker.h"
+ 
+ #define AMDGPU_PL_GDS		(TTM_PL_PRIV + 0)
+ #define AMDGPU_PL_GWS		(TTM_PL_PRIV + 1)
+@@ -44,10 +45,27 @@ extern const struct attribute_group amdgpu_gtt_mgr_attr_group;
+ 
+ struct hmm_range;
+ 
++/* ge-0016: state of the PS4 "gtt" dmem cgroup region (reported by orbis_gtt_cgroup) */
++enum amdgpu_orbis_gtt_cg_state {
++	AMDGPU_ORBIS_GTT_CG_NOT_PS4 = 0,	/* not a Liverpool/Gladius device */
++	AMDGPU_ORBIS_GTT_CG_DISABLED,		/* amdgpu.orbis_gtt_cgroup=0 */
++	AMDGPU_ORBIS_GTT_CG_NO_KERNEL_SUPPORT,	/* CONFIG_CGROUP_DMEM not built */
++	AMDGPU_ORBIS_GTT_CG_FAILED,		/* registration returned an error */
++	AMDGPU_ORBIS_GTT_CG_REGISTERED,
++};
++
+ struct amdgpu_gtt_mgr {
+ 	struct ttm_resource_manager manager;
+ 	struct drm_mm mm;
+ 	spinlock_t lock;
++	/* NickLabs Orbis (ge-0016) */
++	enum amdgpu_orbis_gtt_cg_state orbis_cg_state;
++	int orbis_cg_error;
++	u64 orbis_cg_capacity;
++	struct mutex orbis_budget_lock;		/* serialises orbis_gtt_budget writes */
++	u64 orbis_requested;			/* last budget written (0 = boot value) */
++	struct amdgpu_orbis_trim_result orbis_last_trim;
++	bool orbis_trim_valid;
+ };
+ 
+ struct amdgpu_orbis_shrinker;
+diff --git a/drivers/gpu/drm/amd/amdgpu/liverpool_orbis.c b/drivers/gpu/drm/amd/amdgpu/liverpool_orbis.c
+index 84b8b8f72..9af7673c9 100644
+--- a/drivers/gpu/drm/amd/amdgpu/liverpool_orbis.c
++++ b/drivers/gpu/drm/amd/amdgpu/liverpool_orbis.c
+@@ -18,9 +18,14 @@
+  *                           (itself writable at runtime) and a 256 MiB floor.
+  *                           ge-0014: a value below current usage now trims at once
+  *                           (GTT buffers are evicted in LRU order until usage fits).
++ *                           ge-0016: reads report the effective budget, the requested
++ *                           value, the enforcement state and the last trim's account; a
++ *                           write returns -EBUSY when usage could not be brought under it.
+  *   orbis_gtt_reclaim (rw)  ge-0014 shrinker counters (see liverpool_orbis_shrinker.c);
+  *                           writing "scan <pages> [writeback]" runs one reclaim pass for
+  *                           verification without waiting for memory pressure.
++ *   orbis_gtt_cgroup (ro)   ge-0016: "registered ..." or "unavailable reason=<why>" for the
++ *                           "gtt" dmem cgroup region (ge-0015).
+  *
+  * The VRAM carve-out size is fixed by the loader before Linux starts (vram.txt); only
+  * the GTT side of the unified pool can move at runtime.
+@@ -85,23 +90,69 @@ static ssize_t orbis_engine_busy_show(struct device *dev, struct device_attribut
+ }
+ static DEVICE_ATTR_RO(orbis_engine_busy);
+ 
++static const char *orbis_trim_state(const struct amdgpu_gtt_mgr *mgr, u64 usage, u64 budget)
++{
++	if (usage <= budget)
++		return "enforced";
++	if (!mgr->orbis_trim_valid)
++		return "over_budget";	/* never trimmed: boot value, or usage grew after a raise */
++	if (mgr->orbis_last_trim.error)
++		return "interrupted";
++	return "incomplete";
++}
++
+ static ssize_t orbis_gtt_budget_show(struct device *dev, struct device_attribute *attr, char *buf)
+ {
+ 	struct amdgpu_device *adev = drm_to_adev(dev_get_drvdata(dev));
+-	struct ttm_resource_manager *man = ttm_manager_type(&adev->mman.bdev, TTM_PL_TT);
++	struct amdgpu_gtt_mgr *mgr = &adev->mman.gtt_mgr;
++	struct ttm_resource_manager *man = &mgr->manager;
++	const struct amdgpu_orbis_trim_result *t = &mgr->orbis_last_trim;
++	u64 budget, usage;
++	ssize_t n;
+ 
+-	return sysfs_emit(buf, "budget=%llu usage=%llu ttm_pages_limit=%llu min=%llu vram_carveout=%llu\n",
+-			  READ_ONCE(man->size), ttm_resource_manager_usage(man),
+-			  (u64)ttm_tt_pages_limit() << PAGE_SHIFT, ORBIS_GTT_MIN_BYTES,
+-			  adev->gmc.real_vram_size);
++	/* a trim in progress holds the lock; a reader can interrupt the wait */
++	n = mutex_lock_interruptible(&mgr->orbis_budget_lock);
++	if (n)
++		return n;
++	budget = READ_ONCE(man->size);
++	usage = ttm_resource_manager_usage(man);
++	/*
++	 * budget    = effective limit amdgpu applies to new GTT allocations
++	 * requested = the last value written (equal to budget once accepted; 0 = boot default)
++	 * state     = enforced | over_budget | incomplete | interrupted (usage vs budget, see trim)
++	 * last_trim = account of the most recent active trim, so partial progress stays visible
++	 */
++	n = sysfs_emit(buf, "budget=%llu requested=%llu usage=%llu state=%s ttm_pages_limit=%llu min=%llu vram_carveout=%llu\n",
++		       budget, mgr->orbis_requested, usage, orbis_trim_state(mgr, usage, budget),
++		       (u64)ttm_tt_pages_limit() << PAGE_SHIFT, ORBIS_GTT_MIN_BYTES,
++		       adev->gmc.real_vram_size);
++	if (mgr->orbis_trim_valid)
++		n += sysfs_emit_at(buf, n, "last_trim requested=%llu usage_before=%llu usage_after=%llu evicted=%u failed=%u skipped=%u first_failure=%d error=%d limit_hit=%d enforced=%d\n",
++				   t->requested, t->usage_before, t->usage_after, t->evicted,
++				   t->failed, t->skipped, t->first_failure, t->error,
++				   t->limit_hit, t->enforced);
++	mutex_unlock(&mgr->orbis_budget_lock);
++	return n;
+ }
+ 
++/*
++ * Write a byte value. The new budget applies to later allocations at once and stays applied
++ * whatever happens next. If usage is above it, an active trim runs; the write then returns:
++ *   count        usage now fits (or no trim was needed)
++ *   -EBUSY       the budget is set but usage is still above it (pinned, busy or unmovable
++ *                buffers, or the per-call cap); see "state" and "last_trim" in the file
++ *   -EINTR/-ERESTARTSYS  interrupted by a signal; the budget is set, the trim is partial
++ *   -ERANGE / -EINVAL     rejected, nothing changed
++ * A writer can retry the same value to continue a partial trim.
++ */
+ static ssize_t orbis_gtt_budget_store(struct device *dev, struct device_attribute *attr,
+ 				      const char *buf, size_t count)
+ {
+ 	struct amdgpu_device *adev = drm_to_adev(dev_get_drvdata(dev));
+-	struct ttm_resource_manager *man = ttm_manager_type(&adev->mman.bdev, TTM_PL_TT);
+-	u64 val, limit = (u64)ttm_tt_pages_limit() << PAGE_SHIFT, old;
++	struct amdgpu_gtt_mgr *mgr = &adev->mman.gtt_mgr;
++	struct ttm_resource_manager *man = &mgr->manager;
++	u64 val, limit = (u64)ttm_tt_pages_limit() << PAGE_SHIFT, old, usage;
++	struct amdgpu_orbis_trim_result res;
+ 	int r;
+ 
+ 	r = kstrtou64(buf, 0, &val);
+@@ -110,26 +161,36 @@ static ssize_t orbis_gtt_budget_store(struct device *dev, struct device_attribut
+ 	if (val < ORBIS_GTT_MIN_BYTES || val > limit)
+ 		return -ERANGE;
+ 	val = round_down(val, PAGE_SIZE);
++
++	r = mutex_lock_interruptible(&mgr->orbis_budget_lock);
++	if (r)
++		return r;
+ 	old = READ_ONCE(man->size);
+ 	/* ttm_resource_manager.size is documented as constant; amdgpu only uses it as the
+ 	 * budget compared against usage in amdgpu_gtt_mgr_new() and for reporting, so a
+ 	 * new value applies to later allocations only. */
+ 	WRITE_ONCE(man->size, val);
++	mgr->orbis_requested = val;
++	usage = ttm_resource_manager_usage(man);
+ 	dev_info(adev->dev, "Orbis: GTT budget %llu MiB -> %llu MiB (usage %llu MiB)\n",
+-		 old >> 20, val >> 20, ttm_resource_manager_usage(man) >> 20);
+-
+-	/* ge-0014 active trim: do not wait for the next allocation to enforce a lower budget */
+-	if (ttm_resource_manager_usage(man) > val) {
+-		unsigned int evicted = 0;
+-		long tr = amdgpu_orbis_gtt_trim(adev, val, &evicted);
+-
+-		dev_info(adev->dev, "Orbis: GTT trim evicted %u buffers, usage now %llu MiB%s\n",
+-			 evicted, ttm_resource_manager_usage(man) >> 20,
+-			 tr ? " (stopped early)" : "");
+-		if (tr == -ERESTARTSYS || tr == -EINTR)
+-			return tr;
++		 old >> 20, val >> 20, usage >> 20);
++
++	r = 0;
++	if (usage > val) {
++		/* ge-0014/0016 active trim: do not wait for the next allocation */
++		r = amdgpu_orbis_gtt_trim(adev, val, &res);
++		mgr->orbis_last_trim = res;
++		mgr->orbis_trim_valid = true;
++		if (r)
++			dev_warn(adev->dev, "Orbis: GTT trim to %llu MiB incomplete (%d): usage %llu MiB, evicted %u, failed %u (first %d)%s\n",
++				 val >> 20, r, res.usage_after >> 20, res.evicted, res.failed,
++				 res.first_failure, res.limit_hit ? ", eviction cap reached" : "");
++		else
++			dev_info(adev->dev, "Orbis: GTT trim evicted %u buffers, usage now %llu MiB\n",
++				 res.evicted, res.usage_after >> 20);
+ 	}
+-	return count;
++	mutex_unlock(&mgr->orbis_budget_lock);
++	return r ? r : count;
+ }
+ static DEVICE_ATTR_RW(orbis_gtt_budget);
+ 
+@@ -156,10 +217,31 @@ static ssize_t orbis_gtt_reclaim_store(struct device *dev, struct device_attribu
+ }
+ static DEVICE_ATTR_RW(orbis_gtt_reclaim);
+ 
++/* ge-0016: whether the "gtt" dmem cgroup region exists, and why not */
++static ssize_t orbis_gtt_cgroup_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	struct amdgpu_gtt_mgr *mgr = &drm_to_adev(dev_get_drvdata(dev))->mman.gtt_mgr;
++
++	switch (mgr->orbis_cg_state) {
++	case AMDGPU_ORBIS_GTT_CG_REGISTERED:
++		return sysfs_emit(buf, "registered region=gtt capacity=%llu\n", mgr->orbis_cg_capacity);
++	case AMDGPU_ORBIS_GTT_CG_DISABLED:
++		return sysfs_emit(buf, "unavailable reason=param_off\n");
++	case AMDGPU_ORBIS_GTT_CG_NO_KERNEL_SUPPORT:
++		return sysfs_emit(buf, "unavailable reason=no_cgroup_dmem\n");
++	case AMDGPU_ORBIS_GTT_CG_FAILED:
++		return sysfs_emit(buf, "unavailable reason=register_failed error=%d\n", mgr->orbis_cg_error);
++	default:
++		return sysfs_emit(buf, "unavailable reason=not_ps4\n");
++	}
++}
++static DEVICE_ATTR_RO(orbis_gtt_cgroup);
++
+ static struct attribute *liverpool_orbis_attrs[] = {
+ 	&dev_attr_orbis_engine_busy.attr,
+ 	&dev_attr_orbis_gtt_budget.attr,
+ 	&dev_attr_orbis_gtt_reclaim.attr,
++	&dev_attr_orbis_gtt_cgroup.attr,
+ 	NULL,
+ };
+ 
+diff --git a/drivers/gpu/drm/amd/amdgpu/liverpool_orbis_shrinker.c b/drivers/gpu/drm/amd/amdgpu/liverpool_orbis_shrinker.c
+index b80c85d35..c9489c889 100644
+--- a/drivers/gpu/drm/amd/amdgpu/liverpool_orbis_shrinker.c
++++ b/drivers/gpu/drm/amd/amdgpu/liverpool_orbis_shrinker.c
+@@ -22,7 +22,10 @@
+  *    (amdgpu_ttm_tt_populate -> ttm_tt_restore).
+  *
+  * Active trim: writing a lower orbis_gtt_budget evicts GTT buffers (LRU order) until usage is
+- * within the budget, instead of waiting for the next allocation.
++ * within the budget, instead of waiting for the next allocation. ge-0016: the trim skips what
++ * it cannot move instead of stopping, never claims success it did not reach, and reports a
++ * full account (requested, usage before/after, evicted, failed, skipped, cap, interruption).
++ * Moves out of GTT are marked as evictions so per-VM buffers are revalidated before use.
+  *
+  * Off by default (amdgpu.orbis_shrinker=1 on the kernel command line enables it, PS4 only):
+  * the backup capability must be set when a buffer's page table is created, so it cannot be
+@@ -234,37 +237,77 @@ long amdgpu_orbis_shrinker_scan(struct amdgpu_device *adev, unsigned long nr_pag
+ }
+ 
+ /*
+- * Active trim: evict GTT buffers in LRU order until the GTT manager's usage is at or below
+- * target_bytes. Evicted buffers land in SYSTEM (still RAM, no longer GPU-mapped); with the
+- * shrinker enabled they become reclaimable there. Returns 0, or a negative error when the
+- * walk stopped early (e.g. a signal, or a buffer that could not be moved).
++ * Active trim (ge-0016 rework): move GTT buffers to SYSTEM in LRU order until the GTT manager's
++ * usage is at or below target_bytes. Walks the LRU with trylocks (contended buffers are retried
++ * in a second pass), skips buffers that cannot be moved instead of stopping at the first one,
++ * never loops on one buffer (the cursor's hitch advances past every visited resource; moved
++ * resources leave the GTT LRU), and is capped per call. The caller gets a full account in res;
++ * the return value is 0 when the budget is now enforced, -EINTR/-ERESTARTSYS when interrupted,
++ * and -EBUSY when usage is still above target (pinned, busy or unmovable buffers, or the cap).
++ * Pinned buffers are not on the LRU at all; their size is part of the remaining usage.
+  */
+-long amdgpu_orbis_gtt_trim(struct amdgpu_device *adev, u64 target_bytes, unsigned int *evicted)
++int amdgpu_orbis_gtt_trim(struct amdgpu_device *adev, u64 target_bytes,
++			  struct amdgpu_orbis_trim_result *res)
+ {
+ 	struct ttm_device *bdev = &adev->mman.bdev;
+ 	struct ttm_resource_manager *man = ttm_manager_type(bdev, TTM_PL_TT);
+ 	struct ttm_operation_ctx ctx = { .interruptible = true, .no_wait_gpu = false };
+ 	struct amdgpu_orbis_shrinker *s = to_orbis(adev);
+-	unsigned int n = 0;
+-	int r = 0;
++	static const struct ttm_place tt_place = { .mem_type = TTM_PL_TT };
++	int pass;
+ 
+-	*evicted = 0;
++	memset(res, 0, sizeof(*res));
++	res->requested = target_bytes;
+ 	if (!man)
+-		return -ENODEV;
++		return res->error = -ENODEV;
++	res->usage_before = ttm_resource_manager_usage(man);
++
++	for (pass = 0; pass < 2 && !res->error && !res->limit_hit; pass++) {
++		struct ttm_bo_lru_cursor curs;
++		struct ttm_buffer_object *bo;
+ 
+-	while (ttm_resource_manager_usage(man) > target_bytes && n < ORBIS_TRIM_MAX_EVICTIONS) {
+-		r = ttm_bo_evict_first(bdev, man, &ctx);
+-		if (r)
++		if (ttm_resource_manager_usage(man) <= target_bytes)
+ 			break;
+-		n++;
+-		cond_resched();
++		ttm_bo_lru_for_each_reserved_guarded(&curs, man, &ctx, bo) {
++			int r;
++
++			if (ttm_resource_manager_usage(man) <= target_bytes)
++				break;
++			if (res->evicted >= ORBIS_TRIM_MAX_EVICTIONS) {
++				res->limit_hit = true;
++				break;
++			}
++			/* TTM ghosts, and buffers the driver says must not be evicted (KFD
++			 * eviction fences, ...): the same test TTM's own eviction uses
++			 */
++			if (!amdgpu_bo_is_amdgpu_bo(bo) ||
++			    !bdev->funcs->eviction_valuable(bo, &tt_place)) {
++				res->skipped++;
++				continue;
++			}
++			r = amdgpu_ttm_orbis_evict_to_system(bo, &ctx);
++			if (r == -EINTR || r == -ERESTARTSYS) {
++				res->error = r;
++				break;
++			}
++			if (r) {
++				res->failed++;
++				if (!res->first_failure)
++					res->first_failure = r;
++				continue;
++			}
++			res->evicted++;
++			cond_resched();
++		}
+ 	}
+-	*evicted = n;
++
++	res->usage_after = ttm_resource_manager_usage(man);
++	res->enforced = res->usage_after <= target_bytes;
+ 	if (s)
+-		atomic64_add(n, &s->trim_evictions);
+-	if (r == -ENOENT)
+-		r = 0;
+-	return r;
++		atomic64_add(res->evicted, &s->trim_evictions);
++	if (res->error)
++		return res->error;
++	return res->enforced ? 0 : -EBUSY;
+ }
+ 
+ ssize_t amdgpu_orbis_shrinker_report(struct amdgpu_device *adev, char *buf)
+diff --git a/drivers/gpu/drm/amd/amdgpu/liverpool_orbis_shrinker.h b/drivers/gpu/drm/amd/amdgpu/liverpool_orbis_shrinker.h
+index 7b4a9b40d..2d5004841 100644
+--- a/drivers/gpu/drm/amd/amdgpu/liverpool_orbis_shrinker.h
++++ b/drivers/gpu/drm/amd/amdgpu/liverpool_orbis_shrinker.h
+@@ -11,6 +11,19 @@ struct amdgpu_device;
+ struct ttm_buffer_object;
+ struct ttm_operation_ctx;
+ 
++/* Result of one active trim (ge-0014/ge-0016); all sizes in bytes */
++struct amdgpu_orbis_trim_result {
++	u64 requested;
++	u64 usage_before;
++	u64 usage_after;
++	unsigned int evicted;		/* buffers moved out of GTT */
++	unsigned int failed;		/* buffers that could not be moved (busy, no memory, ...) */
++	unsigned int skipped;		/* TTM ghosts, or not evictable per eviction_valuable() */
++	int first_failure;		/* errno of the first failed move, 0 if none */
++	int error;			/* -EINTR/-ERESTARTSYS when interrupted, 0 otherwise */
++	bool limit_hit;			/* stopped at the per-call eviction cap */
++	bool enforced;			/* usage_after <= requested */
++};
+ #ifdef CONFIG_DRM_AMDGPU_CIK
+ void amdgpu_orbis_shrinker_init(struct amdgpu_device *adev);
+ void amdgpu_orbis_shrinker_fini(struct amdgpu_device *adev);
+@@ -20,7 +33,9 @@ void amdgpu_orbis_shrinker_restored(struct amdgpu_device *adev, long pages);
+ void amdgpu_orbis_shrinker_dropped(struct amdgpu_device *adev, long pages);
+ void amdgpu_orbis_shrinker_shrunk(struct amdgpu_device *adev, bool purged, long pages);
+ long amdgpu_orbis_shrinker_scan(struct amdgpu_device *adev, unsigned long nr_pages, bool writeback);
+-long amdgpu_orbis_gtt_trim(struct amdgpu_device *adev, u64 target_bytes, unsigned int *evicted);
++
++int amdgpu_orbis_gtt_trim(struct amdgpu_device *adev, u64 target_bytes,
++			  struct amdgpu_orbis_trim_result *res);
+ ssize_t amdgpu_orbis_shrinker_report(struct amdgpu_device *adev, char *buf);
+ #else
+ static inline void amdgpu_orbis_shrinker_init(struct amdgpu_device *adev) { }
+@@ -36,5 +51,6 @@ static inline void amdgpu_orbis_shrinker_shrunk(struct amdgpu_device *adev, bool
+ /* in amdgpu_ttm.c: shrink or purge one reserved buffer object (see there) */
+ long amdgpu_ttm_orbis_shrink_bo(struct ttm_operation_ctx *ctx, struct ttm_buffer_object *bo,
+ 				bool purge, bool writeback, unsigned long *scanned);
++int amdgpu_ttm_orbis_evict_to_system(struct ttm_buffer_object *bo, struct ttm_operation_ctx *ctx);
+ 
+ #endif
