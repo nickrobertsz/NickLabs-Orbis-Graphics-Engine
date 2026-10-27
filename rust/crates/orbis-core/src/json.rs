@@ -15,6 +15,12 @@ pub enum Value {
     Obj(BTreeMap<String, Value>),
 }
 
+impl Default for Value {
+    fn default() -> Self {
+        Value::Null
+    }
+}
+
 impl Value {
     pub fn obj() -> Value {
         Value::Obj(BTreeMap::new())
