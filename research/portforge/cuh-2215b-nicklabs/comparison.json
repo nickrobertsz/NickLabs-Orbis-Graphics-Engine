@@ -1,0 +1,158 @@
+{
+ "schema": "orbis-target-compatibility/1",
+ "target": "cuh-22xx-baikal",
+ "name": "PS4 Slim CUH-22xx (Baikal board)",
+ "status": "unsupported",
+ "kernel": {
+  "base": "feeRnt 6.15.4 crashnt-4.7 @108ef97 + Orbis 0001",
+  "series": "kernel/patches/series (stable-6.15/0001-0002, ge-6.15/0001-0016)",
+  "flavors": {
+   "aeolia-belize-6.15": "the only GE kernel flavor that exists"
+  },
+  "flavor": null,
+  "state": "unsupported",
+  "reason": "Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)"
+ },
+ "capabilities": {
+  "boot": {
+   "state": "unsupported",
+   "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+   "implemented_by": [
+    "Orbis 0.2.0 loader + GE loader patch (memory contract, time handoff)",
+    "kernel flavor"
+   ]
+  },
+  "southbridge-io": {
+   "state": "unsupported",
+   "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+   "implemented_by": [
+    "aeolia/belize apcie, ahci, xhci, sky2, sdhci drivers in the base tree"
+   ],
+   "observed_now": {
+    "observed": "ABSENT",
+    "detail": "8 Sony functions, unbound: ['0000:00:14.0 0x90d7', '0000:00:14.1 0x90d8', '0000:00:14.2 0x90d9', '0000:00:14.3 0x90da', '0000:00:14.4 0x90db', '0000:00:14.5 0x90dc', '0000:00:14.6 0x90dd', '0000:00:14.7 0x90de']"
+   }
+  },
+  "icc-power-fan": {
+   "state": "unsupported",
+   "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+   "implemented_by": [
+    "ps4-apcie-icc",
+    "ps4-fan + ge-0001 fan threshold"
+   ]
+  },
+  "rtc": {
+   "state": "unsupported",
+   "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+   "implemented_by": [
+    "ge-0011 Aeolia/Belize RTC class device",
+    "ge-0010 loader wall clock"
+   ]
+  },
+  "cpufreq": {
+   "state": "unsupported",
+   "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+   "implemented_by": [
+    "ge-0007 Jaguar hardware P-state driver"
+   ],
+   "observed_now": {
+    "observed": "NOT_CHECKED",
+    "detail": "no cpufreq policy0"
+   }
+  },
+  "display-hdmi": {
+   "state": "unsupported",
+   "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+   "implemented_by": [
+    "ps4_bridge (MN86471A / MN864729) + ge-0005/0006 robustness knobs"
+   ]
+  },
+  "hdmi-audio": {
+   "state": "unsupported",
+   "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+   "implemented_by": [
+    "ge-0004 audio DTO"
+   ]
+  },
+  "gpu-3d": {
+   "state": "unsupported",
+   "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+   "implemented_by": [
+    "amdgpu CIK Liverpool/Gladius",
+    "Mesa 26.2.5 radeonsi/RADV"
+   ],
+   "observed_now": {
+    "observed": "ABSENT",
+    "detail": "GPU 0x9923 driver None"
+   }
+  },
+  "gpu-clocks": {
+   "state": "unsupported",
+   "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+   "implemented_by": [
+    "ge-0002 SCLK restore/control",
+    "ge-0009 SMU mailbox (opt-in)"
+   ]
+  },
+  "ge-telemetry": {
+   "state": "unsupported",
+   "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+   "implemented_by": [
+    "ge-0008 engine activity + runtime GTT budget"
+   ]
+  },
+  "ge-unified-memory": {
+   "state": "unsupported",
+   "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+   "implemented_by": [
+    "ge-0014 shrinker/trim",
+    "ge-0015 GTT dmem region",
+    "ge-0016 corrections",
+    "stable-6.15/0001-0002 TTM fixes",
+    "orbis-memd",
+    "orbis-run admission"
+   ]
+  },
+  "wifi-bt": {
+   "state": "unsupported",
+   "reason": "kernel: Baikal: no working 6.15 kernel flavor (see southbridge/baikal.json)",
+   "implemented_by": [
+    "mwifiex (Marvell) or mt7668 depending on board"
+   ]
+  },
+  "video-decode": {
+   "state": "unsupported",
+   "reason": "UVD on Liverpool is a research kernel only (--research-uvd, never packed)"
+  }
+ },
+ "unified_memory": {
+  "pool": "8 GiB GDDR5 shared by CPU and GPU",
+  "contract": "loader carve-out (vram.txt) + runtime GTT budget + dmem limits",
+  "states_note": "per-target values below override",
+  "pool_gib": 8,
+  "carveout": "loader vram.txt (GE loader: multiple of 16 MiB, 64-4096 MiB)",
+  "gtt_budget": "runtime (orbis_gtt_budget, ge-0008/0016)",
+  "reclaim": "ge-0014 opt-in (amdgpu.orbis_shrinker=1)",
+  "per_app_limits": "dmem vram + gtt (ge-0015, admission)",
+  "zero_copy": "VK_EXT_external_memory_host via userptr+HMM; verified only by orbis-mem bench on the console",
+  "xnack": "hardware-limited: GFX7 has no XNACK, so SVM/HMM fault replay is unavailable",
+  "cus": 18,
+  "state": "awaiting-hardware"
+ },
+ "identity": {
+  "schema": "orbis-target-match/1",
+  "facts_used": [
+   "GPU PCI 0x9923",
+   "southbridge PCI 0x90d7,0x90d8,0x90d9,0x90da,0x90db,0x90dc,0x90dd,0x90de",
+   "model CUH-2215B"
+  ],
+  "unrecognized": [],
+  "candidates": [
+   "cuh-22xx-baikal"
+  ],
+  "result": "confirmed",
+  "target": "cuh-22xx-baikal",
+  "status": "unsupported"
+ },
+ "this_console_is_target": true
+}

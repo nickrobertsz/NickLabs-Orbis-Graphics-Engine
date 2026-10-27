@@ -1,0 +1,60 @@
+{
+ "schema": "portforge-gap-report/1",
+ "base_target": "cuh-22xx-baikal",
+ "southbridge": "baikal",
+ "gpu": "0x9923",
+ "match": "confirmed",
+ "gaps": [
+  {
+   "layer": "kernel",
+   "gap": "no working kernel flavor for baikal (aeolia-belize-6.15)",
+   "reason": "no 6.15 Baikal kernel is known to work: the community Baikal kernel is 5.4.247-baikal-dfaus, the 5.15.15 Baikal port is reported non-functional, and the 7.0.8 Baikal binary (X-F1REBALL-X) has no pinned source. The 6.15.4 base tree only carries Baikal PCI IDs in apcie/ahci/sky2, not the Baikal patch set. The GE needs 6.15 interfaces (TTM shrink helpers, dmem cgroup).",
+   "action": "PortForge gap report: port the 5.4.247-baikal-dfaus Baikal patch set onto 6.15.4, or pin and review the 7.0.8 source once published"
+  }
+ ],
+ "known": [
+  {
+   "layer": "kernel",
+   "community": {
+    "kernel": "5.4.247-baikal-dfaus",
+    "repo": "sony-jaguar-devs/ps4-linux",
+    "state": "reported working (CUH-2215B, CUH-2216A B1, CUH-7116B, CUH-7202B, CUH-7216B)"
+   }
+  },
+  {
+   "layer": "kernel",
+   "community": {
+    "kernel": "x_experimental__5.15.15-fix-baikal",
+    "repo": "sony-jaguar-devs/ps4-linux",
+    "state": "reported non-functional"
+   }
+  },
+  {
+   "layer": "kernel",
+   "community": {
+    "kernel": "baikal 7.0.8 (binary)",
+    "repo": "X-F1REBALL-X/PS4-Linux",
+    "state": "reported working on CUH-2116A; source not pinned"
+   }
+  },
+  {
+   "layer": "apu",
+   "apu": "liverpool-slim"
+  }
+ ],
+ "capabilities_if_ported": {
+  "boot": "unsupported",
+  "southbridge-io": "unsupported",
+  "icc-power-fan": "unsupported",
+  "rtc": "unsupported",
+  "cpufreq": "unsupported",
+  "display-hdmi": "unsupported",
+  "hdmi-audio": "unsupported",
+  "gpu-3d": "unsupported",
+  "gpu-clocks": "unsupported",
+  "ge-telemetry": "unsupported",
+  "ge-unified-memory": "unsupported",
+  "wifi-bt": "unsupported",
+  "video-decode": "unsupported"
+ }
+}

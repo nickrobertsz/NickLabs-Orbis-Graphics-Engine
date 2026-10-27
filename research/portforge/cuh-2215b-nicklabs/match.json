@@ -1,0 +1,15 @@
+{
+ "schema": "orbis-target-match/1",
+ "facts_used": [
+  "GPU PCI 0x9923",
+  "southbridge PCI 0x90d7,0x90d8,0x90d9,0x90da,0x90db,0x90dc,0x90dd,0x90de",
+  "model CUH-2215B"
+ ],
+ "unrecognized": [],
+ "candidates": [
+  "cuh-22xx-baikal"
+ ],
+ "result": "confirmed",
+ "target": "cuh-22xx-baikal",
+ "status": "unsupported"
+}

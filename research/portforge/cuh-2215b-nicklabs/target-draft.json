@@ -1,0 +1,15 @@
+{
+ "schema": "orbis-target/1",
+ "id": "cuh-2215b-nicklabs",
+ "kind": "model",
+ "name": "cuh-2215b-nicklabs (PortForge draft)",
+ "extends": "cuh-22xx-baikal",
+ "models": [
+  "CUH-2215B"
+ ],
+ "southbridge": "baikal",
+ "apu": "liverpool-slim",
+ "notes": [
+  "PortForge draft from /tmp/claude-0/pf/cuh-2215b-simulated.json (2026-10-27T09:34:01-0700); every capability awaits hardware; review before promote"
+ ]
+}

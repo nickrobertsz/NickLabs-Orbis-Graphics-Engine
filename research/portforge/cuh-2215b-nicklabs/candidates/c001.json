@@ -1,0 +1,29 @@
+{
+ "schema": "portforge-candidate/1",
+ "id": "c001",
+ "file": "c001.patch",
+ "origin": "community",
+ "sha256": "b0e8b6040e2153017142ea210e9b2fae288a3d5587bb5eb03b8d5819f255855a",
+ "created": "2026-10-27T09:34:01-0700",
+ "provenance": {
+  "source": "sony-jaguar-devs/ps4-linux@5.4.247-baikal-dfaus (7f796666a956bdc40e6178e874907e96dc28ca01): Baikal PCIe glue, ICC, UART (new files only)",
+  "base_tree": "/home/claude/kwork",
+  "other_tree": "/tmp/claude-0/baikal/sjd-baikal",
+  "paths": [
+   "drivers/ps4/ps4-bpcie.c",
+   "drivers/ps4/ps4-bpcie-icc.c",
+   "drivers/ps4/ps4-bpcie-uart.c",
+   "drivers/ps4/baikal.h",
+   "drivers/ps4/aeolia-baikal.h"
+  ],
+  "paths_in_neither_tree": []
+ },
+ "note": "",
+ "review": {
+  "state": "unreviewed",
+  "reviewer": null,
+  "time": null,
+  "notes": null
+ },
+ "may_run_on_ps4": false
+}

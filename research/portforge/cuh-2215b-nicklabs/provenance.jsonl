@@ -1,0 +1,4 @@
+{"time": "2026-10-27T09:34:01-0700", "event": "new", "probe_sha256": "f6fa82440eabed10cc16c2fe607f5b4d3ee04a6cce6cc56cb48861dd473d5b68", "match": "confirmed", "base": "cuh-22xx-baikal"}
+{"time": "2026-10-27T09:34:01-0700", "event": "candidate", "id": "c001", "origin": "community", "sha256": "b0e8b6040e2153017142ea210e9b2fae288a3d5587bb5eb03b8d5819f255855a", "provenance": {"source": "sony-jaguar-devs/ps4-linux@5.4.247-baikal-dfaus (7f796666a956bdc40e6178e874907e96dc28ca01): Baikal PCIe glue, ICC, UART (new files only)", "base_tree": "/home/claude/kwork", "other_tree": "/tmp/claude-0/baikal/sjd-baikal", "paths": ["drivers/ps4/ps4-bpcie.c", "drivers/ps4/ps4-bpcie-icc.c", "drivers/ps4/ps4-bpcie-uart.c", "drivers/ps4/baikal.h", "drivers/ps4/aeolia-baikal.h"], "paths_in_neither_tree": []}}
+{"time": "2026-10-27T09:34:03-0700", "event": "report", "unreviewed": ["c001"]}
+{"time": "2026-10-27T09:34:11-0700", "event": "report", "unreviewed": ["c001"]}

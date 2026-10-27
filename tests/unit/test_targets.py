@@ -300,6 +300,24 @@ class PortForgeScenarios(unittest.TestCase):
         self.assertEqual(len(c["provenance"]["prompt_sha256"]), 64)
         self.assertEqual(self.pf("assist", "assist-test", "--assistant", "openai")[0], 2)
 
+    def test_diff_trees_includes_new_files(self):
+        """Regression: files that exist only in the community tree must become new-file hunks."""
+        self.new("tree-diff", probe_doc(gpu="0x9923", sb=BAIKAL, model="CUH-2215B"))
+        k = self.kernel_tree()
+        other = self.t / "community"
+        (other / "drivers/ps4").mkdir(parents=True)
+        (other / "drivers/ps4/ps4-apcie.c").write_text("static int a;\n")
+        (other / "drivers/ps4/ps4-bpcie.c").write_text("int bpcie_status(void) { return 0; }\n")
+        rc, out, err = self.pf("diff-trees", "tree-diff", "--base", str(k), "--other", str(other),
+                               "--paths", "drivers/ps4/ps4-bpcie.c,drivers/ps4/ps4-apcie.c", "--source", "test@x")
+        self.assertEqual(rc, 0, err)
+        patch = (Path(os.environ["ORBIS_PORTFORGE_DIR"]) / "tree-diff/candidates/c001.patch").read_text()
+        self.assertIn("new file mode", patch)
+        self.assertIn("+++ b/drivers/ps4/ps4-bpcie.c", patch)
+        self.assertIn("diff --git a/drivers/ps4/ps4-bpcie.c b/drivers/ps4/ps4-bpcie.c", patch)
+        rc, out, _ = self.pf("check", "tree-diff", "--kernel-tree", str(k))
+        self.assertEqual((rc, json.loads(out)["apply_failed"]), (0, []))
+
     def test_promote_after_full_review(self):
         self.new("cuh-2016a-lab", probe_doc(gpu="0x9923", sb=BELIZE, model="CUH-2016A"))
         rc, out, err = self.pf("promote", "cuh-2016a-lab")

@@ -211,21 +211,35 @@ def cmd_candidate(a) -> int:
 
 
 def cmd_diff_trees(a) -> int:
+    """Candidate = difference of the given paths between two trees (files only in --other become new files)."""
+    import tempfile
     ws = Workspace(a.id)
-    paths = [x for x in a.paths.split(",") if x]
-    out = b""
-    for pth in paths:
-        r = subprocess.run(["git", "diff", "--no-index", "--binary", "--", os.path.join(a.base, pth), os.path.join(a.other, pth)],
-                           capture_output=True)
-        if r.returncode not in (0, 1):
-            print(r.stderr.decode(errors="replace"), file=sys.stderr)
-            return 1
-        txt = r.stdout.replace(("a/" + a.base.strip("/")).encode() + b"/", b"a/").replace(("b/" + a.other.strip("/")).encode() + b"/", b"b/")
-        out += txt
+    paths = [x.strip("/") for x in a.paths.split(",") if x.strip("/")]
+    with tempfile.TemporaryDirectory() as t:
+        for side, top in (("a", a.base), ("b", a.other)):
+            for pth in paths:
+                src = Path(top) / pth
+                dst = Path(t) / side / pth
+                if src.is_dir():
+                    shutil.copytree(src, dst, symlinks=True)
+                elif src.is_file():
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dst)
+            (Path(t) / side).mkdir(exist_ok=True)
+        r = subprocess.run(["git", "diff", "--no-index", "--binary", "--no-prefix", "--src-prefix=a/", "--dst-prefix=b/", "--", "a", "b"],
+                           cwd=t, capture_output=True)
+    if r.returncode not in (0, 1) or r.stderr.strip():
+        print(r.stderr.decode(errors="replace"), file=sys.stderr)
+        return 1
+    # paths in the diff are a/a/<p> and b/b/<p>: strip the side directory
+    out = (r.stdout.replace(b"diff --git a/b/", b"diff --git a/").replace(b" a/a/", b" a/").replace(b" b/b/", b" b/")
+           .replace(b"--- a/a/", b"--- a/").replace(b"+++ b/b/", b"+++ b/"))
     if not out:
         print("no differences in the given paths")
         return 0
-    rec = _add_candidate(ws, out, "community", {"source": a.source, "base_tree": a.base, "other_tree": a.other, "paths": paths})
+    missing = [pth for pth in paths if not (Path(a.base) / pth).exists() and not (Path(a.other) / pth).exists()]
+    rec = _add_candidate(ws, out, "community", {"source": a.source, "base_tree": a.base, "other_tree": a.other, "paths": paths,
+                                                "paths_in_neither_tree": missing})
     print(f"candidate {rec['id']} from tree diff ({len(out)} bytes, unreviewed)")
     return 0
 
@@ -330,7 +344,7 @@ def cmd_report(a) -> int:
                      f"{(ck.get('apply') or {}).get('ok')}; register/MMIO access in diff: {(ck.get('static') or {}).get('mmio_or_registers')}")
     if not cands:
         lines.append("- none")
-    lines += ["", "## Capabilities if ported (all await hardware until qualified)"]
+    lines += ["", "## Capabilities on this target (registry state; nothing is verified until qualified on hardware)"]
     lines += [f"- {k}: {v}" for k, v in sorted(gr.get("capabilities_if_ported", {}).items())]
     lines += ["", "Nothing here has run on a PS4. Approve candidates with `portforge review`, then build on Nobara with recipe.sh."]
     ws.write("review.md", "\n".join(lines) + "\n")

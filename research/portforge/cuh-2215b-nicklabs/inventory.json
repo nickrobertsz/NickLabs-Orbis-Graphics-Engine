@@ -1,0 +1,78 @@
+{
+ "schema": "orbis-hw-probe/1",
+ "simulated": true,
+ "note": "SIMULATED inventory for the NickLabs CUH-2215B (Baikal path as stated by Nick): PCI IDs taken from the registry, not read from the console. Replace with `orbis-hw probe --json` from the console.",
+ "pci": [
+  {
+   "slot": "0000:00:01.0",
+   "vendor": "0x1002",
+   "device": "0x9923",
+   "class": "0x030000",
+   "driver": null
+  },
+  {
+   "slot": "0000:00:14.0",
+   "vendor": "0x104d",
+   "device": "0x90d7",
+   "class": "0x088000",
+   "driver": null
+  },
+  {
+   "slot": "0000:00:14.1",
+   "vendor": "0x104d",
+   "device": "0x90d8",
+   "class": "0x088000",
+   "driver": null
+  },
+  {
+   "slot": "0000:00:14.2",
+   "vendor": "0x104d",
+   "device": "0x90d9",
+   "class": "0x088000",
+   "driver": null
+  },
+  {
+   "slot": "0000:00:14.3",
+   "vendor": "0x104d",
+   "device": "0x90da",
+   "class": "0x088000",
+   "driver": null
+  },
+  {
+   "slot": "0000:00:14.4",
+   "vendor": "0x104d",
+   "device": "0x90db",
+   "class": "0x088000",
+   "driver": null
+  },
+  {
+   "slot": "0000:00:14.5",
+   "vendor": "0x104d",
+   "device": "0x90dc",
+   "class": "0x088000",
+   "driver": null
+  },
+  {
+   "slot": "0000:00:14.6",
+   "vendor": "0x104d",
+   "device": "0x90dd",
+   "class": "0x088000",
+   "driver": null
+  },
+  {
+   "slot": "0000:00:14.7",
+   "vendor": "0x104d",
+   "device": "0x90de",
+   "class": "0x088000",
+   "driver": null
+  }
+ ],
+ "cpu": {
+  "family": "22"
+ },
+ "gpu": {},
+ "logs": [],
+ "hints": {
+  "model": "CUH-2215B"
+ }
+}

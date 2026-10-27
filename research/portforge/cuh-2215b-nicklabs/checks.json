@@ -1,0 +1,41 @@
+{
+ "schema": "portforge-checks/1",
+ "time": "2026-10-27T09:34:01-0700",
+ "kernel_tree": "/home/claude/kwork",
+ "candidates": {
+  "c001": {
+   "apply": {
+    "ok": true,
+    "output": "Checking patch drivers/ps4/aeolia-baikal.h...\nChecking patch drivers/ps4/baikal.h...\nChecking patch drivers/ps4/ps4-bpcie-icc.c...\nChecking patch drivers/ps4/ps4-bpcie-uart.c...\nChecking patch drivers/ps4/ps4-bpcie.c...\n"
+   },
+   "static": {
+    "checkpatch": {
+     "errors": 124,
+     "warnings": 250,
+     "first": [
+      "ERROR: code indent should use tabs where possible",
+      "ERROR: code indent should use tabs where possible",
+      "ERROR: code indent should use tabs where possible",
+      "ERROR: code indent should use tabs where possible",
+      "ERROR: code indent should use tabs where possible"
+     ]
+    },
+    "touches": [
+     "drivers/ps4/aeolia-baikal.h",
+     "drivers/ps4/baikal.h",
+     "drivers/ps4/ps4-bpcie-icc.c",
+     "drivers/ps4/ps4-bpcie-uart.c",
+     "drivers/ps4/ps4-bpcie.c"
+    ],
+    "adds_scripts": [],
+    "mmio_or_registers": true
+   },
+   "review": "unreviewed"
+  }
+ },
+ "compile": {
+  "run": false,
+  "why": "compile checks run on the Nobara build machine through the recipe (orbis-ge kernel --target)",
+  "command": "./orbis-ge kernel --orbis-src <0.2.0 checkout> --target cuh-2215b-nicklabs"
+ }
+}
