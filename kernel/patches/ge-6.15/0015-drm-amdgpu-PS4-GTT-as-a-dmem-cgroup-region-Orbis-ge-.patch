@@ -1,0 +1,73 @@
+From db8a1cee682e4fb9209f407e5714335db45a7e18 Mon Sep 17 00:00:00 2001
+From: NickLabs Orbis <orbis@nicklabs.invalid>
+Date: Mon, 26 Oct 2026 20:52:53 -0700
+Subject: [PATCH] drm/amdgpu: PS4 GTT as a dmem cgroup region (Orbis ge-0015)
+
+NickLabs Orbis unified-memory work (U9). On the PS4 the GTT domain carries most GPU
+memory, but only VRAM is a dmem cgroup region upstream, so per-application GPU limits
+could not cover it. Register the GTT manager as region "gtt" (capacity = TTM page
+limit) on Liverpool/Gladius, default on (amdgpu.orbis_gtt_cgroup=0 disables).
+
+cgroup v2 dmem.max/low/min then apply to GTT, and TTM's existing cgroup-aware eviction
+only evicts buffers charged to the cgroup over its limit. Allocations are charged once,
+to the allocating task, so shared buffers are not double counted.
+
+Status: written against the pinned 6.15.4 interfaces; not compiled or tested.
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu_gtt_mgr.c | 30 +++++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_gtt_mgr.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_gtt_mgr.c
+index c4d6c974b..72913ba62 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_gtt_mgr.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_gtt_mgr.c
+@@ -23,9 +23,26 @@
+  */
+ 
+ #include <drm/ttm/ttm_range_manager.h>
++#include <drm/ttm/ttm_tt.h>
++#include <drm/drm_drv.h>
+ 
+ #include "amdgpu.h"
+ 
++/*
++ * NickLabs Orbis ge-0015: on the PS4 the GTT domain is the main GPU memory (the VRAM carve-out
++ * is small and fixed), so per-application GPU memory limits need GTT, not only VRAM. Registering
++ * the GTT manager as a dmem cgroup region ("gtt", next to amdgpu's "vram") lets cgroup v2
++ * dmem.max / dmem.low / dmem.min apply to it, and TTM's existing cgroup-aware eviction
++ * (ttm_bo_evict_alloc with limit_pool) then only evicts buffers charged to the cgroup that hit
++ * its limit. Each allocation is charged once, to the task that allocates the GTT resource, so
++ * buffers shared between processes are never counted twice. Same caveat as upstream VRAM: a
++ * buffer moved into GTT by another task's eviction is charged to that task.
++ */
++static int amdgpu_orbis_gtt_cgroup = 1;
++module_param_named(orbis_gtt_cgroup, amdgpu_orbis_gtt_cgroup, int, 0444);
++MODULE_PARM_DESC(orbis_gtt_cgroup,
++		 "PS4 (NickLabs Orbis): expose GTT as dmem cgroup region \"gtt\" for per-app limits (1 = on (default), 0 = off)");
++
+ static inline struct amdgpu_gtt_mgr *
+ to_gtt_mgr(struct ttm_resource_manager *man)
+ {
+@@ -281,6 +298,19 @@ int amdgpu_gtt_mgr_init(struct amdgpu_device *adev, uint64_t gtt_size)
+ 	man->use_tt = true;
+ 	man->func = &amdgpu_gtt_mgr_func;
+ 
++	/* ge-0015: capacity = the TTM page limit, the most the runtime GTT budget can reach */
++	if (amdgpu_orbis_gtt_cgroup &&
++	    (adev->asic_type == CHIP_LIVERPOOL || adev->asic_type == CHIP_GLADIUS)) {
++		u64 cap = max_t(u64, gtt_size, (u64)ttm_tt_pages_limit() << PAGE_SHIFT);
++
++		man->cg = drmm_cgroup_register_region(adev_to_drm(adev), "gtt", cap);
++		if (IS_ERR(man->cg)) {
++			dev_warn(adev->dev, "Orbis: GTT dmem region not registered (%ld)\n",
++				 PTR_ERR(man->cg));
++			man->cg = NULL;
++		}
++	}
++
+ 	ttm_resource_manager_init(man, &adev->mman.bdev, gtt_size);
+ 
+ 	start = AMDGPU_GTT_MAX_TRANSFER_SIZE * AMDGPU_GTT_NUM_TRANSFER_WINDOWS;
+-- 
+2.43.0
+

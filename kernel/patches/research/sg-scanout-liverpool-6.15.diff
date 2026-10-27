@@ -1,0 +1,67 @@
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_display.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_display.c
+index 35c778426..e04ad4d6a 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_display.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_display.c
+@@ -556,11 +556,34 @@ static const struct drm_framebuffer_funcs amdgpu_fb_funcs_atomic = {
+ 	.dirty = amdgpu_dirtyfb
+ };
+ 
++/*
++ * NickLabs Orbis RESEARCH (R-M1, never in the release kernel): scanout from GTT on the PS4's
++ * DCE 8 (non-DC) display path. Upstream allows GTT scanout only with DC on Carrizo and newer
++ * (gpu_vm_support); for Liverpool it is unknown whether the display engine's memory requests
++ * are translated through GART. 1 = allow GTT as a fallback for USWC buffers (VRAM preferred),
++ * 2 = force GTT for the primary plane (the actual experiment). Watch for underflow, a black or
++ * garbled screen, and "VM fault" lines in dmesg.
++ */
++int amdgpu_orbis_sg_scanout;
++module_param_named(orbis_sg_scanout, amdgpu_orbis_sg_scanout, int, 0444);
++MODULE_PARM_DESC(orbis_sg_scanout, "PS4 research: scanout from GTT on DCE8 (0 = off, 1 = allow, 2 = force); research kernel only");
++
++static bool amdgpu_orbis_sg_scanout_on(struct amdgpu_device *adev)
++{
++	return amdgpu_orbis_sg_scanout &&
++	       (adev->asic_type == CHIP_LIVERPOOL || adev->asic_type == CHIP_GLADIUS) &&
++	       !adev->dc_enabled;
++}
++
+ uint32_t amdgpu_display_supported_domains(struct amdgpu_device *adev,
+ 					  uint64_t bo_flags)
+ {
+ 	uint32_t domain = AMDGPU_GEM_DOMAIN_VRAM;
+ 
++	if (amdgpu_orbis_sg_scanout_on(adev) && (bo_flags & AMDGPU_GEM_CREATE_CPU_GTT_USWC))
++		return amdgpu_orbis_sg_scanout == 2 ? AMDGPU_GEM_DOMAIN_GTT :
++		       (AMDGPU_GEM_DOMAIN_VRAM | AMDGPU_GEM_DOMAIN_GTT);
++
+ #if defined(CONFIG_DRM_AMD_DC)
+ 	/*
+ 	 * if amdgpu_bo_support_uswc returns false it means that USWC mappings
+diff --git a/drivers/gpu/drm/amd/amdgpu/dce_v8_0.c b/drivers/gpu/drm/amd/amdgpu/dce_v8_0.c
+index c0f979a50..c96caff4e 100644
+--- a/drivers/gpu/drm/amd/amdgpu/dce_v8_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/dce_v8_0.c
+@@ -1841,14 +1841,21 @@ static int dce_v8_0_crtc_do_set_base(struct drm_crtc *crtc,
+ 		return r;
+ 
+ 	if (!atomic) {
+-		abo->flags |= AMDGPU_GEM_CREATE_VRAM_CONTIGUOUS;
+-		r = amdgpu_bo_pin(abo, AMDGPU_GEM_DOMAIN_VRAM);
++		/* Orbis research R-M1: same domain choice as page flips (GTT when enabled) */
++		u32 domain = amdgpu_display_supported_domains(adev, abo->flags);
++
++		if (domain & AMDGPU_GEM_DOMAIN_VRAM)
++			abo->flags |= AMDGPU_GEM_CREATE_VRAM_CONTIGUOUS;
++		r = amdgpu_bo_pin(abo, domain);
+ 		if (unlikely(r != 0)) {
+ 			amdgpu_bo_unreserve(abo);
+ 			return -EINVAL;
+ 		}
+ 	}
+ 	fb_location = amdgpu_bo_gpu_offset(abo);
++	if (abo->tbo.resource->mem_type == TTM_PL_TT)
++		dev_info_once(adev->dev, "Orbis research: primary plane scanned out from GTT at 0x%llx\n",
++			      (unsigned long long)fb_location);
+ 
+ 	amdgpu_bo_get_tiling_flags(abo, &tiling_flags);
+ 	amdgpu_bo_unreserve(abo);

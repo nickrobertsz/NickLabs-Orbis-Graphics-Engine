@@ -25,7 +25,7 @@ build() {
 package() {
   local rel
   rel="$(python -c "import json; print(json.load(open('$srcdir/out/build-manifest.json'))['kernel_release'])")"
-  case "$rel" in *-orbis-ps4-ge-uvd*) echo "refusing to package the research UVD kernel" >&2; return 1 ;; *-orbis-ps4-ge*) ;; *) echo "release $rel is not a -orbis-ps4-ge kernel" >&2; return 1 ;; esac
+  case "$rel" in *-orbis-ps4-ge-uvd*|*-orbis-ps4-ge-sg*) echo "refusing to package a research kernel ($rel)" >&2; return 1 ;; *-orbis-ps4-ge*) ;; *) echo "release $rel is not a -orbis-ps4-ge kernel" >&2; return 1 ;; esac
   rm -rf "$srcdir/mods" && mkdir -p "$srcdir/mods" "$pkgdir/usr/lib/modules"
   tar -C "$srcdir/mods" -xf "$srcdir/out/modules-$rel.tar"
   mv "$srcdir/mods/lib/modules/$rel" "$pkgdir/usr/lib/modules/$rel"

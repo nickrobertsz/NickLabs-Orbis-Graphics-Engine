@@ -11,3 +11,5 @@ ge-6.15/0010-x86-ps4-boot-wall-clock-from-the-loader-time-handoff.patch
 ge-6.15/0011-drivers-ps4-Aeolia-Belize-RTC-class-device-dev-rtc0.patch
 ge-6.15/0012-CachyOS-tweaks-for-PS4-selected-from-Nobara-s-6.15-c.patch
 ge-6.15/0013-x86-ps4-optional-Jaguar-btver2-kernel-code-generatio.patch
+ge-6.15/0014-drm-amdgpu-PS4-GPU-buffer-shrinker-and-active-GTT-tr.patch
+ge-6.15/0015-drm-amdgpu-PS4-GTT-as-a-dmem-cgroup-region-Orbis-ge-.patch

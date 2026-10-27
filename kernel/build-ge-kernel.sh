@@ -8,7 +8,7 @@
 # inside the orbis-build:0.2.0 container (clang/LLVM), so the Orbis 0.2.0 checkout is only read.
 #
 #   kernel/build-ge-kernel.sh --orbis-src ~/orbis-release/nicklabs-ps4-orbis-linux [--jobs N]
-#                             [--research-uvd | --bore]
+#                             [--research-uvd | --research-sgdisplay | --bore]
 #
 # Output: out/kernel-ge/ (bzImage, config, modules-<rel>.tar, build-manifest.json, SHA256SUMS),
 # release 6.15.4-orbis-ps4-ge-g<commit>. With --research-uvd the community UVD bring-up diff
@@ -20,18 +20,22 @@
 # linux-orbis-ps4-ge-bore (kernel/package-bore; install it to switch, `orbis boot rollback-kernel` to go back).
 # The performance fragment kernel/config/orbis-perf.fragment needs pahole (BTF for sched_ext);
 # it is installed into the build container from the same Arch snapshot when missing.
+# With --research-sgdisplay the GTT-scanout experiment (kernel/patches/research/sg-scanout-
+# liverpool-6.15.diff, unified-memory item R-M1) is added: out/kernel-ge-sg/, release
+# ...-orbis-ps4-ge-sg, boot with amdgpu.orbis_sg_scanout=2; never packaged.
 # Rust-for-Linux (CONFIG_RUST=y, Rust directive): the kernel needs a rustc it supports, so the
 # build uses rustup's pinned toolchain RUST_KERNEL_TOOLCHAIN (default 1.87.0, contemporary with
 # Linux 6.15) with rust-src, plus bindgen. --no-rust builds without it (recorded as BLOCKED).
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 R="$(cd "$here/.." && pwd)"
-orbis_src=""; jobs=""; uvd=0; bore=0; rust=1; inside=0
+orbis_src=""; jobs=""; uvd=0; sg=0; bore=0; rust=1; inside=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --orbis-src) orbis_src="$(realpath "$2")"; shift 2 ;;
     --jobs) jobs="$2"; shift 2 ;;
     --research-uvd) uvd=1; shift ;;
+    --research-sgdisplay) sg=1; shift ;;
     --bore) bore=1; shift ;;
     --no-rust) rust=0; shift ;;
     --in-container) inside=1; shift ;;
@@ -40,14 +44,14 @@ while [ $# -gt 0 ]; do
 done
 series="$here/patches/series"
 grep -qv '^[[:space:]]*\(#\|$\)' "$series" || { echo "kernel/patches/series is empty" >&2; exit 3; }
-[ "$uvd" = 1 ] && [ "$bore" = 1 ] && { echo "--research-uvd and --bore are separate kernels" >&2; exit 2; }
-name=kernel-ge; [ "$uvd" = 1 ] && name=kernel-ge-uvd; [ "$bore" = 1 ] && name=kernel-ge-bore
+[ $((uvd + sg + bore)) -le 1 ] || { echo "--research-uvd, --research-sgdisplay and --bore are separate kernels" >&2; exit 2; }
+name=kernel-ge; [ "$uvd" = 1 ] && name=kernel-ge-uvd; [ "$bore" = 1 ] && name=kernel-ge-bore; [ "$sg" = 1 ] && name=kernel-ge-sg
 if [ "$inside" = 0 ]; then
   [ -f "$orbis_src/kernel/build-kernel.sh" ] || { echo "--orbis-src must be the Orbis 0.2.0 checkout" >&2; exit 2; }
   SUDO=""; [ "$(id -u)" = 0 ] || SUDO="sudo"
   engine="${ENGINE:-podman}"
   mkdir -p "$R/out"
-  extra=""; [ "$uvd" = 1 ] && extra="--research-uvd"; [ "$bore" = 1 ] && extra="--bore"
+  extra=""; [ "$uvd" = 1 ] && extra="--research-uvd"; [ "$bore" = 1 ] && extra="--bore"; [ "$sg" = 1 ] && extra="--research-sgdisplay"
   [ "$rust" = 0 ] && extra="$extra --no-rust"
   exec $SUDO "$engine" run --rm -v "$R":/gfx:z -v "$orbis_src":/orbis:ro,z -w /gfx orbis-build:0.2.0 \
     bash -c "kernel/build-ge-kernel.sh --in-container --orbis-src /orbis ${jobs:+--jobs $jobs} $extra && chown -R $(id -u):$(id -g) /gfx/out/$name /gfx/out/$name-work"
@@ -96,6 +100,11 @@ if [ "$uvd" = 1 ]; then
   echo "ge-research-uvd.patch" >> "$pdir/series"
   sed -i 's/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-orbis-ps4-ge-uvd"/' "$frag"
 fi
+if [ "$sg" = 1 ]; then
+  cp "$here/patches/research/sg-scanout-liverpool-6.15.diff" "$pdir/ge-research-sg.patch"
+  echo "ge-research-sg.patch" >> "$pdir/series"
+  sed -i 's/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-orbis-ps4-ge-sg"/' "$frag"
+fi
 python3 - "$work/kernel/targets/$t.json" <<'PY'
 import json, sys
 p = sys.argv[1]; d = json.load(open(p))
@@ -105,12 +114,12 @@ json.dump(d, open(p, "w"), indent=2)
 PY
 echo "patch series:"; sed 's/^/  /' "$pdir/series"
 "$work/kernel/build-kernel.sh" "$t" --out "$R/out/$name" --src "$work/src" ${jobs:+--jobs "$jobs"}
-python3 - "$R/out/$name/build-manifest.json" "$uvd" "$R/out/$name/config" "$bore" "$rust" "${RUSTUP_TOOLCHAIN:-}" <<'PY'
+python3 - "$R/out/$name/build-manifest.json" "$uvd" "$R/out/$name/config" "$bore" "$rust" "${RUSTUP_TOOLCHAIN:-}" "$sg" <<'PY'
 import json, sys
 p, uvd, cfg, bore = sys.argv[1], sys.argv[2] == "1", sys.argv[3], sys.argv[4] == "1"
-rust, rust_tc = sys.argv[5] == "1", sys.argv[6]
+rust, rust_tc, sg = sys.argv[5] == "1", sys.argv[6], sys.argv[7] == "1"
 d = json.load(open(p))
-want = "orbis-ps4-ge-uvd" if uvd else "orbis-ps4-ge-bore" if bore else "orbis-ps4-ge"
+want = "orbis-ps4-ge-uvd" if uvd else "orbis-ps4-ge-bore" if bore else "orbis-ps4-ge-sg" if sg else "orbis-ps4-ge"
 assert ("-" + want + "-") in d["kernel_release"] or d["kernel_release"].endswith("-" + want), d["kernel_release"]
 conf = open(cfg).read()
 missing = [k for k in ("CONFIG_PS4_CPUFREQ=y", "CONFIG_PSI=y", "CONFIG_NETCONSOLE_DYNAMIC=y", "CONFIG_DETECT_HUNG_TASK=y",
@@ -127,7 +136,7 @@ if rust:
     assert "CONFIG_RUST=y" in conf.splitlines(), ("CONFIG_RUST was dropped by olddefconfig: `make rustavailable` "
                                                    "failed (rustc/rust-src/bindgen/libclang); fix it or build with --no-rust")
 assert not missing, f"config fragment did not survive olddefconfig: {missing}"
-d["orbis_graphics_engine"] = {"version": "2.0.0", "research_uvd": uvd, "bore": bore,
+d["orbis_graphics_engine"] = {"version": "2.0.0", "research_uvd": uvd, "research_sg_scanout": sg, "bore": bore,
                               "scheduler": "BORE (CachyOS)" if bore else "EEVDF (CachyOS defaults) + sched_ext",
                               "rust_for_linux": {"enabled": rust, "toolchain": rust_tc or None} if rust else
                                                 {"enabled": False, "state": "BLOCKED", "why": "built with --no-rust"},

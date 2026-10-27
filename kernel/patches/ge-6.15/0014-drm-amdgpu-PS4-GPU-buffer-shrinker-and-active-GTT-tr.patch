@@ -1,0 +1,809 @@
+From aef9c535f39c0cf1f9d6b63b8c3b803f52268d91 Mon Sep 17 00:00:00 2001
+From: NickLabs Orbis <orbis@nicklabs.invalid>
+Date: Mon, 26 Oct 2026 20:50:46 -0700
+Subject: [PATCH] drm/amdgpu: PS4 GPU buffer shrinker and active GTT trim
+ (Orbis ge-0014)
+
+NickLabs Orbis unified-memory work (U25/U26). The PS4 CPU and GPU share one GDDR5 pool,
+but amdgpu never returns idle GTT/system buffers to Linux under memory pressure: only
+TTM's pages_limit swapout at allocation time exists. This adds, for Liverpool/Gladius
+and only with amdgpu.orbis_shrinker=1:
+
+- backup-capable user buffers: TTM_TT_FLAG_EXTERNAL | EXTERNAL_MAPPABLE plus a shmem
+  backup (ttm_tt_setup_backup), set after ttm_sg_tt_init() so the page array is kept;
+  bind/populate/unpopulate tell these apart from imported dma-bufs; userptr buffers drop
+  the capability;
+- populate restores backed-up content (ttm_tt_restore) or starts fresh for purged
+  discardable buffers;
+- a memory shrinker (pattern of xe_shrinker.c, same 6.15 TTM helpers) that walks the
+  SYSTEM and TT LRUs with trylocks and calls ttm_bo_shrink(): regular TT->SYSTEM move
+  (move_notify, GART unbind), then backup to shmem or purge. Exported/imported
+  dma-bufs, kernel buffers, ghost objects and pinned buffers are skipped; direct
+  reclaim does not wait for the GPU. Backed-up pages are ordinary shmem pages that the
+  core VM swaps (zram on Orbis);
+- active trim: writing a lower orbis_gtt_budget evicts GTT buffers in LRU order until
+  usage fits, instead of waiting for the next allocation;
+- sysfs orbis_gtt_reclaim: counters (shrinkable, purgeable, backed up, shrunk, purged,
+  restored, trim evictions) and "scan <pages> [writeback]" for verification.
+
+Status: written against the pinned 6.15.4 interfaces; not compiled or tested.
+---
+ drivers/gpu/drm/amd/amdgpu/Makefile           |   2 +-
+ drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c       | 166 ++++++++-
+ drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.h       |   4 +
+ drivers/gpu/drm/amd/amdgpu/liverpool_orbis.c  |  42 +++
+ .../drm/amd/amdgpu/liverpool_orbis_shrinker.c | 339 ++++++++++++++++++
+ .../drm/amd/amdgpu/liverpool_orbis_shrinker.h |  40 +++
+ 6 files changed, 584 insertions(+), 9 deletions(-)
+ create mode 100644 drivers/gpu/drm/amd/amdgpu/liverpool_orbis_shrinker.c
+ create mode 100644 drivers/gpu/drm/amd/amdgpu/liverpool_orbis_shrinker.h
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/Makefile b/drivers/gpu/drm/amd/amdgpu/Makefile
+index 1cf6009cc..1abf2b2c0 100644
+--- a/drivers/gpu/drm/amd/amdgpu/Makefile
++++ b/drivers/gpu/drm/amd/amdgpu/Makefile
+@@ -75,7 +75,7 @@ amdgpu-$(CONFIG_PERF_EVENTS) += amdgpu_pmu.o
+ # add asic specific block
+ amdgpu-$(CONFIG_DRM_AMDGPU_CIK)+= cik.o cik_ih.o \
+ 	dce_v8_0.o gfx_v7_0.o cik_sdma.o uvd_v4_2.o vce_v2_0.o \
+-	liverpool_clk.o liverpool_orbis.o liverpool_smu.o
++	liverpool_clk.o liverpool_orbis.o liverpool_orbis_shrinker.o liverpool_smu.o
+ 
+ amdgpu-$(CONFIG_DRM_AMDGPU_SI)+= si.o gmc_v6_0.o gfx_v6_0.o si_ih.o si_dma.o dce_v6_0.o \
+ 	uvd_v3_1.o
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c
+index 53b71e9d8..3f3630a8c 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.c
+@@ -59,6 +59,7 @@
+ #include "amdgpu_hmm.h"
+ #include "amdgpu_atomfirmware.h"
+ #include "amdgpu_res_cursor.h"
++#include "liverpool_orbis_shrinker.h"
+ #include "bif/bif_4_1_d.h"
+ 
+ MODULE_IMPORT_NS("DMA_BUF");
+@@ -682,6 +683,18 @@ struct amdgpu_ttm_tt {
+ 	uint32_t		userflags;
+ 	bool			bound;
+ 	int32_t			pool_id;
++	/*
++	 * NickLabs Orbis ge-0014 (PS4 shrinker). orbis_backup: the tt is backup-capable
++	 * (TTM_TT_FLAG_EXTERNAL | TTM_TT_FLAG_EXTERNAL_MAPPABLE, shmem backup attached).
++	 * orbis_accounted: its populated pages are counted as shrinkable/purgeable.
++	 * orbis_purged: the pages were dropped (discardable buffer), not backed up.
++	 * orbis_backed_pages: pages currently held in the shmem backup.
++	 */
++	bool			orbis_backup;
++	bool			orbis_purgeable;
++	bool			orbis_accounted;
++	bool			orbis_purged;
++	long			orbis_backed_pages;
+ };
+ 
+ #define ttm_to_amdgpu_ttm_tt(ptr)	container_of(ptr, struct amdgpu_ttm_tt, ttm)
+@@ -937,7 +950,8 @@ static int amdgpu_ttm_backend_bind(struct ttm_device *bdev,
+ 			DRM_ERROR("failed to pin userptr\n");
+ 			return r;
+ 		}
+-	} else if (ttm->page_flags & TTM_TT_FLAG_EXTERNAL) {
++	} else if ((ttm->page_flags & TTM_TT_FLAG_EXTERNAL) &&
++		   !(ttm->page_flags & TTM_TT_FLAG_EXTERNAL_MAPPABLE)) {
+ 		if (!ttm->sg) {
+ 			struct dma_buf_attachment *attach;
+ 			struct sg_table *sgt;
+@@ -1087,6 +1101,10 @@ static void amdgpu_ttm_backend_destroy(struct ttm_device *bdev,
+ 	if (gtt->usertask)
+ 		put_task_struct(gtt->usertask);
+ 
++	/* a backed-up buffer freed without being restored: ttm_tt_fini drops the backup */
++	if (gtt->orbis_backed_pages)
++		amdgpu_orbis_shrinker_dropped(amdgpu_ttm_adev(bdev), gtt->orbis_backed_pages);
++
+ 	ttm_tt_fini(&gtt->ttm);
+ 	kfree(gtt);
+ }
+@@ -1127,6 +1145,23 @@ static struct ttm_tt *amdgpu_ttm_tt_create(struct ttm_buffer_object *bo,
+ 		kfree(gtt);
+ 		return NULL;
+ 	}
++
++	/*
++	 * NickLabs Orbis ge-0014: on the PS4, user buffers get a shmem backup so the shrinker can
++	 * reclaim them. The flags are set after ttm_sg_tt_init() so the tt keeps its page array
++	 * (EXTERNAL at init time would allocate a dma-address-only directory). With
++	 * EXTERNAL_MAPPABLE, TTM leaves the pages to us (no TTM swapout or pages_limit
++	 * accounting) but still maps them for the CPU.
++	 */
++	if (amdgpu_orbis_shrinker_tt_eligible(adev, bo)) {
++		gtt->ttm.page_flags |= TTM_TT_FLAG_EXTERNAL | TTM_TT_FLAG_EXTERNAL_MAPPABLE;
++		if (ttm_tt_setup_backup(&gtt->ttm)) {
++			gtt->ttm.page_flags &= ~(TTM_TT_FLAG_EXTERNAL | TTM_TT_FLAG_EXTERNAL_MAPPABLE);
++		} else {
++			gtt->orbis_backup = true;
++			gtt->orbis_purgeable = !!(abo->flags & AMDGPU_GEM_CREATE_DISCARDABLE);
++		}
++	}
+ 	return &gtt->ttm;
+ }
+ 
+@@ -1154,20 +1189,42 @@ static int amdgpu_ttm_tt_populate(struct ttm_device *bdev,
+ 		return 0;
+ 	}
+ 
+-	if (ttm->page_flags & TTM_TT_FLAG_EXTERNAL)
++	/* imported dma-bufs: pages belong to the exporter */
++	if ((ttm->page_flags & TTM_TT_FLAG_EXTERNAL) &&
++	    !(ttm->page_flags & TTM_TT_FLAG_EXTERNAL_MAPPABLE))
+ 		return 0;
+ 
+ 	if (adev->mman.ttm_pools && gtt->pool_id >= 0)
+ 		pool = &adev->mman.ttm_pools[gtt->pool_id];
+ 	else
+ 		pool = &adev->mman.bdev.pool;
+-	ret = ttm_pool_alloc(pool, ttm, ctx);
+-	if (ret)
+-		return ret;
++
++	if (gtt->orbis_backup && ttm_tt_is_backed_up(ttm) && !gtt->orbis_purged) {
++		/* ge-0014: read the content back from the shmem backup (default pool only) */
++		ret = ttm_tt_restore(bdev, ttm, ctx);
++		if (ret)
++			return ret;
++		amdgpu_orbis_shrinker_restored(adev, gtt->orbis_backed_pages);
++		gtt->orbis_backed_pages = 0;
++	} else {
++		if (gtt->orbis_backup && ttm_tt_is_backed_up(ttm)) {
++			/* purged discardable buffer: its content was given up, start fresh */
++			ttm_tt_clear_backed_up(ttm);
++			gtt->orbis_purged = false;
++		}
++		ret = ttm_pool_alloc(pool, ttm, ctx);
++		if (ret)
++			return ret;
++	}
+ 
+ 	for (i = 0; i < ttm->num_pages; ++i)
+ 		ttm->pages[i]->mapping = bdev->dev_mapping;
+ 
++	if (gtt->orbis_backup && !gtt->orbis_accounted) {
++		amdgpu_orbis_shrinker_account(adev, gtt->orbis_purgeable, ttm->num_pages);
++		gtt->orbis_accounted = true;
++	}
++
+ 	return 0;
+ }
+ 
+@@ -1187,6 +1244,12 @@ static void amdgpu_ttm_tt_unpopulate(struct ttm_device *bdev,
+ 
+ 	amdgpu_ttm_backend_unbind(bdev, ttm);
+ 
++	if (gtt->orbis_accounted) {
++		amdgpu_orbis_shrinker_account(amdgpu_ttm_adev(bdev), gtt->orbis_purgeable,
++					      -(long)ttm->num_pages);
++		gtt->orbis_accounted = false;
++	}
++
+ 	if (gtt->userptr) {
+ 		amdgpu_ttm_tt_set_user_pages(ttm, NULL);
+ 		kfree(ttm->sg);
+@@ -1194,7 +1257,8 @@ static void amdgpu_ttm_tt_unpopulate(struct ttm_device *bdev,
+ 		return;
+ 	}
+ 
+-	if (ttm->page_flags & TTM_TT_FLAG_EXTERNAL)
++	if ((ttm->page_flags & TTM_TT_FLAG_EXTERNAL) &&
++	    !(ttm->page_flags & TTM_TT_FLAG_EXTERNAL_MAPPABLE))
+ 		return;
+ 
+ 	for (i = 0; i < ttm->num_pages; ++i)
+@@ -1210,6 +1274,78 @@ static void amdgpu_ttm_tt_unpopulate(struct ttm_device *bdev,
+ 	return ttm_pool_free(pool, ttm);
+ }
+ 
++static bool amdgpu_ttm_bo_eviction_valuable(struct ttm_buffer_object *bo,
++					    const struct ttm_place *place);
++
++/**
++ * amdgpu_ttm_orbis_shrink_bo - NickLabs Orbis ge-0014: back up or purge one buffer
++ * @ctx: operation context of the shrinker walk
++ * @bo: buffer object, reserved and referenced by the caller (LRU cursor)
++ * @purge: drop the content (AMDGPU_GEM_CREATE_DISCARDABLE buffers only)
++ * @writeback: ask for immediate writeout of the backup to swap
++ * @scanned: incremented by the pages examined
++ *
++ * Moves the buffer to SYSTEM through ttm_bo_shrink() (the regular TT->SYSTEM move: VM
++ * invalidation via move_notify, GART unbind) and backs its pages up into shmem, or purges
++ * them. Imported or exported dma-bufs, userptr buffers, kernel buffers and TTM ghost objects
++ * are never touched. Returns pages backed up/purged, or a negative error (-EBUSY: skip).
++ */
++long amdgpu_ttm_orbis_shrink_bo(struct ttm_operation_ctx *ctx, struct ttm_buffer_object *bo,
++				bool purge, bool writeback, unsigned long *scanned)
++{
++	struct ttm_place place = { .mem_type = bo->resource->mem_type };
++	struct amdgpu_device *adev = amdgpu_ttm_adev(bo->bdev);
++	struct ttm_tt *ttm = bo->ttm;
++	struct amdgpu_ttm_tt *gtt;
++	pgoff_t i;
++	long lret;
++
++	if (!ttm || !(ttm->page_flags & TTM_TT_FLAG_EXTERNAL_MAPPABLE))
++		return -EBUSY;
++	gtt = ttm_to_amdgpu_ttm_tt(ttm);
++	if (!gtt->orbis_backup || gtt->userptr || purge != gtt->orbis_purgeable)
++		return -EBUSY;
++	/* ghost objects from pipelined moves are not amdgpu_bos: TTM frees them itself */
++	if (!amdgpu_bo_is_amdgpu_bo(bo))
++		return -EBUSY;
++	/* shared with another driver or process through dma-buf: the importer maps the pages */
++	if (bo->base.dma_buf || bo->base.import_attach)
++		return -EBUSY;
++	if (!amdgpu_ttm_bo_eviction_valuable(bo, &place))
++		return -EBUSY;
++
++	*scanned += ttm->num_pages;
++
++	/* freed pages must not keep the device mapping (set in amdgpu_ttm_tt_populate) */
++	for (i = 0; i < ttm->num_pages; ++i)
++		if (ttm->pages[i])
++			ttm->pages[i]->mapping = NULL;
++
++	lret = ttm_bo_shrink(ctx, bo, (struct ttm_bo_shrink_flags)
++			     { .purge = purge, .writeback = writeback, .allow_move = true });
++
++	if (lret > 0) {
++		/* the tt is no longer populated: its pages left the shrinkable count */
++		if (gtt->orbis_accounted) {
++			amdgpu_orbis_shrinker_account(adev, gtt->orbis_purgeable, -(long)ttm->num_pages);
++			gtt->orbis_accounted = false;
++		}
++		if (purge) {
++			gtt->orbis_purged = true;
++		} else {
++			gtt->orbis_backed_pages += lret;
++		}
++		amdgpu_orbis_shrinker_shrunk(adev, purge, lret);
++	} else if (ttm_tt_is_populated(ttm)) {
++		/* nothing was taken: put the device mapping back */
++		for (i = 0; i < ttm->num_pages; ++i)
++			if (ttm->pages[i])
++				ttm->pages[i]->mapping = bo->bdev->dev_mapping;
++	}
++
++	return lret;
++}
++
+ /**
+  * amdgpu_ttm_tt_get_userptr - Return the userptr GTT ttm_tt for the current
+  * task
+@@ -1254,10 +1390,20 @@ int amdgpu_ttm_tt_set_userptr(struct ttm_buffer_object *bo,
+ 			return -ENOMEM;
+ 	}
+ 
++	gtt = ttm_to_amdgpu_ttm_tt(bo->ttm);
++	/*
++	 * ge-0014: userptr pages are ordinary process memory, reclaimed by the core VM through
++	 * HMM; they are never backed up by the Orbis shrinker. The unused shmem backup file is
++	 * released by ttm_tt_fini().
++	 */
++	if (gtt->orbis_backup) {
++		WARN_ON(gtt->orbis_accounted);
++		bo->ttm->page_flags &= ~TTM_TT_FLAG_EXTERNAL_MAPPABLE;
++		gtt->orbis_backup = false;
++	}
++
+ 	/* Set TTM_TT_FLAG_EXTERNAL before populate but after create. */
+ 	bo->ttm->page_flags |= TTM_TT_FLAG_EXTERNAL;
+-
+-	gtt = ttm_to_amdgpu_ttm_tt(bo->ttm);
+ 	gtt->userptr = addr;
+ 	gtt->userflags = flags;
+ 
+@@ -1875,6 +2021,9 @@ int amdgpu_ttm_init(struct amdgpu_device *adev)
+ 	}
+ 	adev->mman.initialized = true;
+ 
++	/* NickLabs Orbis ge-0014: before any buffer exists (eligibility is decided at tt creation) */
++	amdgpu_orbis_shrinker_init(adev);
++
+ 	/* Initialize VRAM pool with all of VRAM divided into pages */
+ 	r = amdgpu_vram_mgr_init(adev);
+ 	if (r) {
+@@ -2050,6 +2199,7 @@ void amdgpu_ttm_fini(struct amdgpu_device *adev)
+ 	if (!adev->mman.initialized)
+ 		return;
+ 
++	amdgpu_orbis_shrinker_fini(adev);
+ 	amdgpu_ttm_pools_fini(adev);
+ 
+ 	amdgpu_ttm_training_reserve_vram_fini(adev);
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.h b/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.h
+index 208b7d1d8..28a1b2bfb 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.h
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_ttm.h
+@@ -50,6 +50,8 @@ struct amdgpu_gtt_mgr {
+ 	spinlock_t lock;
+ };
+ 
++struct amdgpu_orbis_shrinker;
++
+ struct amdgpu_mman {
+ 	struct ttm_device		bdev;
+ 	struct ttm_pool			*ttm_pools;
+@@ -69,6 +71,8 @@ struct amdgpu_mman {
+ 
+ 	struct amdgpu_vram_mgr vram_mgr;
+ 	struct amdgpu_gtt_mgr gtt_mgr;
++	/* NickLabs Orbis ge-0014: PS4 GPU buffer shrinker, NULL when disabled */
++	struct amdgpu_orbis_shrinker *orbis_shrinker;
+ 	struct ttm_resource_manager preempt_mgr;
+ 
+ 	uint64_t		stolen_vga_size;
+diff --git a/drivers/gpu/drm/amd/amdgpu/liverpool_orbis.c b/drivers/gpu/drm/amd/amdgpu/liverpool_orbis.c
+index 0c8c13dd9..84b8b8f72 100644
+--- a/drivers/gpu/drm/amd/amdgpu/liverpool_orbis.c
++++ b/drivers/gpu/drm/amd/amdgpu/liverpool_orbis.c
+@@ -16,6 +16,11 @@
+  *                           lowering it below current use makes TTM evict GTT buffers to
+  *                           system pages instead of failing. Bounded by ttm.pages_limit
+  *                           (itself writable at runtime) and a 256 MiB floor.
++ *                           ge-0014: a value below current usage now trims at once
++ *                           (GTT buffers are evicted in LRU order until usage fits).
++ *   orbis_gtt_reclaim (rw)  ge-0014 shrinker counters (see liverpool_orbis_shrinker.c);
++ *                           writing "scan <pages> [writeback]" runs one reclaim pass for
++ *                           verification without waiting for memory pressure.
+  *
+  * The VRAM carve-out size is fixed by the loader before Linux starts (vram.txt); only
+  * the GTT side of the unified pool can move at runtime.
+@@ -28,6 +33,7 @@
+ 
+ #include "amdgpu.h"
+ #include "liverpool_orbis.h"
++#include "liverpool_orbis_shrinker.h"
+ 
+ #include "gca/gfx_7_2_d.h"
+ #include "gca/gfx_7_2_sh_mask.h"
+@@ -111,13 +117,49 @@ static ssize_t orbis_gtt_budget_store(struct device *dev, struct device_attribut
+ 	WRITE_ONCE(man->size, val);
+ 	dev_info(adev->dev, "Orbis: GTT budget %llu MiB -> %llu MiB (usage %llu MiB)\n",
+ 		 old >> 20, val >> 20, ttm_resource_manager_usage(man) >> 20);
++
++	/* ge-0014 active trim: do not wait for the next allocation to enforce a lower budget */
++	if (ttm_resource_manager_usage(man) > val) {
++		unsigned int evicted = 0;
++		long tr = amdgpu_orbis_gtt_trim(adev, val, &evicted);
++
++		dev_info(adev->dev, "Orbis: GTT trim evicted %u buffers, usage now %llu MiB%s\n",
++			 evicted, ttm_resource_manager_usage(man) >> 20,
++			 tr ? " (stopped early)" : "");
++		if (tr == -ERESTARTSYS || tr == -EINTR)
++			return tr;
++	}
+ 	return count;
+ }
+ static DEVICE_ATTR_RW(orbis_gtt_budget);
+ 
++static ssize_t orbis_gtt_reclaim_show(struct device *dev, struct device_attribute *attr, char *buf)
++{
++	return amdgpu_orbis_shrinker_report(drm_to_adev(dev_get_drvdata(dev)), buf);
++}
++
++static ssize_t orbis_gtt_reclaim_store(struct device *dev, struct device_attribute *attr,
++				       const char *buf, size_t count)
++{
++	struct amdgpu_device *adev = drm_to_adev(dev_get_drvdata(dev));
++	unsigned long pages;
++	char wb[16] = "";
++	long freed;
++
++	if (sscanf(buf, "scan %lu %15s", &pages, wb) < 1 || !pages)
++		return -EINVAL;
++	freed = amdgpu_orbis_shrinker_scan(adev, pages, !strcmp(wb, "writeback"));
++	if (freed < 0)
++		return freed;
++	dev_info(adev->dev, "Orbis: reclaim scan of %lu pages: %ld backed up or purged\n", pages, freed);
++	return count;
++}
++static DEVICE_ATTR_RW(orbis_gtt_reclaim);
++
+ static struct attribute *liverpool_orbis_attrs[] = {
+ 	&dev_attr_orbis_engine_busy.attr,
+ 	&dev_attr_orbis_gtt_budget.attr,
++	&dev_attr_orbis_gtt_reclaim.attr,
+ 	NULL,
+ };
+ 
+diff --git a/drivers/gpu/drm/amd/amdgpu/liverpool_orbis_shrinker.c b/drivers/gpu/drm/amd/amdgpu/liverpool_orbis_shrinker.c
+new file mode 100644
+index 000000000..b80c85d35
+--- /dev/null
++++ b/drivers/gpu/drm/amd/amdgpu/liverpool_orbis_shrinker.c
+@@ -0,0 +1,339 @@
++// SPDX-License-Identifier: MIT
++/*
++ * liverpool_orbis_shrinker.c - NickLabs Orbis ge-0014: reclaimable GPU buffers on the PS4.
++ *
++ * The PS4 CPU and GPU share one GDDR5 pool. GPU buffers in the GTT and SYSTEM domains are
++ * ordinary Linux pages, but upstream amdgpu (6.15) never gives them back under memory
++ * pressure: its only path is TTM's swapout when ttm.pages_limit is exceeded, at allocation
++ * time. An idle game texture therefore pins RAM until the process exits or the OOM killer runs.
++ *
++ * This file registers a memory shrinker that uses the TTM backup helpers added for xe in
++ * 6.15 (ttm_bo_shrink, ttm_tt_setup_backup, ttm_backup shmem):
++ *
++ *  - eligible buffers (user buffers, not imported/exported dma-bufs, not userptr, not pinned,
++ *    idle or waitable) are moved to SYSTEM (GART unbind, VM invalidation through the normal
++ *    move path) and their pages are copied into a per-buffer shmem object, then freed;
++ *  - shmem pages are ordinary swappable pages: kswapd writes them to swap (zram on Orbis)
++ *    like any other anonymous memory. Only then is RAM actually compressed or freed. Moving
++ *    a buffer out of GTT by itself frees nothing, which is why trimming (below) and this
++ *    shrinker work together;
++ *  - AMDGPU_GEM_CREATE_DISCARDABLE buffers are purged (content dropped) instead;
++ *  - the next CPU fault or GPU validation repopulates the buffer from shmem
++ *    (amdgpu_ttm_tt_populate -> ttm_tt_restore).
++ *
++ * Active trim: writing a lower orbis_gtt_budget evicts GTT buffers (LRU order) until usage is
++ * within the budget, instead of waiting for the next allocation.
++ *
++ * Off by default (amdgpu.orbis_shrinker=1 on the kernel command line enables it, PS4 only):
++ * the backup capability must be set when a buffer's page table is created, so it cannot be
++ * switched at runtime. Counters: sysfs orbis_gtt_reclaim on the GPU's PCI device.
++ *
++ * Status: written against the pinned 6.15.4 TTM interfaces; not compiled or tested here.
++ */
++
++#include <linux/shrinker.h>
++#include <linux/sysfs.h>
++#include <linux/swap.h>
++#include <drm/ttm/ttm_backup.h>
++#include <drm/ttm/ttm_bo.h>
++#include <drm/ttm/ttm_tt.h>
++
++#include "amdgpu.h"
++#include "liverpool_orbis_shrinker.h"
++
++static int amdgpu_orbis_shrinker_param;
++module_param_named(orbis_shrinker, amdgpu_orbis_shrinker_param, int, 0444);
++MODULE_PARM_DESC(orbis_shrinker,
++		 "PS4 (NickLabs Orbis): make idle GPU buffers reclaimable under memory pressure (0 = off (default), 1 = on)");
++
++#define ORBIS_TRIM_MAX_EVICTIONS	8192
++
++struct amdgpu_orbis_shrinker {
++	struct amdgpu_device *adev;
++	struct shrinker *shrink;
++	/* populated, backup-capable pages (an upper bound: busy or pinned buffers are included) */
++	atomic_long_t shrinkable_pages;
++	atomic_long_t purgeable_pages;
++	/* pages currently held in shmem backups instead of GPU page arrays */
++	atomic_long_t backed_up_pages;
++	atomic64_t shrunk_total;
++	atomic64_t purged_total;
++	atomic64_t restored_total;
++	atomic64_t scans;
++	atomic64_t trim_evictions;
++};
++
++static struct amdgpu_orbis_shrinker *to_orbis(struct amdgpu_device *adev)
++{
++	return adev->mman.orbis_shrinker;
++}
++
++static bool amdgpu_orbis_is_ps4(struct amdgpu_device *adev)
++{
++	return adev->asic_type == CHIP_LIVERPOOL || adev->asic_type == CHIP_GLADIUS;
++}
++
++bool amdgpu_orbis_shrinker_tt_eligible(struct amdgpu_device *adev, struct ttm_buffer_object *bo)
++{
++	if (!to_orbis(adev))
++		return false;
++	/* user buffers only: kernel buffers (rings, page tables, firmware) are never shrunk,
++	 * and sg buffers are imported dma-bufs whose pages belong to the exporter */
++	if (bo->type != ttm_bo_type_device)
++		return false;
++	return true;
++}
++
++void amdgpu_orbis_shrinker_account(struct amdgpu_device *adev, bool purgeable, long pages)
++{
++	struct amdgpu_orbis_shrinker *s = to_orbis(adev);
++
++	if (!s)
++		return;
++	atomic_long_add(pages, purgeable ? &s->purgeable_pages : &s->shrinkable_pages);
++}
++
++void amdgpu_orbis_shrinker_shrunk(struct amdgpu_device *adev, bool purged, long pages)
++{
++	struct amdgpu_orbis_shrinker *s = to_orbis(adev);
++
++	if (!s || pages <= 0)
++		return;
++	if (purged) {
++		atomic64_add(pages, &s->purged_total);
++	} else {
++		atomic64_add(pages, &s->shrunk_total);
++		atomic_long_add(pages, &s->backed_up_pages);
++	}
++}
++
++void amdgpu_orbis_shrinker_restored(struct amdgpu_device *adev, long pages)
++{
++	struct amdgpu_orbis_shrinker *s = to_orbis(adev);
++
++	if (!s || pages <= 0)
++		return;
++	atomic64_add(pages, &s->restored_total);
++	atomic_long_sub(pages, &s->backed_up_pages);
++}
++
++void amdgpu_orbis_shrinker_dropped(struct amdgpu_device *adev, long pages)
++{
++	struct amdgpu_orbis_shrinker *s = to_orbis(adev);
++
++	if (!s || pages <= 0)
++		return;
++	atomic_long_sub(pages, &s->backed_up_pages);
++}
++
++static long amdgpu_orbis_walk(struct amdgpu_orbis_shrinker *s, struct ttm_operation_ctx *ctx,
++			      bool purge, bool writeback, unsigned long to_scan,
++			      unsigned long *scanned)
++{
++	static const unsigned int mem_types[] = { TTM_PL_SYSTEM, TTM_PL_TT };
++	struct ttm_device *bdev = &s->adev->mman.bdev;
++	long freed = 0, lret;
++	unsigned int i;
++
++	for (i = 0; i < ARRAY_SIZE(mem_types) && *scanned < to_scan; i++) {
++		struct ttm_resource_manager *man = ttm_manager_type(bdev, mem_types[i]);
++		struct ttm_bo_lru_cursor curs;
++		struct ttm_buffer_object *bo;
++
++		if (!man || !man->use_tt)
++			continue;
++
++		/* trylock only (shrinker context): contended buffers are skipped */
++		ttm_bo_lru_for_each_reserved_guarded(&curs, man, ctx, bo) {
++			if (!ttm_bo_shrink_suitable(bo, ctx))
++				continue;
++
++			lret = amdgpu_ttm_orbis_shrink_bo(ctx, bo, purge, writeback, scanned);
++			if (lret == -EINTR || lret == -ERESTARTSYS)
++				return freed ? freed : lret;
++			if (lret > 0)
++				freed += lret;
++			/* -EBUSY / -ENOSPC / -ENOMEM: not this buffer, try the next one */
++			if (*scanned >= to_scan)
++				break;
++		}
++	}
++	return freed;
++}
++
++static unsigned long amdgpu_orbis_count(struct shrinker *shrink, struct shrink_control *sc)
++{
++	struct amdgpu_orbis_shrinker *s = shrink->private_data;
++	long shrinkable = max(0L, atomic_long_read(&s->shrinkable_pages));
++	long purgeable = max(0L, atomic_long_read(&s->purgeable_pages));
++	unsigned long n = 0;
++
++	/* backing up needs to write to shmem (__GFP_FS); purging does not */
++	if (sc->gfp_mask & __GFP_FS)
++		n = min_t(unsigned long, ttm_backup_bytes_avail() >> PAGE_SHIFT, shrinkable);
++	n += purgeable;
++
++	return n ? n : SHRINK_EMPTY;
++}
++
++static unsigned long amdgpu_orbis_scan(struct shrinker *shrink, struct shrink_control *sc)
++{
++	struct amdgpu_orbis_shrinker *s = shrink->private_data;
++	struct ttm_operation_ctx ctx = {
++		.interruptible = false,
++		/* direct reclaim must not wait for the GPU; kswapd may */
++		.no_wait_gpu = ttm_bo_shrink_avoid_wait(),
++	};
++	bool can_backup = !!(sc->gfp_mask & __GFP_FS);
++	/* ask for immediate writeout to swap only where I/O is allowed */
++	bool writeback = !ctx.no_wait_gpu && (sc->gfp_mask & __GFP_IO);
++	unsigned long scanned = 0, freed = 0;
++	long lret;
++
++	atomic64_inc(&s->scans);
++
++	/* discardable buffers first: dropping them costs nothing */
++	if (atomic_long_read(&s->purgeable_pages) > 0) {
++		lret = amdgpu_orbis_walk(s, &ctx, true, false, sc->nr_to_scan, &scanned);
++		if (lret > 0)
++			freed += lret;
++	}
++
++	if (scanned < sc->nr_to_scan && can_backup) {
++		lret = amdgpu_orbis_walk(s, &ctx, false, writeback, sc->nr_to_scan, &scanned);
++		if (lret > 0)
++			freed += lret;
++	}
++
++	sc->nr_scanned = scanned;
++	return scanned ? freed : SHRINK_STOP;
++}
++
++/* Manual scan for verification (sysfs "scan <pages>"): process context, may wait for the GPU. */
++long amdgpu_orbis_shrinker_scan(struct amdgpu_device *adev, unsigned long nr_pages, bool writeback)
++{
++	struct amdgpu_orbis_shrinker *s = to_orbis(adev);
++	struct ttm_operation_ctx ctx = { .interruptible = true, .no_wait_gpu = false };
++	unsigned long scanned = 0;
++	long freed = 0, lret;
++
++	if (!s)
++		return -ENODEV;
++	atomic64_inc(&s->scans);
++	lret = amdgpu_orbis_walk(s, &ctx, true, false, nr_pages, &scanned);
++	if (lret < 0)
++		return lret;
++	freed += lret;
++	if (scanned < nr_pages) {
++		lret = amdgpu_orbis_walk(s, &ctx, false, writeback, nr_pages, &scanned);
++		if (lret < 0)
++			return freed ? freed : lret;
++		freed += lret;
++	}
++	return freed;
++}
++
++/*
++ * Active trim: evict GTT buffers in LRU order until the GTT manager's usage is at or below
++ * target_bytes. Evicted buffers land in SYSTEM (still RAM, no longer GPU-mapped); with the
++ * shrinker enabled they become reclaimable there. Returns 0, or a negative error when the
++ * walk stopped early (e.g. a signal, or a buffer that could not be moved).
++ */
++long amdgpu_orbis_gtt_trim(struct amdgpu_device *adev, u64 target_bytes, unsigned int *evicted)
++{
++	struct ttm_device *bdev = &adev->mman.bdev;
++	struct ttm_resource_manager *man = ttm_manager_type(bdev, TTM_PL_TT);
++	struct ttm_operation_ctx ctx = { .interruptible = true, .no_wait_gpu = false };
++	struct amdgpu_orbis_shrinker *s = to_orbis(adev);
++	unsigned int n = 0;
++	int r = 0;
++
++	*evicted = 0;
++	if (!man)
++		return -ENODEV;
++
++	while (ttm_resource_manager_usage(man) > target_bytes && n < ORBIS_TRIM_MAX_EVICTIONS) {
++		r = ttm_bo_evict_first(bdev, man, &ctx);
++		if (r)
++			break;
++		n++;
++		cond_resched();
++	}
++	*evicted = n;
++	if (s)
++		atomic64_add(n, &s->trim_evictions);
++	if (r == -ENOENT)
++		r = 0;
++	return r;
++}
++
++ssize_t amdgpu_orbis_shrinker_report(struct amdgpu_device *adev, char *buf)
++{
++	struct amdgpu_orbis_shrinker *s = to_orbis(adev);
++
++	if (!s)
++		return sysfs_emit(buf, "enabled=0 reason=%s\n",
++				  !amdgpu_orbis_shrinker_param ? "off(amdgpu.orbis_shrinker=0)" :
++				  adev->mman.ttm_pools ? "partitioned-pools" :
++				  adev->mman.bdev.pool.use_dma_alloc ? "dma-alloc-pool" : "unsupported");
++
++	return sysfs_emit(buf,
++			  "enabled=1 shrinkable_pages=%ld purgeable_pages=%ld backed_up_pages=%ld "
++			  "shrunk_total=%lld purged_total=%lld restored_total=%lld scans=%lld "
++			  "trim_evictions=%lld backup_bytes_avail=%llu page_size=%lu\n",
++			  max(0L, atomic_long_read(&s->shrinkable_pages)),
++			  max(0L, atomic_long_read(&s->purgeable_pages)),
++			  max(0L, atomic_long_read(&s->backed_up_pages)),
++			  (long long)atomic64_read(&s->shrunk_total),
++			  (long long)atomic64_read(&s->purged_total),
++			  (long long)atomic64_read(&s->restored_total),
++			  (long long)atomic64_read(&s->scans),
++			  (long long)atomic64_read(&s->trim_evictions),
++			  (unsigned long long)ttm_backup_bytes_avail(), PAGE_SIZE);
++}
++
++void amdgpu_orbis_shrinker_init(struct amdgpu_device *adev)
++{
++	struct amdgpu_orbis_shrinker *s;
++
++	adev->mman.orbis_shrinker = NULL;
++	if (!amdgpu_orbis_shrinker_param || !amdgpu_orbis_is_ps4(adev))
++		return;
++	/* ttm_tt_backup()/ttm_tt_restore() use the device's default pool */
++	if (adev->mman.ttm_pools || adev->mman.bdev.pool.use_dma_alloc) {
++		dev_info(adev->dev, "Orbis: GPU buffer shrinker not available with this TTM pool setup\n");
++		return;
++	}
++
++	s = kzalloc(sizeof(*s), GFP_KERNEL);
++	if (!s)
++		return;
++	s->shrink = shrinker_alloc(0, "drm-amdgpu-orbis:%s", adev_to_drm(adev)->unique ?: "ps4");
++	if (!s->shrink) {
++		kfree(s);
++		return;
++	}
++	s->adev = adev;
++	atomic_long_set(&s->shrinkable_pages, 0);
++	atomic_long_set(&s->purgeable_pages, 0);
++	atomic_long_set(&s->backed_up_pages, 0);
++	s->shrink->count_objects = amdgpu_orbis_count;
++	s->shrink->scan_objects = amdgpu_orbis_scan;
++	s->shrink->private_data = s;
++	/* publish before buffers are created: eligibility checks this pointer */
++	adev->mman.orbis_shrinker = s;
++	shrinker_register(s->shrink);
++	dev_info(adev->dev, "Orbis: GPU buffer shrinker enabled (idle GTT/system buffers reclaimable via shmem/swap)\n");
++}
++
++void amdgpu_orbis_shrinker_fini(struct amdgpu_device *adev)
++{
++	struct amdgpu_orbis_shrinker *s = to_orbis(adev);
++
++	if (!s)
++		return;
++	/* stops scans and waits for running ones; buffers keep their backups until freed */
++	shrinker_free(s->shrink);
++	adev->mman.orbis_shrinker = NULL;
++	kfree(s);
++}
+diff --git a/drivers/gpu/drm/amd/amdgpu/liverpool_orbis_shrinker.h b/drivers/gpu/drm/amd/amdgpu/liverpool_orbis_shrinker.h
+new file mode 100644
+index 000000000..7b4a9b40d
+--- /dev/null
++++ b/drivers/gpu/drm/amd/amdgpu/liverpool_orbis_shrinker.h
+@@ -0,0 +1,40 @@
++/* SPDX-License-Identifier: MIT */
++/*
++ * NickLabs Orbis ge-0014: reclaimable GPU buffers on the PS4 (Liverpool/Gladius).
++ */
++#ifndef LIVERPOOL_ORBIS_SHRINKER_H
++#define LIVERPOOL_ORBIS_SHRINKER_H
++
++#include <linux/types.h>
++
++struct amdgpu_device;
++struct ttm_buffer_object;
++struct ttm_operation_ctx;
++
++#ifdef CONFIG_DRM_AMDGPU_CIK
++void amdgpu_orbis_shrinker_init(struct amdgpu_device *adev);
++void amdgpu_orbis_shrinker_fini(struct amdgpu_device *adev);
++bool amdgpu_orbis_shrinker_tt_eligible(struct amdgpu_device *adev, struct ttm_buffer_object *bo);
++void amdgpu_orbis_shrinker_account(struct amdgpu_device *adev, bool purgeable, long pages);
++void amdgpu_orbis_shrinker_restored(struct amdgpu_device *adev, long pages);
++void amdgpu_orbis_shrinker_dropped(struct amdgpu_device *adev, long pages);
++void amdgpu_orbis_shrinker_shrunk(struct amdgpu_device *adev, bool purged, long pages);
++long amdgpu_orbis_shrinker_scan(struct amdgpu_device *adev, unsigned long nr_pages, bool writeback);
++long amdgpu_orbis_gtt_trim(struct amdgpu_device *adev, u64 target_bytes, unsigned int *evicted);
++ssize_t amdgpu_orbis_shrinker_report(struct amdgpu_device *adev, char *buf);
++#else
++static inline void amdgpu_orbis_shrinker_init(struct amdgpu_device *adev) { }
++static inline void amdgpu_orbis_shrinker_fini(struct amdgpu_device *adev) { }
++static inline bool amdgpu_orbis_shrinker_tt_eligible(struct amdgpu_device *adev,
++						     struct ttm_buffer_object *bo) { return false; }
++static inline void amdgpu_orbis_shrinker_account(struct amdgpu_device *adev, bool purgeable, long pages) { }
++static inline void amdgpu_orbis_shrinker_restored(struct amdgpu_device *adev, long pages) { }
++static inline void amdgpu_orbis_shrinker_dropped(struct amdgpu_device *adev, long pages) { }
++static inline void amdgpu_orbis_shrinker_shrunk(struct amdgpu_device *adev, bool purged, long pages) { }
++#endif
++
++/* in amdgpu_ttm.c: shrink or purge one reserved buffer object (see there) */
++long amdgpu_ttm_orbis_shrink_bo(struct ttm_operation_ctx *ctx, struct ttm_buffer_object *bo,
++				bool purge, bool writeback, unsigned long *scanned);
++
++#endif
+-- 
+2.43.0
+
