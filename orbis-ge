@@ -6,6 +6,8 @@
 #                  [--base-stage0-image ~/orbis-release/orbis-0.2.0-stage0.img] [--jobs N] [--research-uvd]
 #
 #   ./orbis-ge kernel | loader | pack | image | stage0 | verify | status   (single steps, same options)
+#   ./orbis-ge runners [--only GE-Proton10-34,dxvk-2.7.1]   download + verify the pinned Proton/DXVK/VKD3D
+#              runners into out/runners/ (offline bundle; several GB; not part of 'all')
 #
 # Steps (each skipped when its output already exists; --rebuild redoes it):
 #   1 kernel   kernel/build-ge-kernel.sh   -> out/kernel-ge/          (GE kernel, 20-60 min)
@@ -23,7 +25,7 @@ set -euo pipefail
 R="$(cd "$(dirname "$0")" && pwd)"
 cd "$R"
 cmd="${1:-help}"; [ $# -gt 0 ] && shift
-orbis_src=""; base=""; base0=""; jobs=""; uvd=0; rebuild=0
+orbis_src=""; base=""; base0=""; jobs=""; uvd=0; rebuild=0; only=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --orbis-src) orbis_src="$(realpath "$2")"; shift 2 ;;
@@ -32,6 +34,7 @@ while [ $# -gt 0 ]; do
     --jobs) jobs="$2"; shift 2 ;;
     --research-uvd) uvd=1; shift ;;
     --rebuild) rebuild=1; shift ;;
+    --only) only="$2"; shift 2 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -120,6 +123,24 @@ json.dump(rec, open("out/ORBIS-GE-RELEASE-RECEIPT.json", "w"), indent=1)
 print(json.dumps({k: rec[k] for k in ("kernel", "pack", "image", "stage0_image")}, indent=1))
 PY
 }
+step_runners() {
+  say "runners: pinned GE-Proton / DXVK / VKD3D-Proton -> out/runners (verified: upstream SHA-512 + gaming/runners.lock.json)"
+  mkdir -p out/runners out/native-host
+  local fetch=(orbis-games fetch --dest out/runners --lock gaming/runners.lock.json ${only:+--only "$only"})
+  if command -v cargo >/dev/null; then
+    ( cd rust && CARGO_TARGET_DIR="$R/out/native-host" cargo build --release --offline --locked -p orbis-games )
+    ORBIS_GAMES_CATALOG="$R/gaming/runners.json" "out/native-host/release/${fetch[0]}" "${fetch[@]:1}"
+  else
+    # no Rust on the Nobara: build and fetch inside the graphics build container (made by './orbis-ge pack')
+    local engine; engine="$(command -v podman || command -v docker)" || { echo "need cargo or podman" >&2; exit 2; }
+    sudo "$engine" run --rm -v "$R":/src:z -w /src "orbis-gfx-build:$ver" bash -c \
+      "cd rust && CARGO_TARGET_DIR=/src/out/native-host cargo build --release --offline --locked -p orbis-games && cd /src && \
+       ORBIS_GAMES_CATALOG=/src/gaming/runners.json out/native-host/release/${fetch[*]}"
+    sudo chown -R "$(id -u):$(id -g)" out/runners out/native-host gaming/runners.lock.json
+  fi
+  echo "   bundle: $R/out/runners (SHA256SUMS inside). New SHA-256 entries were added to gaming/runners.lock.json: review + commit."
+  echo "   console: scp -r out/runners <user>@<ps4-ip>:~/runners && ssh <user>@<ps4-ip> orbis-games install --bundle ~/runners"
+}
 step_status() {
   for f in out/kernel-ge/build-manifest.json out/kernel-ge-uvd/build-manifest.json out/loader-ge/build.json "$PACK" "$IMG" "$IMG0"; do
     printf '%-60s %s\n' "$f" "$([ -e "$f" ] && echo present || echo missing)"
@@ -140,5 +161,6 @@ case "$cmd" in
   stage0) step_stage0 ;;
   verify) step_verify ;;
   status) step_status ;;
-  *) sed -n 2,22p "$0"; [ "$cmd" = help ] || exit 2 ;;
+  runners) step_runners ;;
+  *) sed -n 2,24p "$0"; [ "$cmd" = help ] || exit 2 ;;
 esac

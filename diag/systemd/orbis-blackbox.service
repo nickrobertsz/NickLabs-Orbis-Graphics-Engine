@@ -2,7 +2,7 @@
 Description=NickLabs Orbis Black Box: persistent per-boot flight recorder (kernel log, GPU state, telemetry)
 Documentation=file:///usr/share/doc/orbis-graphics/GRAPHICS-ENGINE-BLACKBOX.md
 DefaultDependencies=no
-After=local-fs.target systemd-journald.service
+After=local-fs.target systemd-journald.service orbis-time.service
 Before=sysinit.target shutdown.target
 Conflicts=shutdown.target
 RequiresMountsFor=/var/lib

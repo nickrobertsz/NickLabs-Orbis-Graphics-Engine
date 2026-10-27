@@ -47,6 +47,11 @@ COMMANDS = [
     ("graphics/clinfo.txt", ["clinfo", "-l"]),
     ("graphics/drm_info.txt", ["drm_info"]),
     ("system/sensors.txt", ["sensors"]),
+    # native components (orbis-native); skipped when not installed
+    ("native/orbis-perf-status.json", ["orbis-perf", "status", "--json"]),
+    ("native/orbis-perf-doctor.json", ["orbis-perf", "doctor", "--json"]),
+    ("native/orbis-time-status.json", ["orbis-time", "status", "--json"]),
+    ("native/orbis-games-runners.json", ["orbis-games", "runners", "--json"]),
 ]
 
 
@@ -107,7 +112,13 @@ def collect(out: Path | None = None, run=runner.run) -> Path:
                      ("var/lib/orbis-graphics/integration.json", "graphics/integration.json"),
                      ("var/lib/orbis-graphics/video-test.json", "graphics/video-test.json"),
                      ("var/lib/orbis-graphics/ai-vulkan-tuning.json", "graphics/ai-vulkan-tuning.json"),
-                     ("var/lib/orbis/gpu-gate.json", "graphics/gpu-gate.json")):
+                     ("var/lib/orbis/gpu-gate.json", "graphics/gpu-gate.json"),
+                     ("run/orbis/time-source.json", "native/time-source.json"),
+                     ("run/orbis/perf/state.json", "native/perf-state.json"),
+                     ("run/orbis/perf/scx-failures.json", "native/scx-failures.json"),
+                     ("var/lib/orbis/perf/restore-mode.json", "native/perf-restore-mode.json"),
+                     ("var/lib/orbis/perf/restore-session.json", "native/perf-restore-session.json"),
+                     ("var/lib/orbis/games/vulkan-caps.json", "native/vulkan-caps.json")):
         f = p(src)
         if f.exists():
             (out / dst).parent.mkdir(parents=True, exist_ok=True)

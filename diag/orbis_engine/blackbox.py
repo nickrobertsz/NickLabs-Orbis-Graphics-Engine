@@ -100,6 +100,14 @@ def current_dir() -> Path | None:
     return None
 
 
+def _time_source() -> dict | None:
+    try:
+        v = json.loads(p("run/orbis/time-source.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return {k: v.get(k) for k in ("source", "valid", "steps") if k in v}
+
+
 def start_boot() -> Path:
     """Create this boot's record (idempotent) and judge the previous boot."""
     existing = current_dir()
@@ -120,7 +128,9 @@ def start_boot() -> Path:
     rec = {"schema": "orbis-blackbox-boot/1", "seq": seq, "boot_id": bid, "time": now_iso(),
            "blackbox": __version__, "kernel": read(p("proc/sys/kernel/osrelease")), "cmdline": sysfs.cmdline(),
            "loader": {"token": cl.get("orbis.loader"), "vram_mb": cl.get("orbis.vram_mb"), "gtt_mb": cl.get("orbis.gtt_mb")},
-           "versions": telemetry.versions(), "previous_boot": verdict}
+           "versions": telemetry.versions(), "previous_boot": verdict,
+           # where this boot's wall clock came from (orbis-time); a 1970 "time" above means no source
+           "clock": {"loader_time": cl.get("orbis.time") or cl.get("time"), "source": _time_source()}}
     try:
         g = sysfs.primary_gpu()
         rec["gpu"] = {"id": f"{g.vendor}:{g.device}", "driver": g.driver, "firmware": sysfs.firmware_info(g)} if g else None

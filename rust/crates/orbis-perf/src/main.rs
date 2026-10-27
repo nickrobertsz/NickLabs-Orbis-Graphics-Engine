@@ -10,9 +10,11 @@
 //!   orbis-perf profiles [check]           per-game profiles found
 //!   orbis-perf scx-exec <scheduler>       ExecStart of orbis-scx@.service (execs the scheduler with its args)
 //!   orbis-perf policy [pc|gaming|ai]      show a mode's policy
+//!   orbis-perf doctor [--json]            on-device checks for the native components (exit 1 on FAIL)
 
 mod bench;
 mod control;
+mod doctor;
 mod games;
 mod hw;
 mod policy;
@@ -132,6 +134,11 @@ fn main() {
     let cmd = a.pos.first().map(String::as_str).unwrap_or("status");
     let out: Result<Value, String> = match cmd {
         "status" => Ok(status()),
+        "doctor" => {
+            let (v, failed) = doctor::run();
+            emit(&v, a.flag("json"));
+            std::process::exit(if failed { 1 } else { 0 });
+        }
         "policy" => Ok(policy_view(a.pos.get(1).map(String::as_str).unwrap_or(&policy::current_mode()))),
         "apply" => {
             let mut c = control::Controller::new();
@@ -188,7 +195,7 @@ fn main() {
             }
         }
         "-h" | "--help" | "help" => {
-            println!("orbis-perf status|policy|apply|daemon|restore|sched|games|profiles|scx-exec  [--json]");
+            println!("orbis-perf status|doctor|policy|apply|daemon|restore|sched|games|profiles|scx-exec  [--json]");
             return;
         }
         other => Err(format!("unknown command {other}")),

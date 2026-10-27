@@ -320,9 +320,14 @@ class BlackBoxTest(EngineBase):
         self._old_boot(1, "aaaaaaaa", True)
         self._old_boot(2, "bbbbbbbb", False, [{"kind": "display", "msg": "ps4-bridge hpd"},
                                               {"kind": "ring_timeout", "msg": "ring gfx timeout"}])
+        (self.root / "run/orbis").mkdir(parents=True, exist_ok=True)
+        (self.root / "run/orbis/time-source.json").write_text(json.dumps(
+            {"source": "loader", "valid": True, "steps": [{"step": "rtc", "result": "no hardware base"}], "other": 1}))
         d = blackbox.start_boot()
         self.assertEqual(d.name, "00003-1234abcd")
         bj = json.loads((d / "boot.json").read_text())
+        self.assertEqual(bj["clock"]["source"]["source"], "loader")       # time source recorded per boot
+        self.assertNotIn("other", bj["clock"]["source"])
         self.assertFalse(bj["previous_boot"]["clean_shutdown"])
         self.assertIn("ring_timeout", bj["previous_boot"]["summary"]["verdict"])
         self.assertEqual(blackbox.start_boot(), d)                     # idempotent

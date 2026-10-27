@@ -154,7 +154,8 @@ pub fn fetch(rs: &[Runner], dest: &Path, lock_path: &Path, only: &[String]) -> V
             }
         }
         let got = sha256_file(&out).unwrap_or_default();
-        let known = lock.at(&format!("sha256.{}", r.file)).and_then(Value::as_str).map(str::to_string);
+        // file names contain dots, so no dotted-path lookup here
+        let known = lock.get("sha256").and_then(|h| h.get(&r.file)).and_then(Value::as_str).map(str::to_string);
         let state = match known {
             Some(k) if k == got => "PASS",
             Some(_) => {
@@ -262,6 +263,31 @@ mod tests {
         extract_single_top(&ar, &d.join("compat"), &dst).unwrap();
         assert!(dst.join("proton").exists());
         assert_eq!(fsx::list_dir(&d.join("compat")).len(), 1);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn fetch_lock_detects_tampering() {
+        if Command::new("curl").arg("--version").output().is_err() {
+            eprintln!("curl missing: skipped");
+            return;
+        }
+        let d = std::env::temp_dir().join(format!("orbis-fetch-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("src/dxvk-0.0.1/x64")).unwrap();
+        std::fs::write(d.join("src/dxvk-0.0.1/x64/d3d11.dll"), "x").unwrap();
+        let ar = d.join("dxvk-0.0.1.tar.gz");
+        assert!(Command::new("tar").arg("-czf").arg(&ar).arg("-C").arg(d.join("src")).arg("dxvk-0.0.1").status().unwrap().success());
+        let r = Runner { id: "dxvk-0.0.1".into(), kind: "dxvk".into(), version: "0.0.1".into(), dxvk_line: None,
+            urls: vec!["file:///nonexistent/mirror.tar.gz".into(), format!("file://{}", ar.display())], sha512_url: None,
+            file: "dxvk-0.0.1.tar.gz".into(), install: "/nonexistent".into(), note: None };
+        let (dest, lock) = (d.join("bundle"), d.join("lock.json"));
+        let state = |v: &Value| v.get("results").unwrap().as_arr().unwrap()[0].get("state").unwrap().as_str().unwrap().to_string();
+        assert!(state(&fetch(std::slice::from_ref(&r), &dest, &lock, &[])).starts_with("PASS (first download"));
+        assert_eq!(state(&fetch(std::slice::from_ref(&r), &dest, &lock, &[])), "PASS"); // second run checks the lock
+        std::fs::write(dest.join("dxvk-0.0.1.tar.gz"), "tampered").unwrap();
+        assert_eq!(state(&fetch(std::slice::from_ref(&r), &dest, &lock, &[])), "FAIL");
+        assert!(!dest.join("dxvk-0.0.1.tar.gz").exists());
         let _ = std::fs::remove_dir_all(&d);
     }
 

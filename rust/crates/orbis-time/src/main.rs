@@ -480,6 +480,41 @@ mod tests {
     }
 
     #[test]
+    fn boot_policy_order_on_fixtures() {
+        // dry-run only: decides and reports, never touches the real clock
+        let mk = |files: &[(&str, &str)]| {
+            let root = std::env::temp_dir().join(format!("orbis-time-fx-{}-{}", std::process::id(), files.len()));
+            let _ = std::fs::remove_dir_all(&root);
+            for (rel, body) in files {
+                let f = root.join(rel);
+                std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+                std::fs::write(f, body).unwrap();
+            }
+            root
+        };
+        let decide = |root: &std::path::Path| {
+            std::env::set_var("ORBIS_ROOT", root);
+            let r = boot(true);
+            std::env::remove_var("ORBIS_ROOT");
+            let _ = std::fs::remove_dir_all(root);
+            r
+        };
+        let now = sys::now_unix().0;
+        // 1. hardware RTC wins over the loader time
+        let r = decide(&mk(&[("proc/cmdline", "console=tty0 orbis.time=1793048940"),
+                             ("sys/class/rtc/rtc0/name", "ps4-apcie-rtc"), ("sys/class/rtc/rtc0/source", "base=hardware offset=valid calibrated_from=ntp counter_reg=4 counter_hz=1"),
+                             ("sys/class/rtc/rtc0/offset", "0"), ("sys/class/rtc/rtc0/since_epoch", &now.to_string())]));
+        assert_eq!(r.get("source").and_then(Value::as_str), Some("rtc-hardware"));
+        // 2. no hardware base: the loader time the kernel applied
+        let r = decide(&mk(&[("proc/cmdline", "orbis.time=1793048940.25 quiet")]));
+        assert_eq!(r.get("source").and_then(Value::as_str), Some("loader"));
+        // 3. loader time outside 2020..2100 is not a source; a valid running clock is reported as such
+        let r = decide(&mk(&[("proc/cmdline", "orbis.time=12"), ("x", "")]));
+        assert_eq!(r.get("source").and_then(Value::as_str), Some("system"));
+        assert_eq!(r.get("dry_run").and_then(Value::as_bool), Some(true));
+    }
+
+    #[test]
     fn private_addresses() {
         assert_eq!(is_private("192.168.1.10"), Some(true));
         assert_eq!(is_private("8.8.8.8"), Some(false));
