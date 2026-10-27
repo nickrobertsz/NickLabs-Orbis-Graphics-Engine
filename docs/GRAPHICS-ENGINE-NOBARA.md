@@ -15,10 +15,11 @@ sudo dnf install -y podman git zstd python3               # once
 ## 1. Source
 
 ```sh
-mkdir -p ~/orbis-release && cd ~/orbis-release
-git clone nicklabs-orbis-graphics-engine-2.0.0.bundle nicklabs-orbis-graphics-engine   # or unpack the source archive
+mkdir -p ~/orbis-release && cd ~/orbis-release          # put the delivered files here
+sha256sum -c SHA256SUMS                                   # every delivered file must say OK
+git clone -b engine-2.0 nicklabs-orbis-graphics-engine-2.0.0-r2.bundle nicklabs-orbis-graphics-engine
+#   (or: tar -xzf NICKLABS-ORBIS-GRAPHICS-ENGINE-SOURCE-2.0.0-r2.tar.gz && mv nicklabs-orbis-graphics-engine-2.0.0-r2 nicklabs-orbis-graphics-engine)
 cd nicklabs-orbis-graphics-engine
-sha256sum -c ../SHA256SUMS --ignore-missing               # the delivered manifest
 ./orbis-ge check        # Python host tests; Rust tests too when cargo is installed (a failure stops here)
 ```
 
