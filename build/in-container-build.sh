@@ -6,10 +6,12 @@
 #                               [--base-packages /orbis/out/rootfs/packages.txt] [--keys /orbis/out/keys]
 set -euo pipefail
 R="$(cd "$(dirname "$0")/.." && pwd)"
-staging=""; experimental=0; orbis_repo=""; base_pk=""; keys=""
+staging=""; experimental=0; orbis_repo=""; base_pk=""; keys=""; bore=0; target="cuh-1215a"
 while [ $# -gt 0 ]; do
   case "$1" in
     --staging) staging="$2"; shift 2 ;;
+    --bore) bore=1; shift ;;
+    --target) target="$2"; shift 2 ;;
     --experimental) experimental=1; shift ;;
     --orbis-repo) orbis_repo="$2"; shift 2 ;;
     --base-packages) base_pk="$2"; shift 2 ;;
@@ -25,8 +27,24 @@ step() { echo; echo "=== $*"; }
 # never chowned; packages land in /build/pkg and are copied into the staging repo.
 rm -rf /build && mkdir -p /build/pkg /build/src
 tar -C "$R" --exclude=./out --exclude=./.git -cf - . | tar -C /build/src -xf -
-mkdir -p /build/src/out && [ ! -d "$R/out/kernel-ge" ] || cp -a "$R/out/kernel-ge" /build/src/out/
-[ ! -d "$R/out/kernel-ge-bore" ] || cp -a "$R/out/kernel-ge-bore" /build/src/out/
+# GE-A06: only the selected artifacts, and only when their provenance matches (orbis-ge wrote
+# out/artifact-selection.json after checking each artifact's checksum and fingerprint)
+sel="$R/out/artifact-selection.json"
+selected() {
+  [ -f "$sel" ] && python3 -c 'import json,sys; a=(json.load(open(sys.argv[1])).get("artifacts") or {}).get(sys.argv[2]) or {}; sys.exit(0 if a.get("selected") else 1)' "$sel" "$1"
+}
+mkdir -p /build/src/out
+if [ -f "$sel" ]; then
+  if selected kernel-ge; then cp -a "$R/out/kernel-ge" /build/src/out/; fi
+  if [ "$bore" = 1 ]; then
+    selected kernel-ge-bore || { echo "--bore given but out/artifact-selection.json does not select a current BORE kernel" >&2; exit 5; }
+    cp -a "$R/out/kernel-ge-bore" /build/src/out/
+  fi
+else
+  # direct build-pack.sh use without orbis-ge: the default kernel only, never optional extras
+  if [ -d "$R/out/kernel-ge" ]; then cp -a "$R/out/kernel-ge" /build/src/out/; fi
+  if [ "$bore" = 1 ]; then cp -a "$R/out/kernel-ge-bore" /build/src/out/; fi
+fi
 chown -R builder /build
 B=/build/src
 
@@ -123,8 +141,9 @@ if grep -qv '^[[:space:]]*\(#\|$\)' "$R/kernel/patches/series" 2>/dev/null; then
   step "graphics kernel package (kernel/patches/series lists reviewed patches)"
   [ -f "$R/out/kernel-ge/build-manifest.json" ] || {
     echo "kernel/patches/series is not empty but out/kernel-ge is missing: run kernel/build-ge-kernel.sh first" >&2; exit 5; }
+  [ -f /build/src/out/kernel-ge/build-manifest.json ] || { echo "the GE kernel is not selected (stale or missing provenance): run ./orbis-ge kernel" >&2; exit 5; }
   mkc kernel/package linux-orbis-ps4-ge nodeps "$R/out/kernel-ge/build-manifest.json" "$R/out/kernel-ge/bzImage" "$R/integrator/vendor/orbis020"
-  if [ -f "$R/out/kernel-ge-bore/build-manifest.json" ]; then
+  if [ "$bore" = 1 ] && [ -f /build/src/out/kernel-ge-bore/build-manifest.json ]; then
     step "BORE variant kernel package (optional; not a dependency of the pack meta package)"
     mkc kernel/package-bore linux-orbis-ps4-ge-bore nodeps "$R/kernel/package" "$R/out/kernel-ge-bore/build-manifest.json" "$R/out/kernel-ge-bore/bzImage" "$R/integrator/vendor/orbis020"
   fi

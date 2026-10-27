@@ -18,10 +18,12 @@
 set -euo pipefail
 R="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$R"
-orbis_src=""; experimental=0; tests=1; engine="${ENGINE:-}"
+orbis_src=""; experimental=0; tests=1; engine="${ENGINE:-}"; bore=0; target="cuh-1215a"
 while [ $# -gt 0 ]; do
   case "$1" in
     --orbis-src) orbis_src="$(realpath "$2")"; shift 2 ;;
+    --bore) bore=1; shift ;;            # package out/kernel-ge-bore (only when asked: GE-A06)
+    --target) target="$2"; shift 2 ;;   # recorded in the pack's selection manifest
     --experimental) experimental=1; shift ;;
     --no-tests) tests=0; shift ;;
     --engine) engine="$2"; shift 2 ;;
@@ -57,10 +59,20 @@ if [ "$tests" = 1 ]; then
   python3 -m unittest discover -s tests/unit -t tests/unit
 fi
 
+# GE-A05: the 0.2.0 checkout is only read. Its state is recorded now and compared at the end;
+# anything that has to write (make, gpg) works on a private copy under out/.work-orbis-src.
+python3 build/orbis_src_guard.py snapshot "$orbis_src" out/.orbis-src-guard.json
+priv="$R/out/.work-orbis-src"
+cleanup_priv() { rm -rf "$priv"; }
+trap cleanup_priv EXIT
+
 step "2/5 build containers"
 if ! $SUDO "$engine" image exists orbis-build:0.2.0 2>/dev/null && ! $SUDO "$engine" image inspect orbis-build:0.2.0 >/dev/null 2>&1; then
-  echo "orbis-build:0.2.0 missing; building it from $orbis_src (same Containerfile and snapshot as 0.2.0)"
-  make -C "$orbis_src" container ENGINE="$SUDO $engine"
+  echo "orbis-build:0.2.0 missing; building it from a private copy of $orbis_src (same Containerfile and snapshot as 0.2.0)"
+  rm -rf "$priv/src" && mkdir -p "$priv/src"
+  # everything except build outputs and git metadata: make may write stamps, never into the original
+  tar -C "$orbis_src" --exclude=./out --exclude=./.git -cf - . | tar -C "$priv/src" -xf -
+  make -C "$priv/src" container ENGINE="$SUDO $engine"
 fi
 $SUDO "$engine" build -t $CTR -f build/Containerfile.gfx build
 
@@ -71,8 +83,15 @@ mounts=(-v "$R":/src:z -v "$orbis_src/platform":/orbis/platform:ro,z)
 args=(--staging /src/out/pack)
 if [ -f "$orbis_src/out/repo/orbis.db.tar.zst" ]; then mounts+=(-v "$orbis_src/out/repo":/orbis/repo:ro,z); args+=(--orbis-repo /orbis/repo); fi
 if [ -f "$orbis_src/out/rootfs/packages.txt" ]; then mounts+=(-v "$orbis_src/out/rootfs/packages.txt":/orbis/packages.txt:ro,z); args+=(--base-packages /orbis/packages.txt); fi
-if [ -f "$orbis_src/out/keys/orbis-repo-key.fingerprint" ]; then mounts+=(-v "$orbis_src/out/keys":/orbis/keys:z); args+=(--keys /orbis/keys); fi
+if [ -f "$orbis_src/out/keys/orbis-repo-key.fingerprint" ]; then
+  # gpg writes into its home (trustdb, random_seed, locks): sign from a private copy of the keys,
+  # readable by this user only, removed when the build ends
+  rm -rf "$priv/keys" && mkdir -p "$priv" && (umask 077 && cp -a "$orbis_src/out/keys" "$priv/keys")
+  mounts+=(-v "$priv/keys":/orbis/keys:z); args+=(--keys /orbis/keys)
+fi
 [ "$experimental" = 1 ] && args+=(--experimental)
+[ "$bore" = 1 ] && args+=(--bore)
+args+=(--target "$target")
 $SUDO "$engine" run --rm --privileged "${mounts[@]}" -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" -w /src \
   $CTR build/in-container-build.sh "${args[@]}"
 $SUDO chown -R "$(id -u):$(id -g)" out/pack
@@ -85,6 +104,7 @@ python3 build/assemble_pack.py --staging out/pack --out out/release --git-commit
   --experimental-state "${ex[0]}" --experimental-reason "${ex[1]:-}" "${bp[@]}"
 
 step "5/5 self-check"
+python3 build/orbis_src_guard.py verify "$orbis_src" out/.orbis-src-guard.json
 ./orbis-graphics verify --pack out/release/$PACK
 ( cd out/release && sha256sum -c $PACK.sha256 )
 echo
