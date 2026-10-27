@@ -24,6 +24,10 @@ community reports cited.
 | GE-B14 | P2 | display | No HPD interrupt on Belize; hotplug is missed | rmux 0051 | opt-in polling + DPCD-gated detect (ge-0006) |
 | GE-B15 | P2 | diagnostics | Without persistent journal or netconsole, a hard hang leaves no evidence | 0.2.0 defaults | Black Box, persistent journald, netconsole, kdump |
 | GE-B16 | P2 | build env | Compiling the kernel series was refused in the authoring environment | this build | build on Nobara with `./orbis-ge kernel`; patches only proven to apply |
+| GE-B17 | P2 | Orbis 0.2.0 ISA audit | `isa_audit.classify_insn` treats every `vp*` mnemonic on `%ymm` as AVX2, so the AVX1 float permutes `vperm2f128`/`vpermilps`/`vpermilpd` (valid on Jaguar) are flagged; Rust's slice sort emits `vperm2f128` under `-C target-cpu=btver2` | disassembly of the btver2 `orbis-perf` (32 hits, all `vperm2f128` in `core::slice::sort`) | `rust/tools/isa-check.py` imports the 0.2.0 audit unchanged and excludes the three AVX1 mnemonics; fix for 0.2.x: add them to an AVX1 allow-list |
+| GE-B18 | P0 | time | Every boot starts at 1970: `ps4.c` returns 0 for the wall clock and no RTC driver exists (TLS, package dates, logs, Steam) | 0.2.0 kernel source | ge-0010 (loader time), ge-0011 (Aeolia RTC `/dev/rtc0`), loader time handoff, `orbis-time` policy |
+| GE-B19 | P1 | 1.0 / 2.0 interplay | `orbis-gpu-profile@<mode>` (1.0) and `orbis-perf` would both set the GPU clock and fan threshold on a mode switch | unit review | `orbis-native` removes the 1.0 wants (restored on removal); `orbis-graphics` no longer adds them when `orbis-perf` is installed; `orbis-perf doctor` warns if they reappear |
+| GE-B20 | P1 | runners (pre-release) | Lock-file lookup used a dotted JSON path, so file names with dots were never found and a tampered runner download would have been accepted as a "first download" | regression test while integrating | fixed before release; regression test `fetch_lock_detects_tampering` |
 
 ## Community sources (pinned)
 

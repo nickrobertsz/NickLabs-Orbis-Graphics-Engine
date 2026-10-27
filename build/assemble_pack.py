@@ -49,7 +49,7 @@ def pkg_meta(f: Path) -> dict:
 
 
 ORBIS_BUILT = {"mesa-orbis-ps4", "opencl-mesa-orbis-ps4", "lib32-mesa-orbis-ps4", "mesa-orbis-ps4-experimental",
-               "orbis-graphics", "orbis-graphics-pack", "orbis-graphics-engine", "orbis-native", "orbis-gaming", "linux-orbis-ps4-ge"}
+               "orbis-graphics", "orbis-graphics-pack", "orbis-graphics-engine", "orbis-native", "orbis-gaming", "linux-orbis-ps4-ge", "linux-orbis-ps4-ge-bore"}
 
 
 def git_source_archive(dest: Path, commit: str | None) -> Path:

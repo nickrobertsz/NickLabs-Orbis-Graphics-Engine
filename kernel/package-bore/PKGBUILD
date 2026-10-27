@@ -1,0 +1,18 @@
+# NickLabs Orbis GE kernel, BORE variant (CachyOS bore-cachy on top of the GE series). Same recipe
+# as kernel/package, built from out/kernel-ge-bore (kernel/build-ge-kernel.sh --bore). Installing it
+# stages it on the PS4 boot partition through Orbis 0.2.0's kernel hook (previous kernel kept as
+# bzImage.orbis-prev); `orbis boot rollback-kernel` or reinstalling linux-orbis-ps4-ge goes back.
+# Not installed by default: the default kernel is EEVDF (see docs/PERFORMANCE.md).
+export ORBIS_GE_KERNEL_OUT="${ORBIS_GE_KERNEL_OUT:-${startdir}/../../out/kernel-ge-bore}"
+source "${startdir}/../package/PKGBUILD"
+pkgname=linux-orbis-ps4-ge-bore
+pkgver=6.15.4.crashnt4.7.ge2.0.0.bore
+provides=('orbis-graphics-engine-kernel=2.0.0')
+pkgdesc="PS4 (Aeolia/Belize) kernel: Orbis GE 2.0 series + BORE scheduler (NOT boot-tested)"
+eval "_ge_package() $(declare -f package | sed '1d')"
+package() {
+  case "$(python -c "import json; print(json.load(open('$srcdir/out/build-manifest.json'))['kernel_release'])")" in
+    *-orbis-ps4-ge-bore*) ;; *) echo "out/kernel-ge-bore does not hold a -orbis-ps4-ge-bore kernel" >&2; return 1 ;;
+  esac
+  _ge_package
+}

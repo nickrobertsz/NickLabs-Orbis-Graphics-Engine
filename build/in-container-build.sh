@@ -26,6 +26,7 @@ step() { echo; echo "=== $*"; }
 rm -rf /build && mkdir -p /build/pkg /build/src
 tar -C "$R" --exclude=./out --exclude=./.git -cf - . | tar -C /build/src -xf -
 mkdir -p /build/src/out && [ ! -d "$R/out/kernel-ge" ] || cp -a "$R/out/kernel-ge" /build/src/out/
+[ ! -d "$R/out/kernel-ge-bore" ] || cp -a "$R/out/kernel-ge-bore" /build/src/out/
 chown -R builder /build
 B=/build/src
 
@@ -83,6 +84,10 @@ if grep -qv '^[[:space:]]*\(#\|$\)' "$R/kernel/patches/series" 2>/dev/null; then
   [ -f "$R/out/kernel-ge/build-manifest.json" ] || {
     echo "kernel/patches/series is not empty but out/kernel-ge is missing: run kernel/build-ge-kernel.sh first" >&2; exit 5; }
   mk kernel/package linux-orbis-ps4-ge nodeps
+  if [ -f "$R/out/kernel-ge-bore/build-manifest.json" ]; then
+    step "BORE variant kernel package (optional; not a dependency of the pack meta package)"
+    mk kernel/package-bore linux-orbis-ps4-ge-bore nodeps
+  fi
 else
   step "kernel: no reviewed graphics patches in kernel/patches/series; the Orbis 0.2.0 kernel is kept"
 fi

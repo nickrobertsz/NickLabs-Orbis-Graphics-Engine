@@ -17,7 +17,7 @@
 # never put into the pack automatically. With --bore the CachyOS BORE scheduler patch
 # (kernel/patches/variants/bore/) is added and the result goes to out/kernel-ge-bore/ with
 # release ...-orbis-ps4-ge-bore: an alternative to the default EEVDF kernel, packaged as
-# linux-orbis-ps4-ge-bore and chosen with `orbis-perf kernel bore` (reboot).
+# linux-orbis-ps4-ge-bore (kernel/package-bore; install it to switch, `orbis boot rollback-kernel` to go back).
 # The performance fragment kernel/config/orbis-perf.fragment needs pahole (BTF for sched_ext);
 # it is installed into the build container from the same Arch snapshot when missing.
 # Rust-for-Linux (CONFIG_RUST=y, Rust directive): the kernel needs a rustc it supports, so the
