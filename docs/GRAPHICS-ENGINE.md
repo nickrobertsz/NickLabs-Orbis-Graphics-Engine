@@ -54,7 +54,7 @@ Full design: [GRAPHICS-ENGINE-MEMORY.md](GRAPHICS-ENGINE-MEMORY.md). In short:
 
 * **Boot contract (loader).** The VRAM carve-out is fixed before Linux starts: E820 reservation,
   the GPU framebuffer window (`MC_VM_FB_LOCATION`, 16 MiB granularity), `CONFIG_MEMSIZE` and a
-  write-combining MTRR. The stock loader computes one MTRR mask, which is only valid for
+  uncached MTRR (amdgpu maps VRAM write-combining through PAT). The stock loader computes one MTRR mask, which is only valid for
   power-of-two sizes: **3072 MiB yields an invalid MTRR** (ledger GE-B01). The GE loader patch
   splits the carve-out into up to five power-of-two MTRR blocks, validates `vram.txt` (16 MiB
   multiples, 64–4096 MiB), reads `gtt.txt` (chrisripp semantics: `ttm.pages_limit` +

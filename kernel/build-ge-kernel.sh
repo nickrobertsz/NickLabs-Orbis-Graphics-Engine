@@ -20,16 +20,20 @@
 # linux-orbis-ps4-ge-bore and chosen with `orbis-perf kernel bore` (reboot).
 # The performance fragment kernel/config/orbis-perf.fragment needs pahole (BTF for sched_ext);
 # it is installed into the build container from the same Arch snapshot when missing.
+# Rust-for-Linux (CONFIG_RUST=y, Rust directive): the kernel needs a rustc it supports, so the
+# build uses rustup's pinned toolchain RUST_KERNEL_TOOLCHAIN (default 1.87.0, contemporary with
+# Linux 6.15) with rust-src, plus bindgen. --no-rust builds without it (recorded as BLOCKED).
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 R="$(cd "$here/.." && pwd)"
-orbis_src=""; jobs=""; uvd=0; bore=0; inside=0
+orbis_src=""; jobs=""; uvd=0; bore=0; rust=1; inside=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --orbis-src) orbis_src="$(realpath "$2")"; shift 2 ;;
     --jobs) jobs="$2"; shift 2 ;;
     --research-uvd) uvd=1; shift ;;
     --bore) bore=1; shift ;;
+    --no-rust) rust=0; shift ;;
     --in-container) inside=1; shift ;;
     *) echo "unknown arg $1" >&2; exit 2 ;;
   esac
@@ -44,6 +48,7 @@ if [ "$inside" = 0 ]; then
   engine="${ENGINE:-podman}"
   mkdir -p "$R/out"
   extra=""; [ "$uvd" = 1 ] && extra="--research-uvd"; [ "$bore" = 1 ] && extra="--bore"
+  [ "$rust" = 0 ] && extra="$extra --no-rust"
   exec $SUDO "$engine" run --rm -v "$R":/gfx:z -v "$orbis_src":/orbis:ro,z -w /gfx orbis-build:0.2.0 \
     bash -c "kernel/build-ge-kernel.sh --in-container --orbis-src /orbis ${jobs:+--jobs $jobs} $extra && chown -R $(id -u):$(id -g) /gfx/out/$name /gfx/out/$name-work"
 fi
@@ -61,9 +66,23 @@ grep -v '^[[:space:]]*\(#\|$\)' "$series" | while read -r p; do
   echo "ge-$(basename "$p")" >> "$pdir/series"
 done
 command -v pahole >/dev/null || pacman -Sy --noconfirm --needed pahole   # BTF for sched_ext
+if [ "$rust" = 1 ]; then
+  rtc="${RUST_KERNEL_TOOLCHAIN:-1.87.0}"
+  # rustup verifies its downloads against the signed channel manifest. The Arch "rust" package
+  # conflicts with rustup; removing it only affects this throw-away (--rm) container.
+  if ! command -v rustup >/dev/null; then
+    pacman -Q rust >/dev/null 2>&1 && pacman -Rdd --noconfirm rust
+    pacman -Sy --noconfirm --needed rustup
+  fi
+  command -v bindgen >/dev/null || pacman -Sy --noconfirm --needed rust-bindgen
+  rustup toolchain install "$rtc" --profile minimal -c rust-src
+  export RUSTUP_TOOLCHAIN="$rtc"
+  echo "Rust for Linux: rustc $(rustc --version) / $(bindgen --version)"
+fi
 frag="$work/kernel/config/orbis-ge.fragment"
 cp "$here/config/orbis-ge.fragment" "$frag"
 cat "$here/config/orbis-perf.fragment" >> "$frag"
+if [ "$rust" = 1 ]; then printf 'CONFIG_RUST=y\n' >> "$frag"; else printf '# CONFIG_RUST is not set\n' >> "$frag"; fi
 if [ "$bore" = 1 ]; then
   for b in "$here"/patches/variants/bore/*.patch; do
     cp "$b" "$pdir/ge-variant-$(basename "$b")"
@@ -86,9 +105,10 @@ json.dump(d, open(p, "w"), indent=2)
 PY
 echo "patch series:"; sed 's/^/  /' "$pdir/series"
 "$work/kernel/build-kernel.sh" "$t" --out "$R/out/$name" --src "$work/src" ${jobs:+--jobs "$jobs"}
-python3 - "$R/out/$name/build-manifest.json" "$uvd" "$R/out/$name/config" "$bore" <<'PY'
+python3 - "$R/out/$name/build-manifest.json" "$uvd" "$R/out/$name/config" "$bore" "$rust" "${RUSTUP_TOOLCHAIN:-}" <<'PY'
 import json, sys
 p, uvd, cfg, bore = sys.argv[1], sys.argv[2] == "1", sys.argv[3], sys.argv[4] == "1"
+rust, rust_tc = sys.argv[5] == "1", sys.argv[6]
 d = json.load(open(p))
 want = "orbis-ps4-ge-uvd" if uvd else "orbis-ps4-ge-bore" if bore else "orbis-ps4-ge"
 assert ("-" + want + "-") in d["kernel_release"] or d["kernel_release"].endswith("-" + want), d["kernel_release"]
@@ -103,9 +123,14 @@ bad = [k for k in ("CONFIG_RTC_DRV_CMOS=y",) if k in conf.splitlines()]
 assert not bad, f"options that must stay off on a PS4: {bad}"
 if bore:
     assert "CONFIG_SCHED_BORE=y" in conf.splitlines(), "BORE variant without CONFIG_SCHED_BORE"
+if rust:
+    assert "CONFIG_RUST=y" in conf.splitlines(), ("CONFIG_RUST was dropped by olddefconfig: `make rustavailable` "
+                                                   "failed (rustc/rust-src/bindgen/libclang); fix it or build with --no-rust")
 assert not missing, f"config fragment did not survive olddefconfig: {missing}"
 d["orbis_graphics_engine"] = {"version": "2.0.0", "research_uvd": uvd, "bore": bore,
                               "scheduler": "BORE (CachyOS)" if bore else "EEVDF (CachyOS defaults) + sched_ext",
+                              "rust_for_linux": {"enabled": rust, "toolchain": rust_tc or None} if rust else
+                                                {"enabled": False, "state": "BLOCKED", "why": "built with --no-rust"},
                               "status": "compiled; NOT boot-tested"}
 json.dump(d, open(p, "w"), indent=2)
 print("kernel release:", d["kernel_release"])

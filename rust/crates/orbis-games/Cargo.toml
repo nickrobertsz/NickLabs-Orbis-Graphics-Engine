@@ -1,0 +1,17 @@
+[package]
+name = "orbis-games"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+orbis-core = { path = "../orbis-core" }
+
+[[bin]]
+name = "orbis-games"
+path = "src/main.rs"
+
+[[bin]]
+name = "orbis-run"
+path = "src/run_main.rs"

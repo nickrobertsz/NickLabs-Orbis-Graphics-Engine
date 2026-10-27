@@ -1,0 +1,13 @@
+[package]
+name = "orbis-isa"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+orbis-core = { path = "../orbis-core" }
+
+[[bin]]
+name = "orbis-isa-check"
+path = "src/main.rs"

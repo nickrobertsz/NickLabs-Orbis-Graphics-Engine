@@ -19,7 +19,7 @@ roughly 7 GiB after firmware reservations. The GPU reaches memory through two wi
 | E820 reservation of the carve-out | loader | contiguous, before the kernel starts |
 | `MC_VM_FB_LOCATION` | loader | 16 MiB granularity |
 | `CONFIG_MEMSIZE` | loader | MiB |
-| write-combining MTRR | loader | each MTRR covers a power-of-two size aligned to that size |
+| uncached (UC) MTRR over the carve-out | loader | each MTRR covers a power-of-two size aligned to that size; amdgpu's own CPU mappings of VRAM are write-combining through PAT (PAT WC overrides MTRR UC) |
 
 **Stock loader defect (GE-B01).** The stock loader computes a single MTRR mask with
 `~(size - 1)`, which is only correct for power-of-two sizes. 3072 MiB (allowed by some 0.2.0
