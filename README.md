@@ -17,7 +17,7 @@ Orbis 0.2.0 and the Graphics Pack 1.0.0 are not changed. The release installs in
 **Status: source complete for the current scope, not yet built on Nobara, nothing run on a PS4.**
 * Kernel patches are proven to apply but not compiled; kernel compilation was refused in the
   authoring environment.
-* Python and Rust userspace is tested on a host with fixtures: 92 + 30 tests.
+* Python and Rust userspace is tested on a host with fixtures: 94 + 33 tests.
 * The Rust binaries were built here for btver2 and passed the Jaguar ISA gate.
 
 See `docs/DEVELOPMENT-CATALOG.md` for every item's state and evidence.
@@ -26,7 +26,7 @@ See `docs/DEVELOPMENT-CATALOG.md` for every item's state and evidence.
 
 | Area | Where | What |
 |---|---|---|
-| Kernel | `kernel/` | 0.2.0 kernel + 13 patches: fan/thermal, SCLK restore, GDDR5, HDMI audio, bridge, cpufreq, telemetry + runtime GTT budget, SMU, loader wall clock, Aeolia RTC, CachyOS subset, Jaguar build. Plus perf/GE config fragments, Rust-for-Linux, optional BORE kernel, and a research-only UVD kernel |
+| Kernel | `kernel/` | 0.2.0 kernel + 15 patches: fan/thermal, SCLK restore, GDDR5, HDMI audio, bridge, cpufreq, telemetry + runtime GTT budget, SMU, loader wall clock, Aeolia RTC, CachyOS subset, Jaguar build, GPU-buffer shrinker + active GTT trim (ge-0014), GTT dmem cgroup region (ge-0015). Plus perf/GE config fragments, Rust-for-Linux, optional BORE kernel, and a research-only UVD kernel |
 | Loader | `loader/` | exact VRAM MTRR split, `vram.txt`/`gtt.txt`, boot identity, time handoff |
 | Mesa | `mesa/` | 26.2.5-201 (+lib32), PS4 patches |
 | Engine (Python) | `diag/` | memory policy (orbis-memd), hardware API, Black Box + orbis-debug, video, AI tuning, qualify, stage-0 |

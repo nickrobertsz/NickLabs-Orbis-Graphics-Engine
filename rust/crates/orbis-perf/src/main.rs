@@ -124,6 +124,8 @@ fn policy_view(mode: &str) -> Value {
     jobj! {"mode" => pol.name.clone(), "scheduler" => pol.scheduler.clone(), "scx_args" => pol.scx_args.clone(),
            "gpu" => format!("{:?}", pol.gpu).to_lowercase(), "fan_threshold_c" => pol.fan_threshold_c,
            "thp" => format!("{} / defrag {}", pol.thp_enabled, pol.thp_defrag), "mglru_min_ttl_ms" => pol.mglru_min_ttl_ms,
+           "compaction_proactiveness" => pol.compaction_proactiveness,
+           "ksm" => pol.ksm.map(|b| if b { "on" } else { "off" }).unwrap_or("left as is (off on Orbis)"),
            "io_scheduler_preference" => pol.io_scheduler.clone(), "background_cpus" => pol.background_cpus.clone(),
            "gpu_irq_cpu" => pol.irq_gpu_cpu.map(|c| c as i64), "session_governor" => pol.session_governor.clone(),
            "left_to_orbis_0_2_0" => policy::orbisd_sysctls(mode), "manual_overrides" => policy::manual_overrides()}

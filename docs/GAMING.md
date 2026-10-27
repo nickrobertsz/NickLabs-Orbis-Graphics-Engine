@@ -70,7 +70,8 @@ Proton bundles a DXVK line the driver cannot run, it falls back to WineD3D
 * `--dry-run` prints the plan (runner, D3D layer, environment) without starting anything.
 
 `orbis-run`:
-* sets per-game shader caches (`~/.cache/orbis/games/<game>`) and DXVK logs;
+* sets per-game shader caches (`~/.cache/orbis/shaders/<game>`, pruned to the profile's
+  `shader_cache.max_mb` before each launch; Mesa gets half of it) and DXVK logs;
 * sets the PulseAudio latency and the SDL controller mapping when the profile has them;
 * raises the open-file limit (esync);
 * writes a marker so `orbis-perf` applies the game profile (scheduler, SCLK, nice, background
@@ -84,10 +85,22 @@ Profiles: `orbis-games profile new "My Game" --appid 292030` writes `~/.config/o
 ```json
 {"name": "My Game", "match": {"steam_appid": ["292030"]}, "runner": "auto", "dxvk": "auto",
  "renderer": "auto", "scheduler": "auto", "governor": "performance", "gpu_sclk": "max", "nice": -4,
- "memory": {"dmem_low_mb": null}, "shader_cache": {"max_mb": 2048},
+ "memory": {"dmem_low_mb": null, "dmem_max_mb": null, "gtt_max_mb": null, "vulkan_heaps": "auto"},
+ "telemetry": {"frametimes": false}, "shader_cache": {"max_mb": 2048},
+ "gamescope": {"enabled": false, "args": ["-W", "1920", "-H", "1080"]}, "coordination": "auto",
  "audio": {"pulse_latency_msec": null}, "controller": {"sdl_mapping": null}, "env": {},
  "log": {"dxvk": "warn", "proton": false}}
 ```
+
+| Key | Effect |
+|---|---|
+| `memory.dmem_max_mb` / `memory.gtt_max_mb` | VRAM / GTT ceilings for this game (cgroup dmem; GTT needs GE kernel ge-0015). Above the VRAM ceiling buffers go to GTT; above the GTT ceiling TTM evicts the game's own buffers |
+| `memory.vulkan_heaps` | `auto` (RADV default split), `unified` (one device-local heap: for games that refuse to start below a VRAM size), `split` |
+| `gpu_sclk` | `max` (default) or `auto` (startup clock while the game is in menus or loading) |
+| `coordination` | `auto`: orbis-perf classifies the game as GPU-bound / CPU-bound / balanced / light every ~6 s. CPU-bound narrows background work to CPU 0; GPU-bound keeps the engine clock at max. `off` disables this |
+| `telemetry.frametimes` | MangoHud frame-time log without the overlay; `orbis-games last` shows avg fps, p50/p99/max frame time, 1 % low |
+| `gamescope.enabled` | runs the game inside a nested Gamescope (skipped when already inside one or not installed) |
+| `shader_cache.max_mb` | per-game shader-cache budget; `orbis-games cache prune` (weekly user timer) also removes caches of games unplayed for 90 days and keeps the total under 8 GiB |
 
 Profiles are read from `/usr/share/orbis/games.d`, `/etc/orbis/games.d` and
 `~/.config/orbis/games.d`; later files win.

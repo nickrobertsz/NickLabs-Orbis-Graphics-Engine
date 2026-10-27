@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.0.0-r2 (source revision, 2026-10-27): only new or changed components
+
+Kernel (all Source-checked, Awaiting Nobara compilation):
+- **ge-0014** amdgpu PS4 GPU-buffer shrinker (U25): idle GTT/system buffers are backed up to
+  shmem (swappable to zram) or purged if discardable, restored on use; active GTT trim when the
+  budget drops (U26); sysfs `orbis_gtt_reclaim`. Opt-in: `amdgpu.orbis_shrinker=1`.
+- **ge-0015** GTT registered as dmem cgroup region `gtt`: enforced per-app GTT limits (U9).
+- Research kernel `--research-sgdisplay` (GTT scanout experiment R-M1), never packed.
+
+Userspace:
+- orbis-mem: accounting without double counting shared buffers, CPU-visible VRAM, reclaim,
+  swap/zram (actual `mm_stat`), dmem regions, top GTT owners; `reclaim` and `bench` commands.
+  orbis-memd goes below current GTT usage only when the shrinker is enabled.
+- orbis-gfx-probe `--membench`: bandwidth per memory kind, copies, end-to-end zero-copy check
+  (`VK_EXT_external_memory_host`) (U6/U27).
+- orbis-perf: CPU/GPU workload coordination, per-game GTT ceilings (`memory.gtt_max_mb`) next to
+  the VRAM ceilings, per-region restore journal, opt-in KSM.
+- orbis-games/orbis-run: shader-cache budget and pruning (+ weekly user timer), Gamescope option.
+
+Build system:
+- `./orbis-ge`: `check` step, per-step input fingerprints, per-package build cache, logs per step,
+  failures not masked, optional stage-0 handled correctly, build receipt v2.
+- Nobara instructions no longer mask Rust test failures.
+
+Docs: catalog with the new status vocabulary; unified-memory classification, ge-0014 design and
+verification procedure, U6 sharing contract; ledger GE-B21..B24.
+
+Unchanged: everything else from 2.0.0; Orbis 0.2.0 and Graphics Pack 1.0.0; the LAN-only network
+policy.
+
 ## 2.0.0 (NickLabs Orbis Graphics Engine, source release, 2026-10-26)
 
 Separate release on top of Orbis 0.2.0; Graphics Pack 1.0.0 is left as published.

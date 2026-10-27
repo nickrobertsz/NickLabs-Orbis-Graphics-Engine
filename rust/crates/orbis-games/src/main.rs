@@ -84,7 +84,7 @@ fn main() {
             }
             let doc = jobj! {"name" => name.clone(), "match" => m, "runner" => "auto", "dxvk" => "auto", "renderer" => "auto",
                 "scheduler" => "auto", "governor" => "performance", "gpu_sclk" => "max", "nice" => -4i64,
-                "memory" => jobj! {"dmem_low_mb" => Value::Null, "dmem_max_mb" => Value::Null, "vulkan_heaps" => "auto"},
+                "memory" => jobj! {"dmem_low_mb" => Value::Null, "dmem_max_mb" => Value::Null, "gtt_max_mb" => Value::Null, "vulkan_heaps" => "auto"},
                 "telemetry" => jobj! {"frametimes" => false}, "shader_cache" => jobj! {"max_mb" => 2048i64},
                 "gamescope" => jobj! {"enabled" => false, "args" => vec!["-W".to_string(), "1920".into(), "-H".into(), "1080".into()]},
                 "coordination" => "auto",

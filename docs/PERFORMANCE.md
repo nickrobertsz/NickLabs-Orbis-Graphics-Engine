@@ -44,8 +44,10 @@ service stops) puts the old values back.
 | zram / zswap | 0.2.0 zram-generator (zstd, RAM/2 ≤ 4 GiB) kept; zswap built but off by default (no double compression) | — |
 | THP | madvise (PC/GAMING; GAMING defrag `defer`), always (AI: llama.cpp benefits from large pages) | UNVERIFIED |
 | dmem cgroup (dmemcg-booster idea) | `CONFIG_CGROUP_DMEM`: during a game session `dmem.low` = 75 % of VRAM on the game's cgroup and its ancestors, so the game's VRAM is the last evicted | HOST-VERIFIED (fixture) |
+| CPU/GPU workload coordination | During a game, every ~6 s: GPU engine activity (`orbis_engine_busy`) and per-thread CPU time of the game's processes give GPU-bound (gfx ≥ 90 %), CPU-bound (gfx < 70 % with a saturated thread or all allowed CPUs busy), light (menus) or balanced, held for 3 samples. CPU-bound narrows the background slice to CPU 0; GPU-bound ensures max SCLK; light drops SCLK when the profile says `gpu_sclk: auto`. Recorded in `orbis-perf status` (`workload`) | HOST-VERIFIED (classifier, /proc sampling) |
 | Adaptive GPU clocks | PC: every 5 ticks, busy ≥ 15 % → max SCLK; ≤ 5 % for 3 samples → startup clock. GAMING/AI: max. Thermal guard: drop to startup clock at 85 °C, resume at 78 °C. GE kernel `ps4_sclk` (ge-0002) | HOST-VERIFIED (logic) |
 | Compiler tuning | kernel `-march=btver2` (ge-0013, `CONFIG_X86_PS4_JAGUAR_TUNE`); Rust tools `-C target-cpu=btver2` + fat LTO. CachyOS's x86-64-v3 repositories are **never** used, because Jaguar lacks AVX2/FMA/BMI2 | BUILT (Rust) |
+| KSM | Opt-in per mode (`"ksm": true` in perf.json); off by default until a measurement shows a gain on Jaguar | HOST-VERIFIED (knob) |
 | AI-mode memory safety | 0.2.0 `MemoryHigh=92%` on `orbis-ai.slice` kept; drop-in adds `ManagedOOMMemoryPressure=kill` at 60 %, used when `systemd-oomd` runs (needs PSI, enabled in the GE kernel; enable with `systemctl enable --now systemd-oomd`) | UNVERIFIED |
 
 ## 3. Commands

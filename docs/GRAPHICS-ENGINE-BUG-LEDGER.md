@@ -28,6 +28,10 @@ community reports cited.
 | GE-B18 | P0 | time | Every boot starts at 1970: `ps4.c` returns 0 for the wall clock and no RTC driver exists (TLS, package dates, logs, Steam) | 0.2.0 kernel source | ge-0010 (loader time), ge-0011 (Aeolia RTC `/dev/rtc0`), loader time handoff, `orbis-time` policy |
 | GE-B19 | P1 | 1.0 / 2.0 interplay | `orbis-gpu-profile@<mode>` (1.0) and `orbis-perf` would both set the GPU clock and fan threshold on a mode switch | unit review | `orbis-native` removes the 1.0 wants (restored on removal); `orbis-graphics` no longer adds them when `orbis-perf` is installed; `orbis-perf doctor` warns if they reappear |
 | GE-B20 | P1 | runners (pre-release) | Lock-file lookup used a dotted JSON path, so file names with dots were never found and a tampered runner download would have been accepted as a "first download" | regression test while integrating | fixed before release; regression test `fetch_lock_detects_tampering` |
+| GE-B21 | P1 | build | `./orbis-ge verify` ended with an error when no stage-0 image was built: `for f in IMG IMG0; do [ -f ] && ...; done` returns 1 under `set -e` | independent audit + review | fixed: explicit `if`; a named but missing `--base-stage0-image` is a clear error, leaving it out skips stage 0 |
+| GE-B22 | P1 | build | steps were skipped when an output file existed, even after sources, patches, configs or containers changed; a loader build failure was swallowed | independent audit | fixed: per-step input fingerprints (`out/.fp`), per-package cache keyed by recipe + inputs + toolchain, every failure stops the run with its log |
+| GE-B23 | P2 | docs | Nobara instructions ran `cargo test ... \|\| true`, hiding Rust test failures | independent audit | fixed: `./orbis-ge check` (reports a missing cargo explicitly, keeps failures) |
+| GE-B24 | P2 | accounting | summing per-client fdinfo GTT counted buffers shared between clients once per client | review for D4 | fixed: private sizes summed exactly, shared buffers reported as a range; device counters stay authoritative |
 
 ## Community sources (pinned)
 

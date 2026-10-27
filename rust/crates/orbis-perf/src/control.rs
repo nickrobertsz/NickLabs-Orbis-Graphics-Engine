@@ -111,6 +111,17 @@ impl Controller {
             out.push(hw::set_sysctl(j, "vm.workingset_protection", if pol.workingset_protection { "1" } else { "0" }, &owned));
         }
         out.push(hw::set_sysctl(j, "vm.max_map_count", &pol.max_map_count.to_string(), &owned));
+        if let Some(on) = pol.ksm {
+            let f = p("/sys/kernel/mm/ksm/run");
+            if f.exists() {
+                out.push(match j.set_file(&f, if on { "1" } else { "0" }) {
+                    Ok(_) => act("ksm", "APPLIED", if on { "on" } else { "off" }),
+                    Err(e) => act("ksm", "FAILED", e.to_string()),
+                });
+            } else {
+                out.push(act("ksm", "UNSUPPORTED", "kernel without CONFIG_KSM"));
+            }
+        }
         if hw::sysctl_path("vm.compaction_proactiveness").exists() {
             out.push(hw::set_sysctl(j, "vm.compaction_proactiveness", &pol.compaction_proactiveness.to_string(), &owned));
         }
@@ -394,7 +405,11 @@ impl Controller {
             let pids: BTreeSet<u32> = self.sessions.values().flat_map(|s| s.pids.iter().copied()).collect();
             let (max_thread_pct, total_pct) = self.wl.cpu(&pids, Instant::now());
             self.gpu_busy = hw::gpu_busy();
-            let cpus = std::thread::available_parallelism().map(|n| n.get() as f64).unwrap_or(8.0);
+            // CPUs the game may use: its cgroup's effective cpuset, else every online CPU
+            let cpus = self.sessions.values().next()
+                .and_then(|s| fsx::read(&p(&format!("/sys/fs/cgroup{}/cpuset.cpus.effective", s.root_cgroup))))
+                .map(|l| workload::count_cpus(&l) as f64).filter(|n| *n > 0.0)
+                .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get() as f64).unwrap_or(8.0));
             let s = workload::Sample { gpu_busy: self.gpu_busy, max_thread_pct, total_pct };
             if let Some(b) = self.wl.feed(s, cpus) {
                 self.on_bound(b);

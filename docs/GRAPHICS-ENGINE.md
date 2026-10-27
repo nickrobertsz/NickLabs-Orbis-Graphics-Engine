@@ -9,7 +9,7 @@ a new bootable image made from a copy of the 0.2.0 image, and a new stage-0 imag
 
 **Proof level.** Every kernel patch applies in order to the pinned 0.2.0 kernel tree. None was
 compiled here: compiling third-party kernel code was refused in this build environment, and that
-refusal was respected. All userspace code runs under 92 Python and 30 Rust host tests on fixture trees (the
+refusal was respected. All userspace code runs under 94 Python and 33 Rust host tests on fixture trees (the
 loader patch's C helpers are compiled and run from the patch text). Nothing has run on a PS4.
 The first boot on the CUH-1215A is the qualification, using the commands in
 [GRAPHICS-ENGINE-NOBARA.md](GRAPHICS-ENGINE-NOBARA.md).
@@ -18,7 +18,7 @@ The first boot on the CUH-1215A is the qualification, using the commands in
 
 | Layer | Component | Where | State |
 |---|---|---|---|
-| Kernel | `linux-orbis-ps4-ge` = 0.2.0 kernel + 13 patches + 2 config fragments (+ optional `-bore`) | `kernel/` | applies; build on Nobara |
+| Kernel | `linux-orbis-ps4-ge` = 0.2.0 kernel + 15 patches + 2 config fragments (+ optional `-bore`) | `kernel/` | applies; build on Nobara |
 | Loader | ps4-linux-loader d0f4d4c + memory-contract patch | `loader/` | C helpers tested; payloads built on Nobara |
 | Mesa | 26.2.5 + linux-psx 0001/0002/0003/0005, pkgrel 201 | `mesa/stable`, `mesa/lib32` | 0002 dry-run applied to the pinned source |
 | Tools | `orbis-graphics` 2.0.0 (qualify, health, profiles, stage-0) | `diag/orbis_gfx` | tested |
@@ -40,6 +40,12 @@ The first boot on the CUH-1215A is the qualification, using the commands in
 | ge-0007 cpufreq | rmux | `ps4-cpufreq` (Jaguar hardware P-states via MSRs; only P-states the firmware enabled) | built in, PS4 boots only |
 | ge-0008 telemetry + GTT budget | NickLabs Orbis (new) | `orbis_engine_busy` (GRBM/SRBM sampling) and a runtime-writable `orbis_gtt_budget` | read-only telemetry; budget = kernel default until something writes it |
 | ge-0009 SMU mailbox | rmux | SMC mailbox / memory P-state messages | sysfs absent unless `amdgpu.ps4_smu_mailbox=1` |
+| ge-0010 loader wall clock | NickLabs Orbis | `orbis.time=`/`time=` start the clock (no more 1970) | on when the loader passes a time |
+| ge-0011 Aeolia RTC | NickLabs Orbis | `/dev/rtc0` inside apcie (loader base; hardware base once the counter is found) | register probing opt-in |
+| ge-0012 CachyOS subset | CachyOS (Nobara 6.15) | EEVDF defaults, le9, ADIOS, evdev, userns sysctl | on |
+| ge-0013 Jaguar build | NickLabs Orbis | `-march=btver2` option | on |
+| ge-0014 GPU-buffer shrinker | NickLabs Orbis (TTM helpers from xe) | idle GTT/system buffers backed up to shmem (swappable) or purged; active GTT trim; `orbis_gtt_reclaim` | off unless `amdgpu.orbis_shrinker=1` |
+| ge-0015 GTT dmem region | NickLabs Orbis | GTT as cgroup dmem region `gtt` (per-app GTT limits) | on (`amdgpu.orbis_gtt_cgroup=0` disables) |
 
 Config fragment `kernel/config/orbis-ge.fragment`: release suffix `-orbis-ps4-ge`, PS4 cpufreq and
 governors, PSI, SysRq, soft-lockup/hung-task/workqueue watchdogs, netconsole (dynamic, extended),

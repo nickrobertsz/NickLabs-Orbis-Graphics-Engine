@@ -28,8 +28,8 @@ Python tools, and the C kernel and loader patches.
     on `%ymm` as AVX2, because they start with `vp`. Rust's `core::slice::sort` emits
     `vperm2f128` under btver2. The gate excludes these three; the finding is recorded for a later
     0.2.x fix (bug ledger GE-B17).
-* **Tests:** `cargo test --offline` runs 30 tests: core 9, games 10 (one needs curl and is skipped
-  without it), perf 8, time 3. `makepkg` runs them in `check()`.
+* **Tests:** `cargo test --offline` runs 33 tests: core 9, games 11 (one needs curl and is skipped
+  without it), perf 10, time 3. `makepkg` runs them in `check()`.
 
 Rust toolchain on this build host: rustc 1.97.0. In the pack build, Arch's `rust` from the pinned
 snapshot (2026/10/20) is used inside the graphics build container. MSRV is declared as 1.80.

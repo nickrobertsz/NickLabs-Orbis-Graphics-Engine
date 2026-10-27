@@ -45,6 +45,11 @@ pub struct ModePolicy {
     /// vm.compaction_proactiveness: background compaction keeps huge pages available (THP, GPU
     /// buffers) but costs CPU time; 0 in GAMING (no compaction stalls mid-frame)
     pub compaction_proactiveness: i64,
+    /// KSM (/sys/kernel/mm/ksm/run): None = leave as the system has it (off on Orbis). Scanning
+    /// costs Jaguar CPU time and games rarely share identical anonymous pages, so it is only
+    /// switched on where a measurement shows a gain (perf.json "ksm": true, e.g. several Wine
+    /// prefixes or AI processes with duplicated buffers).
+    pub ksm: Option<bool>,
     /// governor for game sessions (mode-level governor stays with orbisd)
     pub session_governor: String,
 }
@@ -66,6 +71,7 @@ pub fn builtin(mode: &str) -> ModePolicy {
         // games and DXVK map many regions; SteamOS/Fedora use this value
         max_map_count: 2147483642,
         compaction_proactiveness: 20,
+        ksm: None,
         session_governor: "performance".into(),
     };
     match mode {
@@ -135,6 +141,9 @@ pub fn mode_policy(mode: &str) -> ModePolicy {
         }
         if let Some(v) = m.get("irq_gpu_cpu") {
             pol.irq_gpu_cpu = v.as_i64().map(|x| x as u32);
+        }
+        if let Some(v) = m.get("ksm") {
+            pol.ksm = v.as_bool();
         }
         if let Some(x) = m.get("compaction_proactiveness").and_then(Value::as_i64) {
             pol.compaction_proactiveness = x.clamp(0, 100);
