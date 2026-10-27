@@ -1,0 +1,19 @@
+[Unit]
+Description=NickLabs Orbis time policy (RTC -> loader time -> last-known-good -> optional LAN NTP)
+Documentation=file:///usr/share/doc/orbis-graphics/TIME.md
+DefaultDependencies=no
+After=local-fs.target systemd-modules-load.service
+Before=time-set.target systemd-timesyncd.service sysinit.target shutdown.target
+Wants=time-set.target
+Conflicts=shutdown.target
+RequiresMountsFor=/var/lib/orbis
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/orbis-time boot
+# at shutdown: store last-known-good (and the RTC offset when the hardware base is in use)
+ExecStop=/usr/bin/orbis-time save
+
+[Install]
+WantedBy=sysinit.target

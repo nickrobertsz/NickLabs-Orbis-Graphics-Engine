@@ -1,0 +1,37 @@
+# NickLabs Orbis native: enable the time policy early, the performance controller and the Vulkan
+# probe. orbis-perf takes over the per-mode GPU clock/fan the 1.0 profile units used to set, so
+# those wants are removed here and put back on removal. Works inside a chroot (image build).
+_retire_gpu_profiles() {
+  for m in pc gaming ai; do
+    rm -f "/etc/systemd/system/orbis-$m.target.wants/orbis-gpu-profile@$m.service"
+  done
+}
+_restore_gpu_profiles() {
+  [ -f /usr/lib/systemd/system/orbis-gpu-profile@.service ] || return 0
+  for m in pc gaming ai; do
+    systemctl add-wants "orbis-$m.target" "orbis-gpu-profile@$m.service" >/dev/null 2>&1 || true
+  done
+}
+post_install() {
+  systemd-tmpfiles --create /usr/lib/tmpfiles.d/orbis-native.conf >/dev/null 2>&1 || true
+  _retire_gpu_profiles
+  systemctl enable orbis-time.service orbis-time-save.timer orbis-perf.service orbis-games-caps.service >/dev/null 2>&1 || true
+  echo ":: orbis-native: orbis-perf status | orbis-time status | orbis-games caps | orbis-run --help"
+  echo ":: sched_ext: 'sudo orbis-perf sched bench' then 'sudo orbis-perf sched set auto' (needs scx-scheds + the GE kernel)"
+  echo ":: LAN NTP (off by default): sudo orbis-time ntp enable --server <Nobara IP>"
+}
+post_upgrade() {
+  _retire_gpu_profiles
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl try-restart orbis-perf.service >/dev/null 2>&1 || true
+}
+pre_remove() {
+  # orbis-perf.service runs 'orbis-perf restore' when it stops
+  systemctl disable --now orbis-perf.service orbis-games-caps.service orbis-time-save.timer >/dev/null 2>&1 || true
+  systemctl stop 'orbis-scx@*.service' >/dev/null 2>&1 || true
+  /usr/bin/orbis-time save >/dev/null 2>&1 || true
+  systemctl disable orbis-time.service >/dev/null 2>&1 || true
+}
+post_remove() {
+  _restore_gpu_profiles
+}

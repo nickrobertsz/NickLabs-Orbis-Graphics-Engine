@@ -93,7 +93,16 @@ pub fn detect(procs: &[Proc], profiles: &[GameProfile], now: i64) -> BTreeMap<St
     let markers: BTreeSet<u32> = fsx::list_dir(&p("/run/orbis/games"))
         .iter()
         .filter_map(|f| f.file_stem().and_then(|s| s.to_str()).and_then(|s| s.parse().ok()))
-        .filter(|pid| by_pid.contains_key(pid))
+        // /run/orbis/games is world-writable (sticky): a marker only counts when the file belongs
+        // to the same user as the process it names (or to root), so nobody can tag another
+        // user's process as a game
+        .filter(|pid| {
+            by_pid.get(pid).is_some_and(|pr| {
+                std::fs::metadata(p(&format!("/run/orbis/games/{pid}.json")))
+                    .map(|m| { use std::os::unix::fs::MetadataExt; m.uid() == pr.uid || m.uid() == 0 })
+                    .unwrap_or(false)
+            })
+        })
         .collect();
     let marker_root = |pid: u32| -> Option<u32> {
         let mut cur = pid;

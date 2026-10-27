@@ -1,0 +1,6 @@
+[Unit]
+Description=NickLabs Orbis games started by orbis-run (CPU/IO priority over other desktop apps)
+
+[Slice]
+CPUWeight=400
+IOWeight=400

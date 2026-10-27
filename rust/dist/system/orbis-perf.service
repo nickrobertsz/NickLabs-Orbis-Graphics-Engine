@@ -1,0 +1,19 @@
+[Unit]
+Description=NickLabs Orbis performance controller (scheduler, memory, I/O, IRQ, GPU clock, game sessions)
+Documentation=file:///usr/share/doc/orbis-graphics/PERFORMANCE.md
+After=orbisd.service systemd-modules-load.service orbis-memd.service
+# one game/performance manager only: falcond and orbis-perf would fight over the same knobs
+Conflicts=falcond.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/orbis-perf daemon --interval 2
+# put back everything it changed (governor during sessions, THP, I/O schedulers, IRQ affinity, ...)
+ExecStopPost=/usr/bin/orbis-perf restore
+Restart=on-failure
+RestartSec=5
+Nice=-5
+MemoryMax=64M
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+[Unit]
+Description=NickLabs Orbis background work (confined to CPUs 0-1 in GAMING and AI mode by orbis-perf)
+Before=slices.target
+
+[Slice]
+CPUWeight=30
+IOWeight=30
+MemoryAccounting=yes

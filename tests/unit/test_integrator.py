@@ -75,7 +75,7 @@ def fake_staging(d: Path) -> Path:
     (s / "repo").mkdir(parents=True)
     for f in ("mesa-orbis-ps4-26.2.5-101-x86_64", "opencl-mesa-orbis-ps4-26.2.5-101-x86_64",
               "lib32-mesa-orbis-ps4-26.2.5-101-x86_64", "orbis-graphics-2.0.0-1-x86_64",
-              "orbis-graphics-engine-2.0.0-1-any", "orbis-graphics-pack-2.0.0-1-any", "libdrm-2.4.133-1-x86_64", "clinfo-3.0.25.02.14-1-x86_64"):
+              "orbis-graphics-engine-2.0.0-1-any", "orbis-native-2.0.0-1-x86_64", "orbis-gaming-2.0.0-1-any", "orbis-graphics-pack-2.0.0-1-any", "libdrm-2.4.133-1-x86_64", "clinfo-3.0.25.02.14-1-x86_64"):
         (s / "repo" / f"{f}.pkg.tar.zst").write_bytes(f.encode())
     (s / "repo/orbis-graphics.db.tar.zst").write_bytes(b"db")
     (s / "miniroot").mkdir()

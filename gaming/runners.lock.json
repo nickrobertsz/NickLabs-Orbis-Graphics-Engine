@@ -1,0 +1,5 @@
+{
+  "schema": "orbis-runners-lock/1",
+  "note": "SHA-256 of each downloaded asset, written by orbis-games fetch on first download; commit after review. Empty until the first fetch on the Nobara.",
+  "sha256": {}
+}

@@ -1,8 +1,11 @@
 # NickLabs Orbis Graphics Pack: wire the per-personality GPU profiles into the Orbis targets.
 post_install() {
-  for m in pc gaming ai; do
-    systemctl add-wants "orbis-$m.target" "orbis-gpu-profile@$m.service" >/dev/null 2>&1 || true
-  done
+  # with orbis-native installed, orbis-perf sets the per-mode GPU clock and fan instead
+  if [ ! -x /usr/bin/orbis-perf ]; then
+    for m in pc gaming ai; do
+      systemctl add-wants "orbis-$m.target" "orbis-gpu-profile@$m.service" >/dev/null 2>&1 || true
+    done
+  fi
   systemctl enable orbis-gpu-boot-health.service >/dev/null 2>&1 || true
   mkdir -p /var/lib/orbis-graphics
   echo ":: orbis-graphics: run 'sudo orbis-gpu qualify' (or 'sudo orbis-qualify' after integration)"

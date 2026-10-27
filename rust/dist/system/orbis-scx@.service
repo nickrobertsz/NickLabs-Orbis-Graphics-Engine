@@ -1,0 +1,16 @@
+[Unit]
+Description=NickLabs Orbis sched_ext scheduler %i (managed by orbis-perf)
+Documentation=file:///usr/share/doc/orbis-graphics/PERFORMANCE.md
+ConditionPathExists=/sys/kernel/sched_ext/state
+# the scx-scheds package's own loaders would load a second scheduler
+Conflicts=scx.service scx_loader.service
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/orbis-perf scx-exec %i
+# if the BPF scheduler exits or is kicked out, the kernel falls back to EEVDF by itself;
+# orbis-perf counts the failures and stops retrying a scheduler after two
+Restart=on-failure
+RestartSec=3

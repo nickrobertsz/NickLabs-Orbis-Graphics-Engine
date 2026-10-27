@@ -1,0 +1,25 @@
+# NickLabs Orbis gaming stack: everything Windows and Linux games need on top of Orbis 0.2.0's
+# GAMING personality (which already ships steam, wine, gamemode, kodi). Proton/GE-Proton and DXVK
+# come from the pinned runner catalog (orbis-games fetch on the Nobara, orbis-games install on the
+# console), not from these packages. All names resolve from the pinned Arch snapshot; a wrong name
+# fails the pack's dependency closure loudly.
+pkgname=orbis-gaming
+pkgver=2.0.0
+pkgrel=1
+pkgdesc="NickLabs Orbis gaming stack (Lutris, Gamescope, MangoHud, sched_ext schedulers, 32-bit audio/TLS for Wine)"
+arch=('any')
+url="https://github.com/nicklabs/orbis-graphics"
+license=('MIT')
+depends=('orbis-native=2.0.0' 'steam' 'wine' 'winetricks' 'lutris' 'gamescope'
+         'mangohud' 'lib32-mangohud' 'scx-scheds' 'vulkan-tools'
+         'lib32-gnutls' 'lib32-libpulse' 'lib32-alsa-plugins')
+optdepends=('kodi: offline frontend (already in Orbis 0.2.0 GAMING)')
+
+package() {
+  install -Dm644 /dev/stdin "$pkgdir/usr/share/doc/orbis-gaming/README" <<'TXT'
+NickLabs Orbis gaming stack. See /usr/share/doc/orbis-graphics/GAMING.md.
+  orbis-games caps        what this GPU driver can run (DXVK 3.x / 2.x / 1.10, VKD3D-Proton)
+  orbis-games runners     pinned runners and which Proton is picked automatically
+  orbis-run %command%     Steam launch option: profiles, logs, diagnosis (orbis-games last <game>)
+TXT
+}

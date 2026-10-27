@@ -7,7 +7,7 @@ pkgdesc="NickLabs Orbis Graphics Engine 2.0.0 (GE kernel, Mesa 26.2.5-201, Rusti
 arch=('any')
 url="https://github.com/nicklabs/orbis-graphics"
 license=('MIT')
-depends=('orbis-graphics=2.0.0' 'orbis-graphics-engine=2.0.0' 'linux-orbis-ps4-ge'
+depends=('orbis-graphics=2.0.0' 'orbis-graphics-engine=2.0.0' 'orbis-native=2.0.0' 'orbis-gaming=2.0.0' 'linux-orbis-ps4-ge'
          'mesa-orbis-ps4>=26.2.5-201' 'opencl-mesa-orbis-ps4>=26.2.5-201' 'lib32-mesa-orbis-ps4>=26.2.5-201'
          'xf86-video-amdgpu-orbis-ps4' 'vulkan-icd-loader' 'lib32-vulkan-icd-loader' 'ocl-icd'
          'vulkan-tools' 'mesa-utils' 'libva-utils' 'clinfo' 'drm_info' 'lm_sensors'

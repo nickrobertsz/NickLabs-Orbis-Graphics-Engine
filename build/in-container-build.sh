@@ -57,6 +57,11 @@ mk mesa/lib32 mesa-lib32 nodeps
 step "orbis-graphics tools + meta package"
 mk packages/orbis-graphics orbis-graphics nodeps
 mk packages/orbis-graphics-engine orbis-graphics-engine nodeps
+step "orbis-native (Rust, btver2 + fat LTO, gated by the Orbis 0.2.0 ISA audit)"
+[ -f /orbis/platform/orbis/isa_audit.py ] || { echo "/orbis/platform (Orbis 0.2.0 platform/) is not mounted: build-pack.sh mounts it" >&2; exit 6; }
+cp -a /orbis/platform "$B/packages/orbis-native/orbis-platform" && chown -R builder "$B/packages/orbis-native/orbis-platform"
+mk packages/orbis-native orbis-native nodeps
+mk packages/orbis-gaming orbis-gaming nodeps
 mk packages/orbis-graphics-pack orbis-graphics-pack nodeps
 
 exp_state=NOT_BUILT; exp_reason="not requested (build-pack.sh --experimental)"

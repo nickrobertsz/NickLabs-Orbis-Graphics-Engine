@@ -1,0 +1,16 @@
+[Unit]
+Description=NickLabs Orbis: probe Vulkan and record which DXVK / VKD3D line this driver supports
+Documentation=file:///usr/share/doc/orbis-graphics/GAMING.md
+After=systemd-modules-load.service systemd-udev-settle.service orbis-gpu-boot-health.service
+ConditionPathExists=/usr/bin/vulkaninfo
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/orbis-games caps --save
+# probing must never hold up boot or fail it
+TimeoutStartSec=60
+SuccessExitStatus=1 2
+Slice=orbis-background.slice
+
+[Install]
+WantedBy=multi-user.target

@@ -369,7 +369,9 @@ pub fn main_run(argv: Vec<String>) -> i32 {
     eprintln!("orbis-run: {} via {} ({})", pl.title, pl.runner, pl.d3d);
 
     let mut full = pl.argv.clone();
-    let scope = !a.flag("no-scope") && std::env::var_os("XDG_RUNTIME_DIR").is_some()
+    // a user manager must be reachable, otherwise systemd-run --user fails and the game never starts
+    let user_bus = std::env::var_os("XDG_RUNTIME_DIR").map(|d| std::path::Path::new(&d).join("bus").exists()).unwrap_or(false);
+    let scope = !a.flag("no-scope") && user_bus
         && Command::new("systemd-run").arg("--version").stdout(Stdio::null()).status().map(|s| s.success()).unwrap_or(false);
     if scope {
         let mut s = vec!["systemd-run".to_string(), "--user".into(), "--scope".into(), "--quiet".into(),

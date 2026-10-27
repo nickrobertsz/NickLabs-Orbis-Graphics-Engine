@@ -1,0 +1,7 @@
+[Unit]
+Description=NickLabs Orbis: store the last-known-good time
+After=orbis-time.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/orbis-time save

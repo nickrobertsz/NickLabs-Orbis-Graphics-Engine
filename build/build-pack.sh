@@ -67,7 +67,7 @@ $SUDO "$engine" build -t $CTR -f build/Containerfile.gfx build
 step "3/5 packages, dependency closure, mini-root (in the container; Mesa takes 1-3 h)"
 rm -rf out/pack && mkdir -p out/pack
 [ -f out/loader-ge/build.json ] && cp -a out/loader-ge out/pack/loader
-mounts=(-v "$R":/src:z)
+mounts=(-v "$R":/src:z -v "$orbis_src/platform":/orbis/platform:ro,z)
 args=(--staging /src/out/pack)
 if [ -f "$orbis_src/out/repo/orbis.db.tar.zst" ]; then mounts+=(-v "$orbis_src/out/repo":/orbis/repo:ro,z); args+=(--orbis-repo /orbis/repo); fi
 if [ -f "$orbis_src/out/rootfs/packages.txt" ]; then mounts+=(-v "$orbis_src/out/rootfs/packages.txt":/orbis/packages.txt:ro,z); args+=(--base-packages /orbis/packages.txt); fi

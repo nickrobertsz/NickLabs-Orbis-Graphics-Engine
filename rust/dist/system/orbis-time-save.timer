@@ -1,0 +1,10 @@
+[Unit]
+Description=NickLabs Orbis: store the last-known-good time every 15 minutes (power loss without shutdown)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

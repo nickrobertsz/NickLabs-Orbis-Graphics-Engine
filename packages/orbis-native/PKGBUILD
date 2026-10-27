@@ -1,0 +1,69 @@
+# NickLabs Orbis native components (Rust): orbis-perf (unified performance controller), orbis-time
+# (PS4 time policy), orbis-games + orbis-run (Vulkan capability check, runner catalog, game launcher,
+# failure classification). Standard library only; built offline from this tree.
+# Built for the PS4 CPU (AMD Jaguar, btver2) with fat LTO, then gated by Orbis 0.2.0's ISA audit
+# (rust/tools/isa-check.py): any AVX2/FMA/BMI2/AVX-512 instruction fails the build.
+pkgname=orbis-native
+pkgver=2.0.0
+pkgrel=1
+pkgdesc="NickLabs Orbis native (Rust): performance controller, PS4 time policy, game runner management"
+arch=('x86_64')
+url="https://github.com/nicklabs/orbis-graphics"
+license=('MIT')
+depends=('glibc' 'gcc-libs' 'systemd' 'curl' 'tar' 'zstd' 'coreutils')
+makedepends=('rust' 'python' 'binutils')
+optdepends=('scx-scheds: sched_ext schedulers (scx_lavd, scx_bpfland, scx_rusty, scx_flash) for orbis-perf sched'
+            'vulkan-tools: orbis-games caps (vulkaninfo)'
+            'linux-orbis-ps4-ge: RTC driver, sched_ext, dmem cgroup, MGLRU, PSI, cpusets (without it those report UNSUPPORTED)'
+            'wine: plain Wine prefixes for orbis-run --runner wine'
+            'steam: Proton titles (orbis-run %command% as launch option)')
+# one game/performance manager: falcond adjusts the same knobs
+conflicts=('falcond')
+backup=('etc/orbis/perf/perf.json')
+install=orbis-native.install
+options=('!debug' '!lto')   # LTO comes from the Cargo release profile; makepkg's -flto is for C
+
+_root() { echo "${startdir}/../.."; }
+
+build() {
+  local R; R="$(_root)"
+  export CARGO_HOME="$srcdir/cargo-home" CARGO_TARGET_DIR="$srcdir/target"
+  # PS4 CPU: AMD Jaguar. Never x86-64-v3 / native (AVX2, FMA, BMI2 do not exist on it).
+  export RUSTFLAGS="-C target-cpu=btver2"
+  cd "$R/rust"
+  cargo build --release --offline --locked
+}
+
+check() {
+  local R; R="$(_root)"
+  export CARGO_HOME="$srcdir/cargo-home" CARGO_TARGET_DIR="$srcdir/target-test"
+  cd "$R/rust"
+  cargo test --release --offline --locked -q
+  # Orbis 0.2.0's ISA audit, copied next to this PKGBUILD by build/in-container-build.sh
+  # (or set ORBIS_PLATFORM to <orbis-0.2.0>/platform when building by hand)
+  local plat="${ORBIS_PLATFORM:-$startdir/orbis-platform}"
+  [ -f "$plat/orbis/isa_audit.py" ] || { echo "ISA gate: Orbis 0.2.0 platform/ not found at $plat" >&2; return 1; }
+  python3 -I "$R/rust/tools/isa-check.py" --platform "$plat" \
+    "$srcdir"/target/release/{orbis-perf,orbis-time,orbis-games,orbis-run} | tee "$srcdir/isa-check.txt"
+}
+
+package() {
+  local R; R="$(_root)"
+  for b in orbis-perf orbis-time orbis-games orbis-run; do
+    install -Dm755 "$srcdir/target/release/$b" "$pkgdir/usr/bin/$b"
+  done
+  local D="$R/rust/dist"
+  install -d "$pkgdir/usr/lib/systemd/system" "$pkgdir/usr/lib/systemd/user"
+  install -m644 "$D"/system/*.service "$D"/system/*.timer "$D"/system/*.slice "$pkgdir/usr/lib/systemd/system/"
+  for d in "$D"/system/*.d; do
+    install -Dm644 -t "$pkgdir/usr/lib/systemd/system/$(basename "$d")" "$d"/*.conf
+  done
+  install -m644 "$D"/user/*.slice "$pkgdir/usr/lib/systemd/user/"
+  install -Dm644 "$D/tmpfiles.d/orbis-native.conf" "$pkgdir/usr/lib/tmpfiles.d/orbis-native.conf"
+  install -Dm644 "$R/gaming/runners.json" "$pkgdir/usr/share/orbis/games/runners.json"
+  install -Dm644 "$R/gaming/runners.lock.json" "$pkgdir/usr/share/orbis/games/runners.lock.json"
+  install -d "$pkgdir/usr/share/orbis/games.d"
+  install -Dm644 /dev/stdin "$pkgdir/etc/orbis/perf/perf.json" <<<'{"modes": {}}'
+  install -Dm644 "$srcdir/isa-check.txt" "$pkgdir/usr/share/doc/orbis-native/isa-check.txt"
+  install -Dm644 "$R/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

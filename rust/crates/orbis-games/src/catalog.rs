@@ -87,7 +87,12 @@ pub fn pick_proton<'a>(rs: &'a [Runner], dxvk_line: &str) -> Option<&'a Runner> 
     let max = rank(dxvk_line);
     rs.iter()
         .filter(|r| r.kind == "proton" && r.dxvk_line.as_deref().map(rank).unwrap_or(0) <= max && max > 0)
-        .max_by_key(|r| (r.dxvk_line.as_deref().map(rank).unwrap_or(0), installed(r) as u8, r.version.clone()))
+        .max_by_key(|r| (r.dxvk_line.as_deref().map(rank).unwrap_or(0), installed(r) as u8, version_key(&r.version)))
+}
+
+/// "10-34" > "7-55": compare the numeric parts, not the string.
+pub fn version_key(v: &str) -> Vec<u64> {
+    v.split(|c: char| !c.is_ascii_digit()).filter(|x| !x.is_empty()).filter_map(|x| x.parse().ok()).collect()
 }
 
 pub fn sha256_file(path: &Path) -> Result<String, String> {
@@ -204,10 +209,71 @@ pub fn install_bundle(rs: &[Runner], bundle: &Path, only: &[String]) -> Value {
         let dst = expand(&r.install);
         let parent = dst.parent().map(Path::to_path_buf).unwrap_or_else(|| dst.clone());
         let _ = std::fs::create_dir_all(&parent);
-        // tarballs contain one top directory named like the install directory
-        let st = Command::new("tar").arg("-xf").arg(&f).arg("-C").arg(&parent).status();
-        let ok = st.map(|s| s.success()).unwrap_or(false) && installed(r);
-        out.push(orbis_core::jobj! {"id" => r.id.clone(), "state" => if ok { "PASS" } else { "FAIL" }, "installed_to" => dst.display().to_string()});
+        match extract_single_top(&f, &parent, &dst) {
+            Ok(()) if installed(r) => out.push(orbis_core::jobj! {"id" => r.id.clone(), "state" => "PASS", "installed_to" => dst.display().to_string()}),
+            Ok(()) => out.push(orbis_core::jobj! {"id" => r.id.clone(), "state" => "FAIL", "installed_to" => dst.display().to_string(),
+                "why" => "extracted, but the expected files (proton / x64/*.dll) are missing"}),
+            Err(e) => out.push(orbis_core::jobj! {"id" => r.id.clone(), "state" => "FAIL", "why" => e}),
+        }
     }
     Value::Arr(out)
+}
+
+/// Extract `archive` into a scratch directory beside `dst`, then move its single top-level
+/// directory to `dst` (upstream top-level names do not always match the install name, e.g.
+/// the -x86_64 GE-Proton assets). An existing `dst` is left alone.
+pub fn extract_single_top(archive: &Path, parent: &Path, dst: &Path) -> Result<(), String> {
+    if dst.exists() {
+        return Ok(());
+    }
+    let tmp = parent.join(format!(".orbis-extract-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let st = Command::new("tar").arg("-xf").arg(archive).arg("-C").arg(&tmp).status().map_err(|e| format!("tar: {e}"))?;
+    let res = if !st.success() {
+        Err(format!("tar -xf {} failed ({st})", archive.display()))
+    } else {
+        let tops = fsx::list_dir(&tmp);
+        match tops.as_slice() {
+            [one] if one.is_dir() => std::fs::rename(one, dst).map_err(|e| e.to_string()),
+            _ => std::fs::rename(&tmp, dst).map_err(|e| e.to_string()), // flat archive: the scratch dir becomes dst
+        }
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+    res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_order_and_extract() {
+        assert!(version_key("10-34") > version_key("7-55"));
+        assert!(version_key("11-11") > version_key("10-34"));
+        let d = std::env::temp_dir().join(format!("orbis-cat-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("src/GE-Proton11-11-x86_64")).unwrap();
+        std::fs::write(d.join("src/GE-Proton11-11-x86_64/proton"), "#!/bin/sh\n").unwrap();
+        let ar = d.join("a.tar.gz");
+        assert!(Command::new("tar").arg("-czf").arg(&ar).arg("-C").arg(d.join("src")).arg("GE-Proton11-11-x86_64").status().unwrap().success());
+        let dst = d.join("compat/GE-Proton11-11");
+        std::fs::create_dir_all(d.join("compat")).unwrap();
+        extract_single_top(&ar, &d.join("compat"), &dst).unwrap();
+        assert!(dst.join("proton").exists());
+        assert_eq!(fsx::list_dir(&d.join("compat")).len(), 1);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn shipped_catalog_parses() {
+        let f = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../gaming/runners.json");
+        let rs = load(&f).unwrap();
+        assert_eq!(rs.len(), 7);
+        assert!(rs.iter().all(|r| !r.urls.is_empty() && r.urls[0].starts_with("https://github.com/")));
+        // no driver evidence: newest 2.x Proton for a 2.x driver, nothing for "none"
+        assert_eq!(pick_proton(&rs, "2.x").map(|r| r.id.as_str()), Some("GE-Proton10-34"));
+        assert_eq!(pick_proton(&rs, "3.x").map(|r| r.id.as_str()), Some("GE-Proton11-11"));
+        assert!(pick_proton(&rs, "none").is_none());
+    }
 }
