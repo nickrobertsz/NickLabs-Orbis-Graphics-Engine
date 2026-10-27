@@ -437,6 +437,7 @@ mod tests {
     /// GPU clock, fan, VRAM protection), its end and the restoration of every value.
     #[test]
     fn controller_fixture() {
+        let _g = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let root = std::env::temp_dir().join(format!("orbis-perf-fixture-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let r = root.as_path();

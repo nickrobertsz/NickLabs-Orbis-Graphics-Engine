@@ -89,8 +89,30 @@ pub fn detect(procs: &[Proc], profiles: &[GameProfile], now: i64) -> BTreeMap<St
         None
     };
 
+    // PIDs with an orbis-run marker; their descendants belong to the same game
+    let markers: BTreeSet<u32> = fsx::list_dir(&p("/run/orbis/games"))
+        .iter()
+        .filter_map(|f| f.file_stem().and_then(|s| s.to_str()).and_then(|s| s.parse().ok()))
+        .filter(|pid| by_pid.contains_key(pid))
+        .collect();
+    let marker_root = |pid: u32| -> Option<u32> {
+        let mut cur = pid;
+        for _ in 0..32 {
+            if markers.contains(&cur) {
+                return Some(cur);
+            }
+            let pr = by_pid.get(&cur)?;
+            if pr.ppid <= 1 {
+                return None;
+            }
+            cur = pr.ppid;
+        }
+        None
+    };
+
     for pr in procs {
-        let marker = orbis_run_marker(pr.pid);
+        let mroot = marker_root(pr.pid);
+        let marker = mroot.and_then(orbis_run_marker);
         let reaper_app = steam_appid_of_reaper(pr);
         let names = pr.names();
         let prof = find_profile(profiles, None, &names);
@@ -115,7 +137,11 @@ pub fn detect(procs: &[Proc], profiles: &[GameProfile], now: i64) -> BTreeMap<St
             .or(reaper_app.clone())
             .or(under_reaper.clone())
             .or(pr.environ_steam_appid.clone());
-        let key = appid.clone().map(|a| format!("steam:{a}")).unwrap_or_else(|| format!("pid:{}", pr.pid));
+        let key = appid
+            .clone()
+            .map(|a| format!("steam:{a}"))
+            .or_else(|| mroot.map(|m| format!("orbis-run:{m}")))
+            .unwrap_or_else(|| format!("pid:{}", pr.pid));
         // a Wine helper tree under the same reaper joins the app's session instead of opening one
         let profile = find_profile(profiles, appid.as_deref(), &names).cloned().or_else(|| {
             marker.as_ref().and_then(|m| m.get("profile").and_then(|v| v.as_str())).and_then(|src| {
@@ -198,5 +224,22 @@ mod tests {
         assert_eq!(w.via, "wine-exe");
         assert!(!s.values().any(|x| x.pids.contains(&31) || x.pids.contains(&40) || x.pids.contains(&10)));
         assert_eq!(background_pids(&[pr(50, 1, "fossilize_replay", &[])], &BTreeSet::new()), vec![50]);
+    }
+
+    #[test]
+    fn orbis_run_descendants() {
+        let _g = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = std::env::temp_dir().join(format!("orbis-games-mk-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("run/orbis/games")).unwrap();
+        std::fs::write(root.join("run/orbis/games/70.json"), r#"{"title":"Witcher 3","profile":"/etc/orbis/games.d/w3.json"}"#).unwrap();
+        std::env::set_var("ORBIS_ROOT", &root);
+        let ps = vec![pr(70, 1, "orbis-run", &["orbis-run"]), pr(71, 70, "wine64-preload", &["witcher3.exe"]), pr(72, 71, "bash", &["bash"])];
+        let s = detect(&ps, &[], 1);
+        std::env::remove_var("ORBIS_ROOT");
+        let w = &s["orbis-run:70"];
+        assert_eq!(w.title, "Witcher 3");
+        assert!(w.pids.contains(&70) && w.pids.contains(&71) && w.pids.contains(&72));
+        assert_eq!(s.len(), 1);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

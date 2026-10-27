@@ -18,6 +18,10 @@ mod hw;
 mod policy;
 mod sched;
 
+/// Tests that point ORBIS_ROOT at a fixture tree take this lock (the variable is process-wide).
+#[cfg(test)]
+pub static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 use orbis_core::fsx::{self, p};
 use orbis_core::json::{self, Value};
 use orbis_core::{emit, jobj, Args};

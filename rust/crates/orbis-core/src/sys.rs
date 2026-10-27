@@ -18,6 +18,33 @@ extern "C" {
     fn sched_getscheduler(pid: i32) -> i32;
     fn kill(pid: i32, sig: i32) -> i32;
     fn __errno_location() -> *mut i32;
+    fn getrlimit(res: i32, rl: *mut Rlimit) -> i32;
+    fn setrlimit(res: i32, rl: *const Rlimit) -> i32;
+}
+
+#[repr(C)]
+struct Rlimit {
+    cur: u64,
+    max: u64,
+}
+
+const RLIMIT_NOFILE: i32 = 7;
+
+/// Raise the soft open-file limit to the hard limit (esync needs many eventfds). Returns (old, new).
+pub fn raise_nofile() -> io::Result<(u64, u64)> {
+    let mut rl = Rlimit { cur: 0, max: 0 };
+    if unsafe { getrlimit(RLIMIT_NOFILE, &mut rl) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let old = rl.cur;
+    if rl.cur < rl.max {
+        let new = Rlimit { cur: rl.max, max: rl.max };
+        if unsafe { setrlimit(RLIMIT_NOFILE, &new) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        return Ok((old, rl.max));
+    }
+    Ok((old, old))
 }
 
 #[repr(C)]

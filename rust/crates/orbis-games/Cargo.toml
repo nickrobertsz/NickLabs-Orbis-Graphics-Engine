@@ -8,6 +8,9 @@ authors.workspace = true
 [dependencies]
 orbis-core = { path = "../orbis-core" }
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "orbis-games"
 path = "src/main.rs"

@@ -14,13 +14,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "orbis-isa"
-version = "2.0.0"
-dependencies = [
- "orbis-core",
-]
-
-[[package]]
 name = "orbis-perf"
 version = "2.0.0"
 dependencies = [

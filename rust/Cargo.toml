@@ -1,10 +1,10 @@
 # NickLabs Orbis native components (Rust directive, 2026-10-26).
 # Standard library only: no crates.io dependencies, so the build works offline from this tree.
 # PS4 builds: RUSTFLAGS="-C target-cpu=btver2" (packages/orbis-native/PKGBUILD); every binary is
-# then checked by orbis-isa-check so nothing Jaguar lacks (AVX2, BMI2, FMA, AVX-512...) ships.
+# then checked with Orbis 0.2.0's existing ISA audit (orbis.isa_audit) so nothing Jaguar lacks ships.
 [workspace]
 resolver = "2"
-members = ["crates/orbis-core", "crates/orbis-time", "crates/orbis-perf", "crates/orbis-games", "crates/orbis-isa"]
+members = ["crates/orbis-core", "crates/orbis-time", "crates/orbis-perf", "crates/orbis-games"]
 
 [workspace.package]
 version = "2.0.0"
