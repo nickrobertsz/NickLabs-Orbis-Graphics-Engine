@@ -56,13 +56,14 @@ pub fn decide(reply: Option<&Value>, checks: &[(String, bool, String)], require:
 /// Send the request for `pid` and wait for orbis-perf's reply (None after the timeout).
 pub fn request(req: &Request, timeout: Duration) -> Option<Value> {
     let rp = admit::reply_path(req.pid);
-    let _ = std::fs::remove_file(&rp);
     fsx::atomic_write(&admit::req_path(req.pid), req.to_json().to_string_compact().as_bytes()).ok()?;
     let t0 = Instant::now();
     while t0.elapsed() < timeout {
+        // only the reply to this request: a leftover reply for a recycled PID has another nonce
         if let Some(v) = fsx::read_raw(&rp).and_then(|t| json::parse(&t).ok()) {
-            let _ = std::fs::remove_file(&rp);
-            return Some(v);
+            if v.get("nonce").and_then(Value::as_str) == Some(req.nonce.as_str()) {
+                return Some(v);
+            }
         }
         std::thread::sleep(Duration::from_millis(25));
     }
@@ -81,6 +82,7 @@ pub fn stage2(exec: impl FnOnce() -> i32, timeout: Duration) -> i32 {
         gtt_max: env_u(ENV_GTT),
         require: std::env::var(ENV_REQUIRE).map(|v| v == "1").unwrap_or(false),
         title: std::env::var(ENV_TITLE).unwrap_or_default(),
+        nonce: admit::new_nonce(),
     };
     let result_file = std::env::var(ENV_RESULT).ok();
     for k in [ENV_VRAM, ENV_GTT, ENV_REQUIRE, ENV_RESULT, ENV_TITLE] {
@@ -163,7 +165,12 @@ mod tests {
                 if req.exists() {
                     std::thread::sleep(Duration::from_millis(30)); // a slow daemon
                     fs::write(r2.join("sys/fs/cgroup/user.slice/user-1000.slice/orbis-game-1.scope/dmem.max"), format!("{VR} {}\n", 512u64 << 20)).unwrap();
-                    fs::write(r2.join(format!("run/orbis/admit/{me}.reply")), r#"{"admitted":true}"#).unwrap();
+                    let n = orbis_core::json::parse(&fs::read_to_string(&req).unwrap()).unwrap().get("nonce").and_then(Value::as_str).unwrap().to_string();
+                    fs::create_dir_all(r2.join("run/orbis/admit-replies")).unwrap();
+                    // a stale reply for this PID first: must be ignored
+                    fs::write(r2.join(format!("run/orbis/admit-replies/{me}.reply")), r#"{"admitted":true,"nonce":"00"}"#).unwrap();
+                    std::thread::sleep(Duration::from_millis(60));
+                    fs::write(r2.join(format!("run/orbis/admit-replies/{me}.reply")), format!(r#"{{"admitted":true,"nonce":"{n}"}}"#)).unwrap();
                     let _ = fs::remove_file(&req);
                     return;
                 }

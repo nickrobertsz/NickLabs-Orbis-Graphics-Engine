@@ -24,7 +24,7 @@ const LOG: &str = "/run/orbis/perf/admissions.jsonl";
 /// Decide on one request. `owner` is the uid owning the request file.
 pub fn decide(req: &Request, owner: u32) -> Value {
     let mut results = vec![];
-    let reject = |why: String| jobj! {"pid" => req.pid, "admitted" => false, "rejected" => why, "results" => Value::Arr(vec![])};
+    let reject = |why: String| jobj! {"pid" => req.pid, "nonce" => req.nonce.clone(), "admitted" => false, "rejected" => why, "results" => Value::Arr(vec![])};
     let Some(pr) = procs::read_proc(req.pid, false) else {
         return reject(format!("process {} not found", req.pid));
     };
@@ -60,7 +60,7 @@ pub fn decide(req: &Request, owner: u32) -> Value {
         let _ = j.forget(&k);
     }
     let ok = results.iter().all(|a| a.get("state").and_then(Value::as_str) == Some("APPLIED"));
-    jobj! {"pid" => req.pid, "cgroup" => cg, "admitted" => ok, "require" => req.require, "title" => req.title.clone(),
+    jobj! {"pid" => req.pid, "nonce" => req.nonce.clone(), "cgroup" => cg, "admitted" => ok, "require" => req.require, "title" => req.title.clone(),
            "dmem_controller" => path, "results" => Value::Arr(results)}
 }
 
@@ -84,9 +84,9 @@ pub fn serve_once(admitted: &Admitted) -> Vec<Value> {
         };
         let mut rep = reply.clone();
         rep.set("schema", "orbis-admit-reply/1").set("time", orbis_core::sys::now_unix().0);
+        // replies go to a root-only directory (never a file root creates where users can write);
+        // the client matches the nonce and verifies dmem.max itself
         let rp = admit::reply_path(pid);
-        // a stale reply (possibly planted by the user) is replaced; the client verifies dmem.max itself
-        let _ = std::fs::remove_file(&rp);
         let _ = fsx::atomic_write(&rp, rep.to_string_compact().as_bytes());
         if rep.get("admitted").and_then(Value::as_bool) == Some(true) {
             if let (Some(cg), Ok(mut m)) = (rep.get("cgroup").and_then(Value::as_str).map(str::to_string), admitted.lock()) {
@@ -98,10 +98,16 @@ pub fn serve_once(admitted: &Admitted) -> Vec<Value> {
     out
 }
 
-/// Drop admissions whose scope is gone.
+/// Drop admissions whose scope is gone, and replies nobody collected (older than a minute).
 pub fn prune(admitted: &Admitted) {
     if let Ok(mut m) = admitted.lock() {
         m.retain(|cg, _| p(&format!("/sys/fs/cgroup/{}", cg.trim_matches('/'))).exists());
+    }
+    for f in fsx::list_dir(&p(admit::REPLY_DIR)) {
+        let old = std::fs::metadata(&f).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).map(|d| d.as_secs() > 60).unwrap_or(false);
+        if old {
+            let _ = std::fs::remove_file(&f);
+        }
     }
 }
 
@@ -160,7 +166,7 @@ mod tests {
     }
 
     fn req(require: bool) -> Request {
-        Request { pid: 78, vram_max: Some(512 << 20), gtt_max: Some(1 << 30), require, title: "Game".into() }
+        Request { pid: 78, vram_max: Some(512 << 20), gtt_max: Some(1 << 30), require, title: "Game".into(), nonce: "ab12".into() }
     }
 
     #[test]
@@ -220,10 +226,11 @@ mod tests {
         let out = serve_once(&adm);
         assert_eq!(out.len(), 2);
         assert!(!r.join("run/orbis/admit/78.req").exists());
-        let rep = orbis_core::json::parse(&fs::read_to_string(r.join("run/orbis/admit/78.reply")).unwrap()).unwrap();
+        let rep = orbis_core::json::parse(&fs::read_to_string(r.join("run/orbis/admit-replies/78.reply")).unwrap()).unwrap();
         assert_eq!(rep.get("admitted").and_then(Value::as_bool), Some(true));
+        assert_eq!(rep.get("nonce").and_then(Value::as_str), Some("ab12"));
         assert!(adm.lock().unwrap().contains_key(&format!("/{SCOPE}")));
-        let bad = orbis_core::json::parse(&fs::read_to_string(r.join("run/orbis/admit/79.reply")).unwrap()).unwrap();
+        let bad = orbis_core::json::parse(&fs::read_to_string(r.join("run/orbis/admit-replies/79.reply")).unwrap()).unwrap();
         assert_eq!(bad.get("admitted").and_then(Value::as_bool), Some(false));
         assert!(r.join("etc/secret").exists(), "the symlink target is never touched");
         std::env::remove_var("ORBIS_ROOT");

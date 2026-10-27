@@ -194,7 +194,8 @@ Nobara compilation.
 **GE-A03: limits before the game's first allocation**
 - Launch through `orbis-run`, with limits in the profile:
   - orbis-run starts `systemd-run --user --scope` around a second copy of itself (stage 2);
-  - stage 2 asks orbis-perf, through `/run/orbis/admit/<pid>.req`, to limit the scope;
+  - stage 2 asks orbis-perf, through `/run/orbis/admit/<pid>.req` (with a random nonce), to limit
+    the scope; replies come back in the root-only `/run/orbis/admit-replies/`;
   - orbis-perf (root) trusts only the limits in the request. It reads the cgroup from `/proc`,
     checks the request file's owner against the process owner, and accepts only a `.scope` of
     that user that holds nothing but stage 2;

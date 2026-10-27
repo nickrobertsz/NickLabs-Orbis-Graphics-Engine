@@ -5,8 +5,9 @@
 //!
 //! 1. `orbis-run` starts `systemd-run --user --scope` around a second copy of itself (stage 2).
 //!    The scope is a cgroup that holds stage 2 only.
-//! 2. Stage 2 writes `/run/orbis/admit/<pid>.req` (its own PID; the file is owned by the user)
-//!    and waits for `/run/orbis/admit/<pid>.reply`, written by `orbis-perf` (root).
+//! 2. Stage 2 writes `/run/orbis/admit/<pid>.req` (its own PID and a random nonce; the file is
+//!    owned by the user) and waits for `/run/orbis/admit-replies/<pid>.reply`, which only
+//!    `orbis-perf` (root) can write, carrying the same nonce.
 //! 3. `orbis-perf` trusts nothing in the request except the limits. It takes the cgroup from
 //!    `/proc/<pid>/cgroup`, checks the request file's owner against the process owner, checks
 //!    that the cgroup is a scope of that user holding nothing but that process, enables the
@@ -23,6 +24,8 @@ use crate::jobj;
 use std::path::PathBuf;
 
 pub const DIR: &str = "/run/orbis/admit";
+/// root-owned, not world-writable: root never creates files in a directory users can write
+pub const REPLY_DIR: &str = "/run/orbis/admit-replies";
 /// Exit code of orbis-run when required limits could not be applied (EX_TEMPFAIL)
 pub const EXIT_ADMISSION: i32 = 75;
 /// How long stage 2 waits for orbis-perf
@@ -35,12 +38,15 @@ pub struct Request {
     pub gtt_max: Option<u64>,
     pub require: bool,
     pub title: String,
+    /// echoed in the reply, so a stale reply for a recycled PID is never taken for this request
+    pub nonce: String,
 }
 
 impl Request {
     pub fn to_json(&self) -> Value {
         jobj! {"schema" => "orbis-admit-request/1", "pid" => self.pid, "vram_max" => self.vram_max,
-               "gtt_max" => self.gtt_max, "require" => self.require, "title" => self.title.clone()}
+               "gtt_max" => self.gtt_max, "require" => self.require, "title" => self.title.clone(),
+               "nonce" => self.nonce.clone()}
     }
     pub fn from_json(v: &Value) -> Option<Request> {
         let num = |k: &str| v.get(k).and_then(Value::as_i64).filter(|n| *n > 0).map(|n| n as u64);
@@ -50,6 +56,7 @@ impl Request {
             gtt_max: num("gtt_max"),
             require: v.get("require").and_then(Value::as_bool).unwrap_or(false),
             title: v.get("title").and_then(Value::as_str).unwrap_or("").chars().take(200).collect(),
+            nonce: v.get("nonce").and_then(Value::as_str).unwrap_or("").chars().filter(|c| c.is_ascii_hexdigit()).take(64).collect(),
         })
     }
     /// (kind, bytes) for every limit asked for
@@ -70,7 +77,18 @@ pub fn req_path(pid: u32) -> PathBuf {
 }
 
 pub fn reply_path(pid: u32) -> PathBuf {
-    p(DIR).join(format!("{pid}.reply"))
+    p(REPLY_DIR).join(format!("{pid}.reply"))
+}
+
+/// 128-bit random nonce (hex) from the kernel's CSPRNG
+pub fn new_nonce() -> String {
+    use std::io::Read;
+    let mut b = [0u8; 16];
+    if std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).is_err() {
+        let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        b.copy_from_slice(&(t ^ ((std::process::id() as u128) << 64)).to_le_bytes());
+    }
+    b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 /// cgroup v2 path of a process ("/user.slice/...") from /proc/<pid>/cgroup
@@ -140,7 +158,8 @@ mod tests {
 
     #[test]
     fn request_roundtrip_and_validation() {
-        let r = Request { pid: 42, vram_max: Some(512 << 20), gtt_max: None, require: true, title: "G".into() };
+        let r = Request { pid: 42, vram_max: Some(512 << 20), gtt_max: None, require: true, title: "G".into(), nonce: new_nonce() };
+        assert_eq!(r.nonce.len(), 32);
         let back = Request::from_json(&crate::json::parse(&r.to_json().to_string_compact()).unwrap()).unwrap();
         assert_eq!(back, r);
         assert_eq!(back.limits(), vec![("vram", 512u64 << 20)]);
