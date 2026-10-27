@@ -148,7 +148,8 @@ class Registry:
             raise KeyError(f"unknown target {tid}; known: {', '.join(self.targets())}")
         eff: dict = {}
         for d in self._chain(tid):
-            layer = {k: v for k, v in d.items() if k not in ("extends", "abstract", "reference", "kind", "id", "name", "schema")}
+            layer = {k: v for k, v in d.items() if k not in ("extends", "abstract", "reference", "kind", "id", "name", "schema",
+                                                             "orbis020_profiles")}
             eff = _merge(eff, layer)
         own = self.raw[tid]
         eff.update({"id": tid, "name": own["name"], "kind": own["kind"], "reference": bool(own.get("reference")),

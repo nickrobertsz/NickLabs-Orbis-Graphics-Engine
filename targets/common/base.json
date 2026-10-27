@@ -160,5 +160,35 @@
    "url": "https://github.com/feeRnt/ps4-linux-12xx",
    "role": "Sony southbridge PCI IDs; GPU PCI IDs 0x9920 (CUH-11xx), 0x9922 (CUH-12xx), 0x9923 (CUH-2xxx), 0x9924 (CUH-7xxx)"
   }
- ]
+ ],
+ "orbis020_profiles": {
+  "cuh-1215a": {
+   "targets": [
+    "cuh-1215a"
+   ],
+   "required_firmware": [
+    "liverpool-gpu",
+    "marvell-88w8897"
+   ],
+   "source": "Orbis 0.2.0 manifests/initramfs-profiles.json (model CUH-1215A, kernel_target aeolia-belize-6.15)"
+  },
+  "aeolia-belize-generic": {
+   "southbridges": [
+    "aeolia",
+    "belize"
+   ],
+   "required_firmware": [
+    "liverpool-gpu"
+   ],
+   "source": "Orbis 0.2.0 manifests/initramfs-profiles.json ('Any Aeolia/Belize console')"
+  },
+  "firmware-free": {
+   "southbridges": [
+    "aeolia",
+    "belize"
+   ],
+   "required_firmware": [],
+   "source": "Orbis 0.2.0 manifests/initramfs-profiles.json (GPU microcode from ps4-linux-loader >= v24b)"
+  }
+ }
 }

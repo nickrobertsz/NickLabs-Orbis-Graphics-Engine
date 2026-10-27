@@ -32,7 +32,7 @@ grep -q '"state": "integrated"' "$state/integration.json" || { echo "receipt say
 # (Graphics Pack 1.0.0's rollback had this order reversed: ledger GE-B07).
 echo "== remove the pack packages"
 rm_list=()
-for n in orbis-graphics-pack orbis-graphics-engine orbis-graphics opencl-mesa-orbis-ps4 linux-orbis-ps4-ge; do
+for n in orbis-graphics-pack orbis-graphics-docs orbis-graphics-engine orbis-graphics opencl-mesa-orbis-ps4 linux-orbis-ps4-ge; do
   in_root pacman -Q "$n" >/dev/null 2>&1 && rm_list+=("$n")
 done
 [ ${#rm_list[@]} -gt 0 ] && run in_root pacman -Rns --noconfirm "${rm_list[@]}"

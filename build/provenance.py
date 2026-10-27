@@ -4,6 +4,15 @@
     provenance.py write  <artifact> <dir> <main-file> <fingerprint> <target> <options-json>
     provenance.py check  <artifact> <dir> <main-file> <fingerprint>        exit 0 current, 1 not
     provenance.py select <out.json> <target> <options-json> <name>=<dir>:<main>:<fp>:<want> ...
+    provenance.py release-status <out.json> <name>=<main>:<fp>:<want> ...  exit 0 complete, 7 not
+
+`write` refuses (exit 3) when the main file does not exist: a step that "succeeded" without its
+output is a failure, never a provenance record with an empty checksum.
+
+`release-status` (r3.1, fail-closed) is the final gate of a release: want=required|requested
+artifacts must pass `check` (present, provenance names the artifact, same fingerprint, same
+sha256 on disk) or the release fails; want=omitted records an artifact that was intentionally not
+asked for (an optional stage-0 image without --base-stage0-image) and is never a failure.
 
 Every build step writes <main-file>.provenance.json next to its output: artifact name, build target,
 source revision (+dirty), patch-set hash (kernel/patches/series and every listed patch),
@@ -78,7 +87,15 @@ def toolchain() -> dict:
     return out
 
 
+class MissingOutput(Exception):
+    pass
+
+
 def write(artifact: str, d: str, main: str, fp: str, target: str, options: dict) -> dict:
+    if not os.path.isfile(main):
+        raise MissingOutput(f"{artifact}: the step reported success but {main} does not exist")
+    if not fp:
+        raise MissingOutput(f"{artifact}: no input fingerprint recorded for {main}")
     rec = {"schema": "orbis-ge-provenance/1", "artifact": artifact, "target": target,
            "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
            "source_revision": _git("rev-parse", "HEAD"), "source_dirty": bool(_git("status", "--porcelain")),
@@ -107,8 +124,12 @@ def check(artifact: str, d: str, main: str, fp: str) -> tuple[bool, str]:
             rec = json.load(fh)
     except (OSError, ValueError):
         return False, f"{artifact}: no {os.path.basename(pf)} (built before r3 or by hand): rebuild it"
+    if not isinstance(rec, dict) or rec.get("schema") != "orbis-ge-provenance/1":
+        return False, f"{artifact}: {os.path.basename(pf)} is not an orbis-ge provenance record"
     if rec.get("artifact") != artifact:
         return False, f"{artifact}: provenance names {rec.get('artifact')}"
+    if not rec.get("sha256"):
+        return False, f"{artifact}: provenance has no checksum"
     if rec.get("fingerprint") != fp:
         return False, f"{artifact}: built from other inputs (fingerprint {str(rec.get('fingerprint'))[:12]} != {fp[:12]})"
     have = sha256(main)
@@ -153,13 +174,52 @@ def select(out: str, target: str, options: dict, specs: list[str]) -> int:
     return 0 if not errors else 1
 
 
+def release_status(out: str, specs: list[str]) -> int:
+    """Final fail-closed gate: every required/requested artifact verified, omitted ones recorded."""
+    st = {"schema": "orbis-ge-release-status/1", "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "artifacts": {}}
+    failed = []
+    for spec in specs:
+        name, _, rest = spec.partition("=")
+        main, fp, want = rest.rsplit(":", 2)
+        if want == "omitted":
+            st["artifacts"][name] = {"status": "omitted", "main": main, "detail": "not requested for this run"}
+            continue
+        if want not in ("required", "requested"):
+            raise ValueError(f"{name}: want must be required, requested or omitted, not {want}")
+        ok, why = check(name, os.path.dirname(main), main, fp)
+        ent = {"status": "verified" if ok else "failed", "want": want, "main": main, "detail": why}
+        if ok:
+            ent["sha256"] = sha256(main)
+            with open(prov_file(main)) as fh:
+                ent["provenance"] = json.load(fh)
+        else:
+            failed.append(why)
+        st["artifacts"][name] = ent
+    st["complete"] = not failed
+    st["failures"] = failed
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    tmp = out + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(st, f, indent=1)
+    os.replace(tmp, out)
+    for n, e in st["artifacts"].items():
+        print(f"   {e['status'].upper():9} {n:16} {e['detail']}")
+    for e in failed:
+        print(f"!!! release artifact failed verification: {e}", file=sys.stderr)
+    return 0 if not failed else 7
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(__doc__, file=sys.stderr)
         return 2
     cmd = argv[1]
     if cmd == "write" and len(argv) == 8:
-        rec = write(argv[2], argv[3], argv[4], argv[5], argv[6], json.loads(argv[7] or "{}"))
+        try:
+            rec = write(argv[2], argv[3], argv[4], argv[5], argv[6], json.loads(argv[7] or "{}"))
+        except MissingOutput as e:
+            print(f"!!! {e}", file=sys.stderr)
+            return 3
         print(f"   provenance: {prov_file(argv[4])} ({rec['sha256'] and rec['sha256'][:12]})")
         return 0
     if cmd == "check" and len(argv) == 6:
@@ -168,6 +228,8 @@ def main(argv: list[str]) -> int:
         return 0 if ok else 1
     if cmd == "select" and len(argv) >= 5:
         return select(argv[2], argv[3], json.loads(argv[4] or "{}"), argv[5:])
+    if cmd == "release-status" and len(argv) >= 4:
+        return release_status(argv[2], argv[3:])
     print(__doc__, file=sys.stderr)
     return 2
 

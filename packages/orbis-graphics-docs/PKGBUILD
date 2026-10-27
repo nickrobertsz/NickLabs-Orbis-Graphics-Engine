@@ -1,0 +1,19 @@
+# NickLabs Orbis Graphics Engine 2.0.0 — documentation (r3.1: split out of orbis-graphics so a
+# documentation change rebuilds only this package, never the compiled tools; audit P2-8).
+pkgname=orbis-graphics-docs
+pkgver=2.0.0
+pkgrel=1
+pkgdesc="NickLabs Orbis Graphics Engine 2.0 documentation (/usr/share/doc/orbis-graphics)"
+arch=('any')
+url="https://github.com/nicklabs/orbis-graphics"
+license=('MIT')
+
+_root() { echo "${startdir}/../.."; }
+
+package() {
+  local R; R="$(_root)"
+  for f in "$R"/docs/*.md "$R/README.md" "$R/CHANGELOG.md"; do
+    install -Dm644 "$f" "$pkgdir/usr/share/doc/orbis-graphics/$(basename "$f")"
+  done
+  install -Dm644 "$R/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

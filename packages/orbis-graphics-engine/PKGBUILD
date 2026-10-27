@@ -4,7 +4,7 @@
 # Built from the source tree this PKGBUILD lives in (build/build-pack.sh).
 pkgname=orbis-graphics-engine
 pkgver=2.0.0
-pkgrel=1
+pkgrel=2   # r3.1: target registry, fail-closed membench and budget reporting
 pkgdesc="NickLabs Orbis Graphics Engine 2.0: memory policy, hardware API, Black Box diagnostics, video and AI tooling"
 arch=('any')
 url="https://github.com/nicklabs/orbis-graphics"

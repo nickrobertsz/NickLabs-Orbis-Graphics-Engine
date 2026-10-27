@@ -3,7 +3,7 @@
 # Built from the graphics source tree this PKGBUILD lives in (build/build-pack.sh).
 pkgname=orbis-graphics
 pkgver=2.0.0
-pkgrel=1
+pkgrel=2   # r3.1: documentation moved to orbis-graphics-docs; probe synchronization fixes
 pkgdesc="NickLabs Orbis Graphics tools (Graphics Engine 2.0): orbis-gpu (qualify/health/profile), orbis-gfx-probe, GPU stage-0 diagnosis"
 arch=('x86_64')
 url="https://github.com/nicklabs/orbis-graphics"
@@ -51,6 +51,5 @@ package() {
   install -Dm755 "$R/integrator/root/integrate-root.sh" "$pkgdir/usr/lib/orbis-graphics/integrate-root.sh"
   install -Dm755 "$R/integrator/root/rollback-root.sh" "$pkgdir/usr/lib/orbis-graphics/rollback-root.sh"
   install -Dm644 "$R/manifest/sources.json" "$pkgdir/usr/share/orbis-graphics/sources.json"
-  for f in "$R"/docs/*.md; do install -Dm644 "$f" "$pkgdir/usr/share/doc/orbis-graphics/$(basename "$f")"; done
   install -Dm644 "$R/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

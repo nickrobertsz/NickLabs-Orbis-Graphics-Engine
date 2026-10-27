@@ -114,8 +114,13 @@ mkc mesa/stable mesa-stable deps "$R/mesa"
 step "32-bit Mesa (build deps preinstalled by Containerfile.gfx; mesa-orbis-ps4 is a runtime dep only)"
 mkc mesa/lib32 mesa-lib32 nodeps "$R/mesa"
 step "orbis-graphics tools + meta package"
-mkc packages/orbis-graphics orbis-graphics nodeps "$R/diag" "$R/docs" "$R/LICENSE"
-mkc packages/orbis-graphics-engine orbis-graphics-engine nodeps "$R/diag" "$R/tools" "$R/targets" "$R/LICENSE"
+# r3.1: each cache key is exactly the repository paths its PKGBUILD reads (tests/unit check this),
+# so documentation changes rebuild orbis-graphics-docs only, and no package can be reused stale
+mkc packages/orbis-graphics orbis-graphics nodeps "$R/diag/orbis_gfx" "$R/diag/probe" "$R/diag/bin" "$R/diag/config" \
+  "$R/diag/schema" "$R/diag/stage0" "$R/diag/systemd" "$R/integrator/root" "$R/manifest/sources.json" "$R/LICENSE"
+mkc packages/orbis-graphics-docs orbis-graphics-docs nodeps "$R/docs" "$R/README.md" "$R/CHANGELOG.md" "$R/LICENSE"
+mkc packages/orbis-graphics-engine orbis-graphics-engine nodeps "$R/diag/orbis_engine" "$R/diag/orbis_targets" "$R/diag/bin" \
+  "$R/diag/systemd" "$R/diag/config" "$R/tools" "$R/targets" "$R/LICENSE"
 step "orbis-native (Rust, btver2 + fat LTO, gated by the Orbis 0.2.0 ISA audit)"
 [ -f /orbis/platform/orbis/isa_audit.py ] || { echo "/orbis/platform (Orbis 0.2.0 platform/) is not mounted: build-pack.sh mounts it" >&2; exit 6; }
 cp -a /orbis/platform "$B/packages/orbis-native/orbis-platform" && chown -R builder "$B/packages/orbis-native/orbis-platform"
