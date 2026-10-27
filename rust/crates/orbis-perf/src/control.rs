@@ -56,6 +56,8 @@ pub struct Controller {
     pub wl: workload::Sampler,
     /// background slice narrowed to CPU 0 because the game is CPU-bound
     bg_tight: bool,
+    /// scopes admitted before launch by the admission server (crate::admit)
+    pub admitted: crate::admit::Admitted,
 }
 
 impl Controller {
@@ -83,7 +85,40 @@ impl Controller {
             mode_applied: false,
             wl: workload::Sampler::default(),
             bg_tight: false,
+            admitted: Default::default(),
         }
+    }
+
+    /// Admission reply for a session, if orbis-run had its scope limited before launch
+    fn admission_of(&self, s: &Session) -> Option<Value> {
+        let m = self.admitted.lock().ok()?;
+        if let Some(r) = m.get(&s.root_cgroup) {
+            return Some(r.clone());
+        }
+        s.pids.iter().find_map(|pid| orbis_core::admit::cgroup_of(*pid).and_then(|cg| m.get(&cg).cloned()))
+    }
+
+    /// Limits for a game that was not admitted before launch (started outside orbis-run, or
+    /// orbis-run without a scope): applied to its cgroup now, so only later allocations are
+    /// held to them. Never applied to a cgroup that also holds programs outside the game.
+    fn retroactive_limit(&mut self, s: &Session, kind: &str, bytes: u64) -> Value {
+        let knob = format!("dmem_max_{kind}");
+        if s.root_cgroup.is_empty() {
+            return act(&knob, "SKIPPED", "no cgroup for this game");
+        }
+        let all = procs::all(false);
+        let mut game: BTreeSet<u32> = BTreeSet::new();
+        for pid in &s.pids {
+            game.extend(procs::tree(&all, *pid));
+        }
+        let outside: Vec<u32> = hw::cgroup_procs(&s.root_cgroup).into_iter().filter(|x| !game.contains(x)).collect();
+        if !outside.is_empty() {
+            return act(&knob, "SKIPPED", format!("retroactive: {} is shared with {} other process(es); start the game with orbis-run for pre-launch limits",
+                                                 s.root_cgroup, outside.len()));
+        }
+        let mut a = hw::limit_dmem(&mut self.sess_j, &s.root_cgroup, kind, bytes);
+        a.set("admission", "retroactive");
+        a
     }
 
     fn note(&mut self, v: Value) {
@@ -215,14 +250,17 @@ impl Controller {
                 acts.extend(hw::protect_vram(&mut self.sess_j, &s.root_cgroup, b));
             }
         }
-        if let Some(b) = Self::session_vram_max(s) {
-            if !s.root_cgroup.is_empty() {
-                acts.push(hw::limit_vram(&mut self.sess_j, &s.root_cgroup, b));
-            }
-        }
-        if let Some(b) = Self::session_gtt_max(s) {
-            if !s.root_cgroup.is_empty() {
-                acts.push(hw::limit_dmem(&mut self.sess_j, &s.root_cgroup, "gtt", b));
+        let admission = self.admission_of(s);
+        for (kind, lim) in [("vram", Self::session_vram_max(s)), ("gtt", Self::session_gtt_max(s))] {
+            let Some(b) = lim else { continue };
+            match &admission {
+                // orbis-run's scope got its limits before the game started (GE-A03)
+                Some(r) => acts.push(act(&format!("dmem_max_{kind}"), "PRE-LAUNCH",
+                                         format!("{} (admitted before launch)", r.get("cgroup").and_then(Value::as_str).unwrap_or("")))),
+                None => {
+                    let a = self.retroactive_limit(s, kind, b);
+                    acts.push(a);
+                }
             }
         }
         self.note(jobj! {"event" => "game-start", "session" => s.key.clone(), "title" => s.title.clone(), "via" => s.via.clone(),
@@ -513,6 +551,7 @@ impl Default for Controller {
 
 pub fn run_daemon(interval: Duration) -> ! {
     let mut c = Controller::new();
+    crate::admit::spawn(c.admitted.clone());
     let state_f = p("/run/orbis/perf/state.json");
     let mut last_write = Instant::now() - Duration::from_secs(60);
     let mut last_doc = String::new();

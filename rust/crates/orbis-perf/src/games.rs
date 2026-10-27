@@ -185,6 +185,11 @@ pub fn detect(procs: &[Proc], profiles: &[GameProfile], now: i64) -> BTreeMap<St
         if via == "wine-exe" || via == "profile" {
             e.root_cgroup = pr.cgroup.clone();
         }
+        // orbis-run's own game scope (GE-A03) is the game's cgroup whatever was seen first:
+        // the marker process itself lives in the caller's cgroup (Steam, a terminal)
+        if pr.cgroup.contains("/orbis-game.slice/") && pr.cgroup.ends_with(".scope") {
+            e.root_cgroup = pr.cgroup.clone();
+        }
     }
     // Steam's reaper alone (no game process yet) is a session too: the game is starting
     sessions

@@ -13,7 +13,7 @@
 //! launcher / DRM / anti-cheat / network / game) instead of failing silently.
 
 use crate::caps::Caps;
-use crate::{catalog, classify, rules};
+use crate::{admission, catalog, classify, rules};
 use orbis_core::fsx::{self, p};
 use orbis_core::json::{self, Value};
 use orbis_core::{jobj, sys};
@@ -342,6 +342,23 @@ pub fn install_dxvk_into_prefix(dxvk_dir: &Path, prefix: &Path) -> Result<usize,
 }
 
 pub fn main_run(argv: Vec<String>) -> i32 {
+    // stage 2 (GE-A03): we are inside the game's fresh scope; admit, verify, then become the game
+    if argv.first().map(String::as_str) == Some(admission::STAGE2_FLAG) {
+        let cmd: Vec<String> = argv.iter().skip(1).skip_while(|a| *a == "--").cloned().collect();
+        if cmd.is_empty() {
+            eprintln!("orbis-run: {} needs a command", admission::STAGE2_FLAG);
+            return 2;
+        }
+        return admission::stage2(
+            || {
+                use std::os::unix::process::CommandExt;
+                let e = Command::new(&cmd[0]).args(&cmd[1..]).exec();
+                eprintln!("orbis-run: cannot start {}: {e}", cmd[0]);
+                127
+            },
+            std::time::Duration::from_millis(orbis_core::admit::REPLY_TIMEOUT_MS),
+        );
+    }
     // our options come before "--" (or before the first non-option word)
     let (ours, cmd): (Vec<String>, Vec<String>) = match argv.iter().position(|a| a == "--") {
         Some(i) => (argv[..i].to_vec(), argv[i + 1..].to_vec()),
@@ -420,14 +437,42 @@ pub fn main_run(argv: Vec<String>) -> i32 {
     let user_bus = std::env::var_os("XDG_RUNTIME_DIR").map(|d| std::path::Path::new(&d).join("bus").exists()).unwrap_or(false);
     let scope = !a.flag("no-scope") && user_bus
         && Command::new("systemd-run").arg("--version").stdout(Stdio::null()).status().map(|s| s.success()).unwrap_or(false);
+    // GE-A03: memory limits are applied to the scope before the game starts (stage 2)
+    let (vram_max, gtt_max, require) = admission::profile_limits(&prof.doc);
+    let wants_limits = vram_max.is_some() || gtt_max.is_some();
+    let admit_file = pl.logdir.join(format!("admission-{me}.json"));
+    let mut admit_env: Vec<(String, String)> = vec![];
+    if wants_limits && !scope {
+        let why = if a.flag("no-scope") { "--no-scope was given" } else { "no systemd user manager (systemd-run --user unavailable)" };
+        if require {
+            eprintln!("orbis-run: the profile requires memory limits but the game cannot get its own scope ({why}); not starting it");
+            let _ = std::fs::remove_file(&marker);
+            let rec = jobj! {"schema" => "orbis-run-admission/1", "state" => "NO_SCOPE", "required" => true, "game_started" => false, "detail" => why};
+            let _ = fsx::atomic_write(&admit_file, rec.to_string_pretty().as_bytes());
+            return orbis_core::admit::EXIT_ADMISSION;
+        }
+        eprintln!("orbis-run: no scope ({why}): memory limits will be applied by orbis-perf after start, if at all");
+    }
     if scope {
         let mut s = vec!["systemd-run".to_string(), "--user".into(), "--scope".into(), "--quiet".into(),
                          "--slice=orbis-game.slice".into(), format!("--unit=orbis-game-{me}")];
+        if wants_limits {
+            let exe = std::env::current_exe().map(|e| e.display().to_string()).unwrap_or_else(|_| "orbis-run".into());
+            s.extend([exe, admission::STAGE2_FLAG.to_string(), "--".into()]);
+            for (k, v) in [(admission::ENV_VRAM, vram_max), (admission::ENV_GTT, gtt_max)] {
+                if let Some(b) = v {
+                    admit_env.push((k.into(), b.to_string()));
+                }
+            }
+            admit_env.push((admission::ENV_REQUIRE.into(), if require { "1".into() } else { "0".into() }));
+            admit_env.push((admission::ENV_RESULT.into(), admit_file.display().to_string()));
+            admit_env.push((admission::ENV_TITLE.into(), pl.title.clone()));
+        }
         s.extend(full);
         full = s;
     }
     let logf = pl.logdir.join(format!("{}.log", sys::iso_utc(sys::now_unix().0).replace(':', "")));
-    let mut child = match Command::new(&full[0]).args(&full[1..]).envs(&pl.env).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
+    let mut child = match Command::new(&full[0]).args(&full[1..]).envs(&pl.env).envs(admit_env).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
         Ok(c) => c,
         Err(e) => {
             let _ = std::fs::remove_file(&marker);
@@ -475,8 +520,22 @@ pub fn main_run(argv: Vec<String>) -> i32 {
             text.push_str(&fsx::read_raw(&f).unwrap_or_default());
         }
     }
-    let mut rep = classify::classify(code, sig, &text);
+    let admission = fsx::read_raw(&admit_file).and_then(|t| json::parse(&t).ok());
+    let _ = std::fs::remove_file(&admit_file);
+    let refused = code == Some(orbis_core::admit::EXIT_ADMISSION)
+        && admission.as_ref().and_then(|a| a.get("game_started")).and_then(Value::as_bool) == Some(false);
+    let mut rep = if refused {
+        jobj! {"result" => "NOT_STARTED", "category" => "admission",
+               "findings" => vec![jobj! {"hint" => "required memory limits could not be applied; see admission"}]}
+    } else {
+        classify::classify(code, sig, &text)
+    };
     rep.set("plan", summary).set("log", logf.display().to_string());
+    if let Some(a) = admission {
+        rep.set("admission", a);
+    } else if wants_limits {
+        rep.set("admission", jobj! {"state" => if scope { "UNKNOWN" } else { "RETROACTIVE" }});
+    }
     if let Some(ft) = newest_mangohud_csv(&pl.logdir, started).and_then(|f| fsx::read_raw(&f)).and_then(|t| frametime_summary(&t)) {
         rep.set("frametimes", ft);
     }

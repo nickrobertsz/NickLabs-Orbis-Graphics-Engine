@@ -12,6 +12,7 @@
 //!   orbis-perf policy [pc|gaming|ai]      show a mode's policy
 //!   orbis-perf doctor [--json]            on-device checks for the native components (exit 1 on FAIL)
 
+mod admit;
 mod bench;
 mod control;
 mod doctor;

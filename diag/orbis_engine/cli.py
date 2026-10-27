@@ -132,6 +132,10 @@ def main_mem(argv=None) -> int:
         print(f"orbis-mem: {e}", file=sys.stderr)
         return 1
     _out(out, a.json)
+    if a.cmd == "set-budget" and not a.dry_run:
+        return memory.budget_exit_code(out)
+    if a.cmd == "bench":
+        return memory.bench_exit_code(out)
     return 0
 
 

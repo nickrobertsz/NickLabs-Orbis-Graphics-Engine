@@ -1,5 +1,6 @@
 //! orbis-core: shared, dependency-free building blocks for the NickLabs Orbis native tools.
 
+pub mod admit;
 pub mod fsx;
 pub mod json;
 pub mod procs;

@@ -72,6 +72,16 @@ fn checks(now: i64) -> Vec<Check> {
             c(id, "UNSUPPORTED", format!("cgroup v2 controller {name} not available"), Some("boot the GE kernel"))
         });
     }
+    // per-game limits (GE-A03/A09): which dmem regions exist, and why GTT is missing if it is
+    for kind in ["vram", "gtt"] {
+        let id = if kind == "vram" { "memory.dmem_region_vram" } else { "memory.dmem_region_gtt" };
+        v.push(match orbis_core::admit::region_for(kind) {
+            Some(r) => c(id, "PASS", format!("dmem region {r}: per-game {kind} limits can be enforced before launch"), None),
+            None if kind == "gtt" => c(id, "UNSUPPORTED", format!("per-game GTT limits unavailable: {}", orbis_core::admit::gtt_region_reason()),
+                                       Some("profiles with memory.require_limits and memory.gtt_max_mb will not start")),
+            None => c(id, "UNSUPPORTED", "per-game VRAM limits unavailable (no dmem VRAM region)", Some("boot the GE kernel")),
+        });
+    }
 
     // schedulers
     let avail = sched::available();

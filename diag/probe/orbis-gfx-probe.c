@@ -533,6 +533,7 @@ struct ctx {
     PFN_vkDestroyPipeline DestroyPipe; PFN_vkCreateDescriptorPool CreateDP;
     PFN_vkDestroyDescriptorPool DestroyDP; PFN_vkAllocateDescriptorSets AllocDS;
     PFN_vkUpdateDescriptorSets UpdateDS; PFN_vkDeviceWaitIdle DeviceWaitIdle;
+    PFN_vkFlushMappedMemoryRanges Flush; PFN_vkInvalidateMappedMemoryRanges Invalidate;
 };
 
 struct buf { VkBuffer b; VkDeviceMemory m; VkDeviceSize size; void *map; };
@@ -860,6 +861,7 @@ static void load_dev_fns(struct ctx *cp, PFN_vkGetDeviceProcAddr vkGetDeviceProc
     DF(CreatePL, vkCreatePipelineLayout); DF(DestroyPL, vkDestroyPipelineLayout); DF(CreateCP, vkCreateComputePipelines);
     DF(DestroyPipe, vkDestroyPipeline); DF(CreateDP, vkCreateDescriptorPool); DF(DestroyDP, vkDestroyDescriptorPool);
     DF(AllocDS, vkAllocateDescriptorSets); DF(UpdateDS, vkUpdateDescriptorSets); DF(DeviceWaitIdle, vkDeviceWaitIdle);
+    DF(Flush, vkFlushMappedMemoryRanges); DF(Invalidate, vkInvalidateMappedMemoryRanges);
 #undef DF
 }
 
@@ -937,41 +939,119 @@ static int run_compute(VkPhysicalDevice pd, uint32_t devidx, int want_qfam, uint
 
 
 /* ------------------------------------------------------------------ shared-memory bench (U6/U27) */
-/* Buffer in one specific memory type (or imported host memory when hostp != NULL). */
-static VkResult mkbuf_type(struct ctx *c, struct buf *o, VkDeviceSize size, int type, void *hostp,
-                           PFN_vkGetMemoryHostPointerPropertiesEXT hpp, int *used_type) {
+/*
+ * Result vocabulary of the zero-copy check and of --membench as a whole (GE-A04/A08). The probe's
+ * exit code for --membench is mb_exit[result]; orbis-mem bench maps the JSON "result" to the same
+ * numbers, so JSON, exit code and wrapper always agree.
+ */
+enum mb_res { MB_PASS, MB_FAIL, MB_UNSUPPORTED_EXTENSION, MB_INCOMPATIBLE_MEMORY_TYPE, MB_ALLOCATION_FAILED,
+              MB_SYNC_FAILED, MB_DEVICE_LOST, MB_TIMEOUT, MB_NOT_RUN, MB_N };
+static const char *const mb_name[MB_N] = {"PASS", "FAIL", "UNSUPPORTED_EXTENSION", "INCOMPATIBLE_MEMORY_TYPE",
+                                          "ALLOCATION_FAILED", "SYNC_FAILED", "DEVICE_LOST", "TIMEOUT", "NOT_RUN"};
+/* 0 pass, 1 wrong data, 2 could not run, 3 device lost/timeout (stop), 4 not supported here, 5 allocation/sync */
+static const int mb_exit[MB_N] = {0, 1, 4, 4, 5, 5, 3, 3, 2};
+
+static enum mb_res mb_from_vk(VkResult r) {
+    switch (r) {
+    case VK_SUCCESS: return MB_PASS;
+    case VK_ERROR_DEVICE_LOST: return MB_DEVICE_LOST;
+    case VK_TIMEOUT: return MB_TIMEOUT;
+    case VK_ERROR_OUT_OF_HOST_MEMORY: case VK_ERROR_OUT_OF_DEVICE_MEMORY: case VK_ERROR_TOO_MANY_OBJECTS:
+        return MB_ALLOCATION_FAILED;
+    case VK_ERROR_INVALID_EXTERNAL_HANDLE: case VK_ERROR_FEATURE_NOT_PRESENT: case VK_ERROR_FORMAT_NOT_SUPPORTED:
+        return MB_INCOMPATIBLE_MEMORY_TYPE;
+    case VK_ERROR_EXTENSION_NOT_PRESENT: return MB_UNSUPPORTED_EXTENSION;
+    default: return MB_FAIL;
+    }
+}
+
+static bool type_coherent(struct ctx *c, int type) {
+    return c->mem.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+}
+
+/* make CPU writes visible to the device (non-coherent memory only; the buffer must be mapped) */
+static VkResult host_flush(struct ctx *c, struct buf *o, int type) {
+    if (type < 0 || type_coherent(c, type) || !o->map) return VK_SUCCESS;
+    VkMappedMemoryRange mr = {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, .memory = o->m, .offset = 0, .size = VK_WHOLE_SIZE};
+    return c->Flush(c->dev, 1, &mr);
+}
+
+/* make device writes visible to the CPU (non-coherent memory only) */
+static VkResult host_invalidate(struct ctx *c, struct buf *o, int type) {
+    if (type < 0 || type_coherent(c, type) || !o->map) return VK_SUCCESS;
+    VkMappedMemoryRange mr = {.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, .memory = o->m, .offset = 0, .size = VK_WHOLE_SIZE};
+    return c->Invalidate(c->dev, 1, &mr);
+}
+
+/*
+ * Buffer in one specific memory type, or imported host memory when hostp != NULL (GE-A10).
+ * Every failure releases what was created so far. For an import:
+ *   - the pointer must be aligned to, and the size a multiple of, minImportedHostPointerAlignment;
+ *   - the memory type comes from vkGetMemoryHostPointerPropertiesEXT AND the buffer's own
+ *     VkMemoryRequirements.memoryTypeBits (a host-coherent type is preferred);
+ *   - the buffer's required size must fit in the imported range, at offset 0 (alignment holds);
+ *   - non-coherent types are mapped so flush/invalidate can be used.
+ * *why is set to a short reason on failure.
+ */
+static VkResult mkbuf_type(struct ctx *c, struct buf *o, VkDeviceSize size, int type, void *hostp, VkDeviceSize host_align,
+                           PFN_vkGetMemoryHostPointerPropertiesEXT hpp, int *used_type, const char **why) {
+    static const char *dummy;
+    if (!why) why = &dummy;
+    *why = NULL;
     memset(o, 0, sizeof *o);
     o->size = size;
+    if (hostp) {
+        if (!hpp) { *why = "vkGetMemoryHostPointerPropertiesEXT missing"; return VK_ERROR_EXTENSION_NOT_PRESENT; }
+        if (!host_align || ((uintptr_t)hostp % host_align) || (size % host_align)) {
+            *why = "host pointer or size not a multiple of minImportedHostPointerAlignment";
+            return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+        }
+    }
     VkExternalMemoryBufferCreateInfo eb = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
                                            .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT};
     VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = hostp ? &eb : NULL, .size = size,
         .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
     VkResult r = c->CreateBuffer(c->dev, &bi, NULL, &o->b);
-    if (r) return r;
+    if (r) { *why = "vkCreateBuffer"; o->b = VK_NULL_HANDLE; return r; }
     VkMemoryRequirements mr;
     c->GetBufMemReq(c->dev, o->b, &mr);
     uint32_t bits = mr.memoryTypeBits;
     VkImportMemoryHostPointerInfoEXT imp = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT,
                                             .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
                                             .pHostPointer = hostp};
+    VkDeviceSize alloc = mr.size;
     if (hostp) {
         VkMemoryHostPointerPropertiesEXT hp = {.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
         r = hpp(c->dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, hostp, &hp);
-        if (r) return r;
+        if (r) { *why = "vkGetMemoryHostPointerPropertiesEXT refused the pointer"; goto fail; }
         bits &= hp.memoryTypeBits;
+        if (!bits) { *why = "no memory type both importable for this pointer and usable by the buffer"; r = VK_ERROR_FEATURE_NOT_PRESENT; goto fail; }
+        if (mr.size > size) { *why = "buffer needs more memory than the imported range"; r = VK_ERROR_FEATURE_NOT_PRESENT; goto fail; }
         type = -1;
-        for (uint32_t i = 0; i < c->mem.memoryTypeCount; i++)
-            if (bits & (1u << i)) { type = (int)i; break; }
+        for (uint32_t i = 0; i < c->mem.memoryTypeCount && type < 0; i++)   /* prefer host-coherent */
+            if ((bits & (1u << i)) && type_coherent(c, (int)i)) type = (int)i;
+        for (uint32_t i = 0; i < c->mem.memoryTypeCount && type < 0; i++)
+            if (bits & (1u << i)) type = (int)i;
+        alloc = size;   /* the import covers exactly the host range */
     }
-    if (type < 0 || !(bits & (1u << type))) return VK_ERROR_FEATURE_NOT_PRESENT;
+    if (type < 0 || (uint32_t)type >= c->mem.memoryTypeCount || !(bits & (1u << type))) {
+        *why = "memory type not allowed for this buffer";
+        r = VK_ERROR_FEATURE_NOT_PRESENT;
+        goto fail;
+    }
     if (used_type) *used_type = type;
     VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = hostp ? &imp : NULL,
-                               .allocationSize = hostp ? size : mr.size, .memoryTypeIndex = (uint32_t)type};
-    if ((r = c->AllocateMemory(c->dev, &ai, NULL, &o->m))) return r;
-    if ((r = c->BindBufferMemory(c->dev, o->b, o->m, 0))) return r;
-    if (!hostp && (c->mem.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT))
-        r = c->MapMemory(c->dev, o->m, 0, VK_WHOLE_SIZE, 0, &o->map);
+                               .allocationSize = alloc, .memoryTypeIndex = (uint32_t)type};
+    if ((r = c->AllocateMemory(c->dev, &ai, NULL, &o->m))) { *why = hostp ? "import (vkAllocateMemory)" : "vkAllocateMemory"; o->m = VK_NULL_HANDLE; goto fail; }
+    if ((r = c->BindBufferMemory(c->dev, o->b, o->m, 0))) { *why = "vkBindBufferMemory"; goto fail; }
+    /* map host-visible memory: always for allocations; for imports only when flush/invalidate are needed */
+    if ((c->mem.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && (!hostp || !type_coherent(c, type))) {
+        if ((r = c->MapMemory(c->dev, o->m, 0, VK_WHOLE_SIZE, 0, &o->map))) { *why = "vkMapMemory"; o->map = NULL; goto fail; }
+    }
+    return VK_SUCCESS;
+fail:
+    rmbuf(c, o);
     return r;
 }
 
@@ -1016,10 +1096,16 @@ static void bench_type(struct ctx *c, int type, VkDeviceSize size, struct pipe *
     j_kint("heap", c->mem.memoryTypes[type].heapIndex);
     j_kuint("flags", f);
     j_kstr("kind", mem_label(f));
-    struct buf a, b, acc;
-    if (mkbuf_type(c, &a, size, type, NULL, NULL, NULL) || mkbuf_type(c, &b, size, type, NULL, NULL, NULL) ||
-        mkbuf(c, &acc, 8, false)) {
+    struct buf a = {0}, b = {0}, acc = {0};
+    const char *why = NULL;
+    VkResult ar = mkbuf_type(c, &a, size, type, NULL, 0, NULL, NULL, &why);
+    if (!ar) ar = mkbuf_type(c, &b, size, type, NULL, 0, NULL, NULL, &why);
+    if (!ar && (ar = mkbuf(c, &acc, 8, false))) why = "accumulator buffer";
+    if (ar) {
         j_kstr("not_run", "allocation in this memory type failed (size or budget)");
+        j_kstr("result", mb_name[mb_from_vk(ar)]);
+        j_kstr("step", why ? why : "?");
+        j_kstr("vk_result", vkres(ar));
         rmbuf(c, &a); rmbuf(c, &b); rmbuf(c, &acc);
         j_close('}');
         return;
@@ -1039,17 +1125,22 @@ static void bench_type(struct ctx *c, int type, VkDeviceSize size, struct pipe *
     j_kdbl("gpu_read_gbs", gbs((double)size, tr));
     j_kdbl("gpu_read_write_gbs", gbs(3.0 * (double)size, trw));   /* saxpy: read x, read y, write y */
     if (a.map) {
+        /* CPU timings include the flush/invalidate a correct program needs on non-coherent memory */
         double t0 = now_s();
         memset(a.map, 0x5A, size);
+        VkResult fr = host_flush(c, &a, type);
         double cw = now_s() - t0;
         volatile uint64_t sum = 0;
         const uint64_t *q = a.map;
         t0 = now_s();
+        VkResult ir = host_invalidate(c, &a, type);
         for (VkDeviceSize i = 0; i < size / 8; i++) sum += q[i];
         double cr = now_s() - t0;
         (void)sum;
+        j_kbool("host_coherent", type_coherent(c, type));
         j_kdbl("cpu_write_gbs", gbs((double)size, cw));
         j_kdbl("cpu_read_gbs", gbs((double)size, cr));
+        if (fr || ir) j_kstr("sync_error", vkres(fr ? fr : ir));
     }
     if (c->fatal) j_kstr("fatal", c->fatal_why);
     j_close('}');
@@ -1058,11 +1149,16 @@ static void bench_type(struct ctx *c, int type, VkDeviceSize size, struct pipe *
 
 /* GPU-side copies between memory kinds (transfer path) */
 static void bench_copy(struct ctx *c, const char *name, int from, int to, VkDeviceSize size) {
-    struct buf s, d;
+    struct buf s = {0}, d = {0};
     j_open(NULL, '{');
     j_kstr("copy", name);
-    if (from < 0 || to < 0 || mkbuf_type(c, &s, size, from, NULL, NULL, NULL) || mkbuf_type(c, &d, size, to, NULL, NULL, NULL)) {
-        j_kstr("not_run", "memory type not available");
+    const char *why = NULL;
+    VkResult ar = (from < 0 || to < 0) ? VK_ERROR_FEATURE_NOT_PRESENT : mkbuf_type(c, &s, size, from, NULL, 0, NULL, NULL, &why);
+    if (!ar) ar = mkbuf_type(c, &d, size, to, NULL, 0, NULL, NULL, &why);
+    if (ar) {
+        j_kstr("not_run", (from < 0 || to < 0) ? "memory type not available" : "allocation failed");
+        if (why) j_kstr("step", why);
+        rmbuf(c, &s); rmbuf(c, &d);
         j_close('}');
         return;
     }
@@ -1082,70 +1178,113 @@ static void bench_copy(struct ctx *c, const char *name, int from, int to, VkDevi
     if (!c->fatal) { rmbuf(c, &s); rmbuf(c, &d); }
 }
 
-/* U6 end to end: the GPU writes into and reads from ordinary process memory, the CPU checks it in place. */
-static void zero_copy(struct ctx *c, VkDeviceSize size, struct pipe *pw, struct pipe *pr, bool has_ext, VkDeviceSize align,
-                      PFN_vkGetMemoryHostPointerPropertiesEXT hpp) {
+/* U6 end to end: the GPU writes into and reads from ordinary process memory, the CPU checks it in
+ * place (GE-A04/A10). Returns the categorized result; the JSON object records every step. */
+static enum mb_res zero_copy(struct ctx *c, VkDeviceSize size, struct pipe *pw, struct pipe *pr, bool has_ext,
+                             VkDeviceSize align, PFN_vkGetMemoryHostPointerPropertiesEXT hpp, bool importable,
+                             const char *import_why) {
+    enum mb_res res = MB_NOT_RUN;
+    void *host = NULL;
+    struct buf h = {0}, acc = {0}, hacc = {0};
+    const char *why = NULL, *step = NULL;
     j_open("zero_copy_host_memory", '{');
     j_kbool("extension_advertised", has_ext);
-    if (!has_ext || !hpp) { j_kstr("result", "NOT_RUN"); j_kstr("why", "VK_EXT_external_memory_host not available"); j_close('}'); return; }
+    if (!has_ext || !hpp) { res = MB_UNSUPPORTED_EXTENSION; step = "extension"; why = "VK_EXT_external_memory_host not available"; goto out; }
+    if (!importable) { res = MB_INCOMPATIBLE_MEMORY_TYPE; step = "external buffer properties"; why = import_why; goto out; }
     if (align < 4096) align = 4096;
+    if (align & (align - 1)) { res = MB_INCOMPATIBLE_MEMORY_TYPE; step = "alignment"; why = "minImportedHostPointerAlignment is not a power of two"; goto out; }
     size = (size + align - 1) / align * align;
-    void *host = NULL;
-    if (posix_memalign(&host, (size_t)align, (size_t)size) || !host) { j_kstr("result", "NOT_RUN"); j_kstr("why", "host allocation failed"); j_close('}'); return; }
-    memset(host, 0xFF, size);
-    struct buf h, acc, hacc;
-    int type = -1;
-    VkResult r = mkbuf_type(c, &h, size, -1, host, hpp, &type);
     j_kuint("min_imported_host_pointer_alignment", align);
-    if (r) {
-        j_kstr("result", "FAIL"); j_kstr("why", vkres(r)); j_kstr("step", "import host pointer");
-        j_close('}'); free(host); return;
+    j_kuint("bytes", size);
+    if (posix_memalign(&host, (size_t)align, (size_t)size) || !host) {
+        host = NULL; res = MB_ALLOCATION_FAILED; step = "host allocation"; why = "posix_memalign failed"; goto out;
     }
+    memset(host, 0xFF, size);
+    int type = -1;
+    VkResult r = mkbuf_type(c, &h, size, -1, host, align, hpp, &type, &why);
+    if (r) { res = mb_from_vk(r); step = "import host pointer"; j_kstr("vk_result", vkres(r)); goto out; }
+    VkMemoryPropertyFlags fl = c->mem.memoryTypes[type].propertyFlags;
     j_kint("imported_memory_type", type);
-    j_kuint("imported_memory_flags", c->mem.memoryTypes[type].propertyFlags);
-    j_kstr("imported_kind", mem_label(c->mem.memoryTypes[type].propertyFlags));
-    /* 1. GPU writes, CPU reads the same pages (GPU -> CPU without a copy) */
+    j_kuint("imported_memory_flags", fl);
+    j_kstr("imported_kind", mem_label(fl));
+    j_kbool("host_coherent", type_coherent(c, type));
+    /* 1. GPU writes, CPU reads the same pages (GPU -> CPU without a copy).
+     *    The dispatch ends with a compute->host barrier (HOST_READ); the fence wait orders the
+     *    CPU after it; non-coherent memory is also invalidated before the CPU reads. */
     uint32_t n = (uint32_t)(size / 4), gx, gy;
     bindbufs(c, pw, &h, NULL);
     grid((n + 63) / 64, &gx, &gy);
     double tw = gpu_dispatch(c, pw, &n, 4, gx, gy, 1);
+    if (c->fatal) { res = mb_from_vk(strcmp(c->fatal_why, "VK_TIMEOUT") ? VK_ERROR_DEVICE_LOST : VK_TIMEOUT); step = "gpu write"; goto out; }
+    if (tw < 0) { res = MB_SYNC_FAILED; step = "gpu write submit"; goto out; }
+    if ((r = host_invalidate(c, &h, type))) { res = MB_SYNC_FAILED; step = "invalidate"; why = vkres(r); goto out; }
     long bad = 0;
-    const uint32_t *q = host;
-    if (tw >= 0)
-        for (uint32_t i = 0; i < n; i++) bad += q[i] != i;
+    const volatile uint32_t *q = host;
+    for (uint32_t i = 0; i < n; i++) bad += q[i] != i;
     j_kdbl("gpu_write_into_host_memory_gbs", tw > 0 ? gbs((double)size, tw) : 0);
-    j_kint("gpu_written_words_wrong", tw >= 0 ? bad : -1);
-    /* 2. CPU writes, GPU reads the same pages (CPU -> GPU without a copy) */
-    uint32_t *w = host, s = 99;
+    j_kint("gpu_written_words_wrong", bad);
+    /* 2. CPU writes, GPU reads the same pages (CPU -> GPU without a copy). Non-coherent memory
+     *    is flushed; vkQueueSubmit makes completed host writes visible to the device. */
+    uint32_t *w = host, sd = 99;
     uint32_t expect = 0;
-    for (uint32_t i = 0; i < n; i++) { w[i] = xs32(&s) & 0xFFFFu; expect += w[i]; }
-    bool ok_read = false;
-    double trd = -1;
-    if (!c->fatal && !mkbuf(c, &acc, 8, false) && !mkbuf(c, &hacc, 8, true)) {
-        bindbufs(c, pr, &h, &acc);
-        uint32_t rgx, rgy;
-        grid((n + 255) / 256, &rgx, &rgy);
-        VkCommandBuffer cb = cb_begin(c);
-        c->CmdFill(cb, acc.b, 0, 8, 0);
-        barrier_all(c, cb);
-        c->CmdBindPipe(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pr->p);
-        c->CmdBindDS(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pr->pl, 0, 1, &pr->ds, 0, NULL);
-        c->CmdPush(cb, pr->pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, 4, &n);
-        c->CmdDispatch(cb, rgx, rgy, 1);
-        barrier_all(c, cb);
-        VkBufferCopy ca = {0, 0, 8};
-        c->CmdCopy(cb, acc.b, hacc.b, 1, &ca);
-        barrier_all(c, cb);
-        if (!cb_submit(c, cb, &trd)) ok_read = ((uint32_t *)hacc.map)[0] == expect;
-        if (!c->fatal) { rmbuf(c, &acc); rmbuf(c, &hacc); }
+    for (uint32_t i = 0; i < n; i++) { w[i] = xs32(&sd) & 0xFFFFu; expect += w[i]; }
+    if ((r = host_flush(c, &h, type))) { res = MB_SYNC_FAILED; step = "flush"; why = vkres(r); goto out; }
+    if ((r = mkbuf(c, &acc, 8, false)) || (r = mkbuf(c, &hacc, 8, true))) {
+        res = mb_from_vk(r); step = "result buffers"; why = vkres(r); goto out;
     }
+    bindbufs(c, pr, &h, &acc);
+    uint32_t rgx, rgy;
+    grid((n + 255) / 256, &rgx, &rgy);
+    VkCommandBuffer cb = cb_begin(c);
+    if (!cb) { res = MB_ALLOCATION_FAILED; step = "command buffer"; goto out; }
+    c->CmdFill(cb, acc.b, 0, 8, 0);
+    barrier_all(c, cb);
+    c->CmdBindPipe(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pr->p);
+    c->CmdBindDS(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pr->pl, 0, 1, &pr->ds, 0, NULL);
+    c->CmdPush(cb, pr->pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, 4, &n);
+    c->CmdDispatch(cb, rgx, rgy, 1);
+    barrier_all(c, cb);
+    VkBufferCopy ca = {0, 0, 8};
+    c->CmdCopy(cb, acc.b, hacc.b, 1, &ca);
+    barrier_all(c, cb);
+    double trd = -1;
+    r = cb_submit(c, cb, &trd);
+    if (r) { res = mb_from_vk(r == VK_TIMEOUT || r == VK_ERROR_DEVICE_LOST ? r : VK_ERROR_UNKNOWN); if (res == MB_FAIL) res = MB_SYNC_FAILED;
+             step = "gpu read submit"; why = vkres(r); goto out; }
+    /* hacc comes from mkbuf(host=true): HOST_COHERENT, no invalidate needed */
+    bool ok_read = ((volatile uint32_t *)hacc.map)[0] == expect;
     j_kbool("gpu_read_of_cpu_written_data_ok", ok_read);
-    bool pass = !c->fatal && tw >= 0 && bad == 0 && ok_read;
-    j_kstr("result", c->fatal ? "FAIL" : pass ? "PASS" : "FAIL");
+    res = (bad == 0 && ok_read) ? MB_PASS : MB_FAIL;
+    if (res == MB_FAIL) step = bad ? "gpu write verified by cpu" : "cpu write verified by gpu";
+out:
+    j_kstr("result", mb_name[res]);
+    if (step) j_kstr("step", step);
+    if (why) j_kstr("why", why);
     if (c->fatal) j_kstr("fatal", c->fatal_why);
     j_kstr("note", "PASS means verified end to end on this device: GPU and CPU used the same pages without a staging copy");
     j_close('}');
-    if (!c->fatal) { rmbuf(c, &h); free(host); }
+    /* after a device loss or timeout the GPU may still reference the buffers: leak them on purpose */
+    if (!c->fatal) {
+        rmbuf(c, &acc); rmbuf(c, &hacc); rmbuf(c, &h);
+        free(host);
+    }
+    return res;
+}
+
+/* Can a storage buffer be imported from host memory at all? (vkGetPhysicalDeviceExternalBufferProperties) */
+static bool host_import_supported(VkPhysicalDevice pd, const char **why) {
+    IF(vkGetPhysicalDeviceExternalBufferProperties);
+    if (!vkGetPhysicalDeviceExternalBufferProperties) { *why = "vkGetPhysicalDeviceExternalBufferProperties missing (Vulkan 1.1)"; return false; }
+    VkPhysicalDeviceExternalBufferInfo ebi = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT};
+    VkExternalBufferProperties ep = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES};
+    vkGetPhysicalDeviceExternalBufferProperties(pd, &ebi, &ep);
+    if (!(ep.externalMemoryProperties.externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT)) {
+        *why = "host allocations are not importable for storage buffers on this device";
+        return false;
+    }
+    return true;
 }
 
 static int run_membench(VkPhysicalDevice pd, uint32_t devidx, uint64_t timeout_ms, unsigned size_mb) {
@@ -1172,7 +1311,7 @@ static int run_membench(VkPhysicalDevice pd, uint32_t devidx, uint64_t timeout_m
     j_kstr("device", p2.properties.deviceName);
     j_kuint("buffer_bytes", (unsigned long long)size_mb << 20);
     j_kstr("timing", "best of 4, wall clock around submit+fence (includes submit overhead, a lower bound on bandwidth)");
-    if (fam < 0) { j_kstr("error", "no compute queue"); j_close('}'); return 2; }
+    if (fam < 0) { j_kstr("error", "no compute queue"); j_kstr("result", "NOT_RUN"); j_close('}'); return 2; }
     c.qfam = (uint32_t)fam;
     float prio = 1.0f;
     const char *exts[1] = {VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME};
@@ -1180,7 +1319,7 @@ static int run_membench(VkPhysicalDevice pd, uint32_t devidx, uint64_t timeout_m
     VkDeviceCreateInfo dci = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .queueCreateInfoCount = 1, .pQueueCreateInfos = &qci,
                               .enabledExtensionCount = has_host ? 1 : 0, .ppEnabledExtensionNames = exts};
     VkResult r = vkCreateDevice(pd, &dci, NULL, &c.dev);
-    if (r) { j_kstr("error", vkres(r)); j_close('}'); return 2; }
+    if (r) { j_kstr("error", vkres(r)); j_kstr("result", "NOT_RUN"); j_close('}'); return 2; }
     load_dev_fns(&c, vkGetDeviceProcAddr);
     PFN_vkGetMemoryHostPointerPropertiesEXT hpp = has_host ?
         (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(c.dev, "vkGetMemoryHostPointerPropertiesEXT") : NULL;
@@ -1190,10 +1329,16 @@ static int run_membench(VkPhysicalDevice pd, uint32_t devidx, uint64_t timeout_m
     VkCommandPoolCreateInfo pci = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, .queueFamilyIndex = c.qfam,
                                    .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT};
     ccp(c.dev, &pci, NULL, &c.pool);
-    struct pipe pw, pr, ps;
+    struct pipe pw = {0}, pr = {0}, ps = {0};
     if (mkpipe(&c, &pw, spv_index_write, spv_index_write_size, 1, 4) || mkpipe(&c, &pr, spv_reduce, spv_reduce_size, 2, 4) ||
         mkpipe(&c, &ps, spv_saxpy_u32, spv_saxpy_u32_size, 2, 8)) {
-        j_kstr("error", "pipeline creation failed"); j_close('}'); return 2;
+        j_kstr("error", "pipeline creation failed"); j_kstr("result", "NOT_RUN"); j_close('}');
+        rmpipe(&c, &pw); rmpipe(&c, &pr); rmpipe(&c, &ps);
+        PFN_vkDestroyCommandPool dcp0 = (PFN_vkDestroyCommandPool)vkGetDeviceProcAddr(c.dev, "vkDestroyCommandPool");
+        PFN_vkDestroyDevice dd0 = (PFN_vkDestroyDevice)vkGetDeviceProcAddr(c.dev, "vkDestroyDevice");
+        dcp0(c.dev, c.pool, NULL);
+        dd0(c.dev, NULL);
+        return 2;
     }
     VkDeviceSize size = (VkDeviceSize)size_mb << 20;
     /* one representative memory type per kind (the first of each) */
@@ -1216,9 +1361,19 @@ static int run_membench(VkPhysicalDevice pd, uint32_t devidx, uint64_t timeout_m
     if (!c.fatal) bench_copy(&c, "vram -> gtt cached (readback)", seen_vram >= 0 ? seen_vram : seen_vram_vis, seen_cached, size);
     if (!c.fatal) bench_copy(&c, "gtt write-combined -> gtt cached", seen_wc, seen_cached, size);
     j_close(']');
-    if (!c.fatal) zero_copy(&c, size / 4, &pw, &pr, has_host, hostp.minImportedHostPointerAlignment, hpp);
+    enum mb_res zc = MB_NOT_RUN;
+    if (!c.fatal) {
+        const char *iw = NULL;
+        bool importable = has_host && host_import_supported(pd, &iw);
+        zc = zero_copy(&c, size / 4, &pw, &pr, has_host, hostp.minImportedHostPointerAlignment, hpp, importable, iw);
+    } else {
+        zc = strcmp(c.fatal_why, "VK_TIMEOUT") ? MB_DEVICE_LOST : MB_TIMEOUT;
+    }
     j_kbool("fatal", c.fatal);
     if (c.fatal) j_kstr("fatal_reason", c.fatal_why);
+    /* one overall result for --membench: the zero-copy verdict (bandwidth numbers are measurements) */
+    j_kstr("result", mb_name[zc]);
+    j_kint("result_exit_code", mb_exit[zc]);
     j_close('}');
     if (!c.fatal) {
         c.DeviceWaitIdle(c.dev);
@@ -1227,9 +1382,8 @@ static int run_membench(VkPhysicalDevice pd, uint32_t devidx, uint64_t timeout_m
         PFN_vkDestroyDevice dd = (PFN_vkDestroyDevice)vkGetDeviceProcAddr(c.dev, "vkDestroyDevice");
         dcp(c.dev, c.pool, NULL);
         dd(c.dev, NULL);
-        return 0;
     }
-    return 3;
+    return mb_exit[zc];
 }
 
 /* ------------------------------------------------------------------ Vulkan raster */

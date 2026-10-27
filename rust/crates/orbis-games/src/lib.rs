@@ -1,4 +1,5 @@
 //! orbis-games: Windows-game compatibility for NickLabs Orbis (Steam/Proton/Wine/DXVK/VKD3D/Lutris).
+pub mod admission;
 pub mod cache;
 pub mod caps;
 pub mod catalog;

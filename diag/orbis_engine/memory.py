@@ -20,6 +20,7 @@ What the hardware and kernel allow (and therefore what this module does):
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -63,7 +64,12 @@ def _bytes(v: str) -> int:
 
 
 def gpu_clients() -> list[dict]:
-    """Per-process GPU memory from DRM fdinfo (amdgpu). One entry per (pid, drm-client-id)."""
+    """GPU memory per DRM client from fdinfo (amdgpu), GE-A07.
+
+    One entry per DRM client, identified by (drm-pdev, drm-client-id): a client is one opened
+    DRM file, and the same file is visible in every process that inherited or received it, so
+    keying by PID would count it once per process. Each entry lists the PIDs (and names) that
+    hold the client; "pid" is the lowest of them."""
     out = {}
     proc = p("proc")
     for d in proc.glob("[0-9]*") if proc.is_dir() else []:
@@ -82,8 +88,10 @@ def gpu_clients() -> list[dict]:
                 info[k.strip()] = v.strip()
             if info.get("drm-driver") != "amdgpu":
                 continue
-            key = (d.name, info.get("drm-client-id", f.name))
-            rec = {"pid": int(d.name), "comm": read(d / "comm"), "client_id": info.get("drm-client-id"),
+            cid = info.get("drm-client-id")
+            # without a client id (very old kernels) every fd is its own client
+            key = (info.get("drm-pdev", ""), cid) if cid else ("fd", d.name, f.name)
+            rec = {"pid": int(d.name), "comm": read(d / "comm"), "client_id": cid, "pdev": info.get("drm-pdev"),
                    "vram": _bytes(info.get("drm-memory-vram", "0")), "gtt": _bytes(info.get("drm-memory-gtt", "0")),
                    "cpu": _bytes(info.get("drm-memory-cpu", "0")),
                    "gfx_busy_ns": int(info.get("drm-engine-gfx", "0 ns").split()[0] or 0)}
@@ -101,13 +109,31 @@ def gpu_clients() -> list[dict]:
             m = re.search(r"VmRSS:\s+(\d+) kB", status)
             rec["rss"] = int(m.group(1)) * 1024 if m else None
             prev = out.get(key)
-            if prev:   # several fds of one DRM client: same client, keep the fullest report
+            if prev:   # the same client seen through another fd or another process
+                prev["_pids"].add(int(d.name))
+                if rec["comm"]:
+                    prev["_comms"].add(rec["comm"])
                 for k, v in rec.items():
-                    if isinstance(v, int) and v > (prev.get(k) or 0):
+                    if k not in ("pid", "rss") and isinstance(v, int) and v > (prev.get(k) or 0):
                         prev[k] = v
+                if rec.get("rss") is not None:
+                    prev["_rss"][int(d.name)] = rec["rss"]
                 continue
+            rec["_pids"] = {int(d.name)}
+            rec["_comms"] = {rec["comm"]} if rec["comm"] else set()
+            rec["_rss"] = {int(d.name): rec["rss"]} if rec.get("rss") is not None else {}
             out[key] = rec
-    return sorted(out.values(), key=lambda r: -(r["vram"] + r["gtt"]))
+    clients = []
+    for rec in out.values():
+        pids = sorted(rec.pop("_pids"))
+        rec["pids"] = pids
+        rec["pid"] = pids[0]
+        rec["comms"] = sorted(rec.pop("_comms"))
+        # process RSS is physical RAM of the holding processes, not GPU memory: kept apart
+        rec["rss_by_pid"] = {str(k): v for k, v in sorted(rec.pop("_rss").items())}
+        rec["rss"] = rec["rss_by_pid"].get(str(pids[0]))
+        clients.append(rec)
+    return sorted(clients, key=lambda r: -(r["vram"] + r["gtt"]))
 
 
 def client_totals(clients: list[dict]) -> dict:
@@ -124,6 +150,32 @@ def client_totals(clients: list[dict]) -> dict:
                   # clients whose fdinfo has no drm-total/drm-shared split (older format):
                   # their value may include buffers shared with others
                   "unsplit_sum": sum(c.get(r) or 0 for c in legacy)}
+    return out
+
+
+def accounting_check(totals: dict, device: dict) -> dict:
+    """Compare per-client sums with the device counters (GE-A07). The counters include kernel
+    buffers (page tables, rings, firmware) that no client owns, so for each region:
+        private_sum + shared_min <= device_used        must hold
+        device_used - (private_sum + shared_max)       is the least memory nobody accounts for
+    A violation means the fdinfo totals are inconsistent with the device (or were read at
+    different moments under load); it is reported, never corrected silently."""
+    out = {}
+    for r, dev_key in (("vram", "vram_used"), ("gtt", "gtt_used")):
+        t = totals.get(r) or {}
+        used = device.get(dev_key)
+        if used is None:
+            out[r] = {"checked": False, "why": f"device counter {dev_key} not available"}
+            continue
+        low = (t.get("private_sum") or 0) + (t.get("shared_min") or 0)
+        high = (t.get("private_sum") or 0) + (t.get("shared_max") or 0) + (t.get("unsplit_sum") or 0)
+        ok = low <= used
+        out[r] = {"checked": True, "device_used": used, "clients_min": low, "clients_max": high,
+                  "unattributed_min": max(0, used - high), "unattributed_max": max(0, used - low),
+                  "consistent": ok}
+        if not ok:
+            out[r]["violation"] = f"clients hold at least {low} bytes but the device reports {used}"
+    out["consistent"] = all(v.get("consistent", True) for v in out.values() if isinstance(v, dict))
     return out
 
 
@@ -165,23 +217,54 @@ def compressed_status() -> dict:
     return out
 
 
+def gtt_cgroup_status() -> dict:
+    """The GE kernel's own account of the 'gtt' dmem region (ge-0016 orbis_gtt_cgroup)."""
+    g = sysfs.primary_gpu()
+    raw = read(g.sysdir / "orbis_gtt_cgroup") if g else None
+    if raw is None:
+        return {"state": "unknown", "reason": "kernel without ge-0016 (no orbis_gtt_cgroup)"}
+    state, _, rest = raw.strip().partition(" ")
+    return {"state": state, **kv(rest)}
+
+
 def dmem_regions() -> dict:
-    """cgroup v2 device-memory regions (amdgpu 'vram'; 'gtt' with ge-0015)."""
+    """cgroup v2 device-memory regions (amdgpu 'vram'; 'gtt' with ge-0015).
+
+    gtt_limits is True only when the region exists; otherwise it carries the reason, so a
+    profile that requires GTT enforcement can report "unavailable" instead of running without it."""
     raw = read(p("sys/fs/cgroup/dmem.capacity"))
     if raw is None:
-        return {"available": False, "why": "kernel without CONFIG_CGROUP_DMEM"}
+        return {"available": False, "why": "kernel without CONFIG_CGROUP_DMEM", "gtt_limits": False,
+                "gtt_unavailable_reason": "kernel without CONFIG_CGROUP_DMEM"}
     regs = {}
     for line in raw.splitlines():
         parts = line.split()
         if len(parts) == 2 and parts[0].startswith("drm/"):
             regs[parts[0].rsplit("/", 1)[-1]] = {"region": parts[0], "capacity": int(parts[1]) if parts[1].isdigit() else parts[1]}
-    return {"available": True, "regions": regs,
-            "gtt_limits": "gtt" in regs or "kernel without ge-0015: per-app limits cover VRAM only"}
+    out = {"available": True, "regions": regs, "gtt_limits": "gtt" in regs, "gtt_status": gtt_cgroup_status()}
+    if "gtt" not in regs:
+        st = out["gtt_status"]
+        out["gtt_unavailable_reason"] = st.get("reason") if st.get("state") != "registered" else \
+            "kernel registered the region but dmem.capacity does not list it"
+    return out
+
+
+def gtt_budget_status(text: str | None) -> dict:
+    """Parse orbis_gtt_budget: the budget line, plus the 'last_trim ...' line of ge-0016 kernels
+    (kept apart: both lines carry 'requested')."""
+    out: dict = {}
+    for line in (text or "").splitlines():
+        if line.startswith("last_trim"):
+            out["last_trim"] = kv(line.partition(" ")[2])
+        else:
+            out.update(kv(line))
+    return out
 
 
 def top_owners(clients: list[dict], n: int = 3) -> list[dict]:
     key = lambda c: c.get("private_gtt") if c.get("private_gtt") is not None else c.get("gtt") or 0
-    return [{"pid": c["pid"], "comm": c.get("comm"), "private_gtt": c.get("private_gtt"), "gtt": c.get("gtt"),
+    return [{"pid": c["pid"], "pids": c.get("pids", [c["pid"]]), "comm": c.get("comm"), "client_id": c.get("client_id"),
+             "private_gtt": c.get("private_gtt"), "gtt": c.get("gtt"),
              "vram": c.get("vram")} for c in sorted(clients, key=key, reverse=True)[:n] if key(c)]
 
 
@@ -190,7 +273,7 @@ def ownership() -> dict:
     mem = telemetry.memory()
     g = sysfs.primary_gpu()
     gm = sysfs.memory(g) if g else {}
-    budget = kv(read(g.sysdir / "orbis_gtt_budget")) if g else {}
+    budget = gtt_budget_status(read(g.sysdir / "orbis_gtt_budget")) if g else {}
     clients = gpu_clients()
     mi = telemetry.meminfo_full()
     total_ram = mi.get("MemTotal") or 0
@@ -209,14 +292,17 @@ def ownership() -> dict:
         "linux": {"available": avail, "in_use_excluding_gtt": max(0, total_ram - avail - gtt_used),
                   "psi_memory": mem.get("psi_memory")},
         "clients": clients,
-        "client_totals": client_totals(clients),
+        "client_totals": (ct := client_totals(clients)),
+        "accounting_check": accounting_check(ct, {"vram_used": gm.get("mem_info_vram_used"), "gtt_used": gtt_used if g else None}),
         "top_gtt_owners": top_owners(clients),
         "reclaim": reclaim_status(g),
         "compressed": compressed_status(),
         "dmem": dmem_regions(),
         "boot_contract": mem.get("boot_contract"),
         "note": ("GTT pages are counted once (in gpu.gtt_used); they are ordinary RAM pages mapped for the GPU. "
-                 "Vulkan heaps and the GTT budget are limits over the same pool, never added to it."),
+                 "Vulkan heaps and the GTT budget are limits over the same pool, never added to it. "
+                 "GPU accounting (clients, client_totals: buffers by DRM client) and physical RAM "
+                 "(linux.*, clients[].rss_by_pid: process memory) are different measures and are never summed."),
     }
 
 
@@ -301,7 +387,7 @@ def set_gtt_budget(nbytes: int, why: str, dry_run: bool = False) -> dict:
     f = g.sysdir / "orbis_gtt_budget" if g else None
     if not f or not f.exists():
         return {"applied": False, "why": "orbis_gtt_budget not available (kernel without ge-6.15/0008)"}
-    before = kv(read(f))
+    before = gtt_budget_status(read(f))
     limit = before.get("ttm_pages_limit") or 0
     nbytes = max(GTT_FLOOR, int(nbytes))
     nbytes -= nbytes % PAGE
@@ -310,11 +396,37 @@ def set_gtt_budget(nbytes: int, why: str, dry_run: bool = False) -> dict:
     if limit and nbytes > limit:
         # TTM's global page limit caps every GTT budget; it is a runtime parameter too
         rec["ttm"] = set_ttm_pages_limit(nbytes // PAGE, f"raise TTM limit for: {why}", dry_run)
-    if not dry_run and before.get("budget") != nbytes:
-        write_sysfs(f, str(nbytes))
-        append_jsonl(p(LOG), rec)
-    rec["applied"] = not dry_run
+    if dry_run:
+        rec["applied"] = False
+        return rec
+    # ge-0016: a write whose active trim cannot bring usage under the budget fails with EBUSY
+    # (EINTR when interrupted) while the budget itself stays applied to new allocations.
+    # Report that as applied-but-not-enforced, never as success; other errors applied nothing.
+    err = None
+    if before.get("budget") != nbytes or before.get("state") not in (None, "enforced"):
+        try:
+            write_sysfs(f, str(nbytes))
+        except OSError as e:
+            err = e
+    after = gtt_budget_status(read(f))
+    # a kernel always echoes "budget=..."; without it (no readback) trust the write's own result
+    rec["applied"] = after.get("budget") == nbytes if "budget" in after else err is None
+    rec["usage_after"] = after.get("usage")
+    rec["state"] = after.get("state") or ("enforced" if (after.get("usage") or 0) <= nbytes else "over_budget")
+    rec["enforced"] = rec["state"] == "enforced"
+    if after.get("last_trim"):
+        rec["trim"] = after["last_trim"]
+    if err is not None:
+        rec["error"] = {"errno": err.errno, "name": errno.errorcode.get(err.errno or 0, str(err.errno)), "message": err.strerror}
+    append_jsonl(p(LOG), rec)
     return rec
+
+
+def budget_exit_code(rec: dict) -> int:
+    """orbis-mem set-budget: 0 enforced, 1 budget not applied, 3 applied but usage still above it."""
+    if not rec.get("applied"):
+        return 1
+    return 0 if rec.get("enforced", True) else 3
 
 
 def set_ttm_pages_limit(pages: int, why: str, dry_run: bool = False) -> dict:
@@ -394,22 +506,54 @@ class Policy:
         return {"decision": "hold", "why": f"moderate pressure {psi}%"}
 
 
+# --membench result vocabulary and exit codes: identical to orbis-gfx-probe (mb_name/mb_exit),
+# so the JSON, the probe's exit code and `orbis-mem bench`'s exit code always agree (GE-A08).
+MEMBENCH_EXIT = {"PASS": 0, "FAIL": 1, "NOT_RUN": 2, "DEVICE_LOST": 3, "TIMEOUT": 3,
+                 "UNSUPPORTED_EXTENSION": 4, "INCOMPATIBLE_MEMORY_TYPE": 4,
+                 "ALLOCATION_FAILED": 5, "SYNC_FAILED": 5}
+
+
+def bench_exit_code(out: dict) -> int:
+    return MEMBENCH_EXIT.get(out.get("result"), 1)
+
+
 def membench(size_mb: int = 128, timeout_s: float = 300.0, run=None) -> dict:
     """U27/U6 on the console: orbis-gfx-probe --membench (bandwidth per memory kind, copies and the
-    end-to-end zero-copy check). Short and bounded; the result is stored for orbis-debug collect."""
+    end-to-end zero-copy check). Short and bounded; the result is stored for orbis-debug collect.
+
+    "result" is the zero-copy verdict in the probe's vocabulary; NOT_RUN (probe or Vulkan
+    missing) stays distinct from FAIL, and a probe whose exit code contradicts its own JSON is
+    reported as FAIL with the contradiction."""
     from orbis_gfx import runner
     run = run or runner.run
     r = run([runner.probe_path(), "--membench", "--membench-mb", str(int(size_mb)), "--timeout-ms", "10000"], timeout=timeout_s)
     if r.missing:
-        return {"result": "NOT_RUN", "why": "orbis-gfx-probe not installed (orbis-graphics package)"}
-    try:
-        doc = json.loads(r.stdout)
-    except ValueError:
-        return {"result": "FAIL", "why": "probe output was not JSON", "stderr": (r.stderr or "")[-2000:], "rc": r.rc}
-    mb = doc.get("membench") or {"error": (doc.get("vulkan") or {}).get("error", "no membench section")}
-    out = {"schema": "orbis-membench/1", "time": now_iso(), "membench": mb, "probe_exit": doc.get("exit_code")}
-    zc = (mb.get("zero_copy_host_memory") or {}).get("result")
-    out["zero_copy"] = zc or "NOT_RUN"
+        out = {"schema": "orbis-membench/2", "time": now_iso(), "result": "NOT_RUN", "zero_copy": "NOT_RUN",
+               "why": "orbis-gfx-probe not installed (orbis-graphics package)"}
+    else:
+        try:
+            doc = json.loads(r.stdout)
+        except ValueError:
+            doc = None
+        if not isinstance(doc, dict):
+            out = {"schema": "orbis-membench/2", "time": now_iso(), "result": "FAIL", "zero_copy": "NOT_RUN",
+                   "why": "probe output was not JSON" + (" (timed out)" if getattr(r, "timed_out", False) else ""),
+                   "stderr": (r.stderr or "")[-2000:], "rc": r.rc}
+        else:
+            mb = doc.get("membench")
+            out = {"schema": "orbis-membench/2", "time": now_iso(), "probe_exit": doc.get("exit_code"), "rc": r.rc}
+            if not isinstance(mb, dict):
+                out.update(result="NOT_RUN", zero_copy="NOT_RUN", membench=None,
+                           why=(doc.get("vulkan") or {}).get("error") or "no membench section (no Vulkan device?)")
+            else:
+                zc = (mb.get("zero_copy_host_memory") or {}).get("result")
+                res = mb.get("result") or zc or ("NOT_RUN" if mb.get("error") else "FAIL")
+                out.update(membench=mb, zero_copy=zc or "NOT_RUN", result=res if res in MEMBENCH_EXIT else "FAIL")
+                want = MEMBENCH_EXIT.get(res)
+                got = doc.get("exit_code")
+                if want is not None and isinstance(got, int) and got != want:
+                    out["result"] = "FAIL"
+                    out["why"] = f"probe exit code {got} disagrees with its result {res} (expected {want})"
     try:
         atomic_write(p("var/lib/orbis-graphics/membench.json"), json.dumps(out, indent=1) + "\n")
     except OSError:

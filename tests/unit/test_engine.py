@@ -1,6 +1,7 @@
 """orbis_engine (Graphics Engine 2.0 userspace) on fixture trees: telemetry, memory policy,
 controls, hardware API, Black Box, orbis-debug, video, AI tuning, kdump, register decode, CLI."""
 import io
+import errno
 import json
 import os
 import struct
@@ -265,6 +266,96 @@ class MemoryTest(EngineBase):
         self.assertTrue((self.root / "var/lib/orbis-graphics/membench.json").exists())
         miss = memory.membench(16, run=lambda argv, timeout: Run(argv, None, "", "", False, 0, missing=True))
         self.assertEqual(miss["result"], "NOT_RUN")
+
+    def test_membench_result_exit_code_agree(self):
+        """GE-A08: JSON result, probe exit code and orbis-mem bench exit code agree; NOT_RUN distinct."""
+        self.tree()
+        from orbis_gfx.runner import Run
+
+        def probe(result, code):
+            doc = {"membench": {"result": result, "zero_copy_host_memory": {"result": result}}, "exit_code": code}
+            return lambda argv, timeout: Run(argv, code, json.dumps(doc), "", False, 1.0)
+        for res, code in (("PASS", 0), ("FAIL", 1), ("UNSUPPORTED_EXTENSION", 4), ("INCOMPATIBLE_MEMORY_TYPE", 4),
+                          ("ALLOCATION_FAILED", 5), ("SYNC_FAILED", 5), ("DEVICE_LOST", 3), ("TIMEOUT", 3)):
+            got = memory.membench(16, run=probe(res, code))
+            self.assertEqual((got["result"], memory.bench_exit_code(got)), (res, code))
+        # a probe that says PASS but exits 1 is not believed
+        bad = memory.membench(16, run=probe("PASS", 1))
+        self.assertEqual(bad["result"], "FAIL")
+        self.assertIn("disagrees", bad["why"])
+        # no Vulkan device: NOT_RUN (2), never FAIL
+        nodev = memory.membench(16, run=lambda a, timeout: Run(a, 2, json.dumps({"vulkan": {"error": "VK_ERROR_INCOMPATIBLE_DRIVER"}, "exit_code": 2}), "", False, 1.0))
+        self.assertEqual((nodev["result"], memory.bench_exit_code(nodev)), ("NOT_RUN", 2))
+        garbage = memory.membench(16, run=lambda a, timeout: Run(a, 139, "", "segfault", False, 1.0))
+        self.assertEqual((garbage["result"], memory.bench_exit_code(garbage)), ("FAIL", 1))
+
+    def test_budget_write_reports_incomplete_trim(self):
+        """GE-A02: a budget the kernel could not enforce is applied-but-not-enforced, never success."""
+        self.tree()
+        f = self.gpu_dir() / "orbis_gtt_budget"
+        state = ("budget=1073741824 requested=1073741824 usage=1610612736 state=incomplete ttm_pages_limit=4294967296 "
+                 "min=268435456 vram_carveout=1073741824\nlast_trim requested=1073741824 usage_before=2147483648 "
+                 "usage_after=1610612736 evicted=12 failed=3 skipped=1 first_failure=-16 error=0 limit_hit=0 enforced=0\n")
+        f.write_text("budget=2147483648 usage=1610612736 ttm_pages_limit=4294967296 min=268435456\n")
+        orig = memory.write_sysfs
+
+        def busy(path, value):
+            Path(path).write_text(state)
+            raise OSError(errno.EBUSY, "Device or resource busy")
+        memory.write_sysfs = busy
+        try:
+            rec = memory.set_gtt_budget(1 * GiB, "test")
+        finally:
+            memory.write_sysfs = orig
+        self.assertTrue(rec["applied"])
+        self.assertFalse(rec["enforced"])
+        self.assertEqual(rec["state"], "incomplete")
+        self.assertEqual(rec["error"]["name"], "EBUSY")
+        self.assertEqual((rec["trim"]["evicted"], rec["trim"]["failed"], rec["trim"]["requested"]), (12, 3, 1 * GiB))
+        # parsing keeps the budget line's 'requested' apart from the trim's
+        st = memory.gtt_budget_status(state)
+        self.assertEqual((st["requested"], st["usage"], st["last_trim"]["usage_before"]), (1 * GiB, int(1.5 * GiB), 2 * GiB))
+        # the CLI turns it into exit code 3
+        self.assertEqual(memory.budget_exit_code(rec), 3)
+
+    def test_accounting_unique_clients_and_device_check(self):
+        """GE-A07: a DRM client inherited by a child process is one client with two PIDs; sums are
+        checked against the device counters; process RSS stays apart from GPU accounting."""
+        self.tree()
+        info = ("drm-driver: amdgpu\ndrm-pdev: 0000:00:01.0\ndrm-client-id: 40\ndrm-total-gtt: 524288 KiB\n"
+                "drm-shared-gtt: 0\ndrm-total-vram: 131072 KiB\ndrm-shared-vram: 0\n")
+        for pid, comm in ((7001, "launcher"), (7002, "game.exe")):
+            d = self.root / f"proc/{pid}"
+            (d / "fdinfo").mkdir(parents=True)
+            (d / "comm").write_text(comm + "\n")
+            (d / "status").write_text(f"VmRSS: {pid - 7000} kB\n")
+            (d / "fdinfo/9").write_text(info)
+        cl = [c for c in memory.gpu_clients() if c.get("client_id") == "40"]
+        self.assertEqual(len(cl), 1)
+        self.assertEqual((cl[0]["pids"], cl[0]["comms"]), ([7001, 7002], ["game.exe", "launcher"]))
+        self.assertEqual(cl[0]["rss_by_pid"], {"7001": 1024, "7002": 2048})
+        tot = memory.client_totals(cl)
+        self.assertEqual(tot["gtt"]["private_sum"], 512 * MiB)    # once, not twice
+        chk = memory.accounting_check(tot, {"vram_used": 200 * MiB, "gtt_used": 600 * MiB})
+        self.assertTrue(chk["consistent"])
+        self.assertEqual(chk["gtt"]["unattributed_min"], 88 * MiB)
+        bad = memory.accounting_check(tot, {"vram_used": 64 * MiB, "gtt_used": 600 * MiB})
+        self.assertFalse(bad["consistent"])
+        self.assertIn("device reports", bad["vram"]["violation"])
+        self.assertFalse(memory.accounting_check(tot, {"vram_used": None, "gtt_used": 1})["vram"]["checked"])
+
+    def test_gtt_region_unavailable_is_explicit(self):
+        """GE-A09: a missing gtt region is reported with the kernel's reason, never silently."""
+        self.tree()
+        (self.root / "sys/fs/cgroup").mkdir(parents=True, exist_ok=True)
+        (self.root / "sys/fs/cgroup/dmem.capacity").write_text("drm/0000:00:01.0/vram 1073741824\n")
+        (self.gpu_dir() / "orbis_gtt_cgroup").write_text("unavailable reason=register_failed error=-12\n")
+        d = memory.dmem_regions()
+        self.assertIs(d["gtt_limits"], False)
+        self.assertEqual(d["gtt_status"], {"state": "unavailable", "reason": "register_failed", "error": -12})
+        self.assertEqual(d["gtt_unavailable_reason"], "register_failed")
+        (self.gpu_dir() / "orbis_gtt_cgroup").unlink()
+        self.assertIn("ge-0016", memory.dmem_regions()["gtt_unavailable_reason"])
 
     def test_no_interface_no_decision(self):
         self.tree(ge=False)

@@ -258,18 +258,59 @@ pub fn dmem_region() -> Option<String> {
 
 /// dmem region of the GPU for one memory kind: "vram" (amdgpu) or "gtt" (GE kernel ge-0015).
 pub fn dmem_region_for(kind: &str) -> Option<String> {
-    let caps = fsx::read_raw(&p("/sys/fs/cgroup/dmem.capacity"))?;
-    let suffix = format!("/{kind}");
-    caps.lines().find_map(|l| {
-        let name = l.split_whitespace().next()?;
-        (name.starts_with("drm/") && name.ends_with(&suffix)).then(|| name.to_string())
-    })
+    orbis_core::admit::region_for(kind)
+}
+
+/// Make dmem.max/dmem.low exist on `cgroup`: enable the dmem controller in cgroup.subtree_control
+/// of every ancestor, root first (systemd does not manage dmem, so nothing else does it).
+/// Returns the ancestors changed. Fails on the first ancestor that refuses (for example a
+/// cgroup that holds processes itself: the no-internal-process rule).
+pub fn enable_dmem_path(cgroup: &str) -> Result<Vec<String>, String> {
+    let parts: Vec<&str> = cgroup.trim_matches('/').split('/').filter(|s| !s.is_empty()).collect();
+    if parts.is_empty() {
+        return Err("refusing the root cgroup".into());
+    }
+    let mut changed = vec![];
+    let mut path = String::new();
+    for part in &parts[..parts.len() - 1] {
+        let anc = if path.is_empty() { "/".to_string() } else { path.clone() };
+        enable_dmem_in(&anc, &mut changed)?;
+        path.push('/');
+        path.push_str(part);
+    }
+    let anc = if path.is_empty() { "/".to_string() } else { path.clone() };
+    enable_dmem_in(&anc, &mut changed)?;
+    Ok(changed)
+}
+
+fn enable_dmem_in(anc: &str, changed: &mut Vec<String>) -> Result<(), String> {
+    let dir = p(&format!("/sys/fs/cgroup/{}", anc.trim_matches('/')));
+    let ctl = fsx::read_raw(&dir.join("cgroup.controllers")).unwrap_or_default();
+    if !ctl.split_whitespace().any(|c| c == "dmem") {
+        return Err(format!("{anc}: dmem controller not available here (cgroup.controllers)"));
+    }
+    let sub = fsx::read_raw(&dir.join("cgroup.subtree_control")).unwrap_or_default();
+    if sub.split_whitespace().any(|c| c == "dmem") {
+        return Ok(());
+    }
+    fsx::write_value(&dir.join("cgroup.subtree_control"), "+dmem").map_err(|e| format!("{anc}: enabling dmem: {e}"))?;
+    changed.push(anc.to_string());
+    Ok(())
+}
+
+/// PIDs in one cgroup (cgroup.procs)
+pub fn cgroup_procs(cgroup: &str) -> Vec<u32> {
+    fsx::read_raw(&p(&format!("/sys/fs/cgroup/{}/cgroup.procs", cgroup.trim_matches('/'))))
+        .map(|t| t.split_whitespace().filter_map(|x| x.parse().ok()).collect())
+        .unwrap_or_default()
 }
 
 pub fn protect_vram(j: &mut Journal, cgroup: &str, bytes: u64) -> Vec<Value> {
     let Some(region) = dmem_region() else {
         return vec![act("dmem_low", "UNSUPPORTED", "no dmem VRAM region (kernel without CONFIG_CGROUP_DMEM)")];
     };
+    // dmem.low must exist on every level written below; a refusal shows up per level there
+    let _ = enable_dmem_path(cgroup);
     let mut out = vec![];
     let mut path = String::new();
     for part in cgroup.trim_matches('/').split('/').filter(|s| !s.is_empty()) {
@@ -295,31 +336,33 @@ pub fn protect_vram(j: &mut Journal, cgroup: &str, bytes: u64) -> Vec<Value> {
     out
 }
 
-/// dmem.max for the GPU's VRAM region on one cgroup (the game's own scope; limits are not
-/// propagated to ancestors). Journalled so the session end restores "max".
-pub fn limit_vram(j: &mut Journal, cgroup: &str, bytes: u64) -> Value {
-    limit_dmem(j, cgroup, "vram", bytes)
-}
-
 /// dmem.max for one region kind ("vram" or "gtt") on the game's own cgroup. VRAM and GTT limits
 /// are separate: a VRAM ceiling sends buffers to GTT, a GTT ceiling makes TTM evict that
 /// game's own GTT buffers (and, with ge-0014, lets the shrinker reclaim them).
 pub fn limit_dmem(j: &mut Journal, cgroup: &str, kind: &str, bytes: u64) -> Value {
     let knob = format!("dmem_max_{kind}");
     let Some(region) = dmem_region_for(kind) else {
-        let why = if kind == "gtt" { "no dmem GTT region (GE kernel ge-0015 needed)" } else { "no dmem VRAM region (kernel without CONFIG_CGROUP_DMEM)" };
+        let why = if kind == "gtt" { orbis_core::admit::gtt_region_reason() } else { "no dmem VRAM region (kernel without CONFIG_CGROUP_DMEM)".into() };
         return act(&knob, "UNSUPPORTED", why);
     };
     let f = p(&format!("/sys/fs/cgroup/{}/dmem.max", cgroup.trim_matches('/')));
     if !f.exists() {
-        return act(&knob, "UNSUPPORTED", format!("{cgroup}: dmem controller not enabled here"));
+        if let Err(e) = enable_dmem_path(cgroup) {
+            return act(&knob, "UNSUPPORTED", e);
+        }
+        if !f.exists() {
+            return act(&knob, "UNSUPPORTED", format!("{cgroup}: dmem controller not enabled here"));
+        }
     }
     let cur = fsx::read_raw(&f).unwrap_or_default();
     let cur_v = cur.lines().find(|l| l.starts_with(&region)).and_then(|l| l.split_whitespace().nth(1)).unwrap_or("max").to_string();
     // one dmem.max file holds a line per region: journal each region separately
     let _ = j.remember(&format!("{}#{kind}", f.display()), &format!("{region} {cur_v}"));
     match fsx::write_value(&f, &format!("{region} {bytes}")) {
-        Ok(()) => act(&knob, "APPLIED", format!("{cgroup} {region} {bytes}")),
+        Ok(()) => match orbis_core::admit::dmem_max_of(cgroup, &region) {
+            Some(v) if v == bytes.to_string() => act(&knob, "APPLIED", format!("{cgroup} {region} {bytes}")),
+            other => act(&knob, "FAILED", format!("{cgroup}: wrote {bytes}, reads back {}", other.unwrap_or_else(|| "nothing".into()))),
+        },
         Err(e) => act(&knob, "FAILED", format!("{cgroup}: {e}")),
     }
 }
