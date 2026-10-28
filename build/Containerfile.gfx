@@ -2,6 +2,12 @@
 # plus what Mesa's RustiCL/VA-API, the 32-bit Mesa and the probe need.
 ARG BASE=orbis-build:0.2.0
 FROM ${BASE}
+# ORBIS_OVER_NIGHT_MULTILIB_FIX
+RUN if ! pacman-conf --repo-list | grep -Fxq multilib; then \
+      printf '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >> /etc/pacman.conf; \
+    fi \
+ && pacman -Syyuu --noconfirm \
+ && pacman -Si lib32-libdrm lib32-llvm lib32-systemd lib32-spirv-tools >/dev/null
 RUN pacman -S --noconfirm --needed rust rust-bindgen clang libclc spirv-llvm-translator spirv-tools \
       python-ply libva libxshmfence libglvnd wayland libdrm xcb-util-keysyms libxrandr lm_sensors \
       lib32-llvm lib32-libdrm lib32-libxshmfence lib32-libelf lib32-libglvnd lib32-wayland lib32-zstd \
