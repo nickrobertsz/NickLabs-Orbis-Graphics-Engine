@@ -17,6 +17,12 @@ from orbis_gfx.results import Check, Report  # noqa: E402
 
 class Base(unittest.TestCase):
     def setUp(self):
+        self._display_env = {
+            key: os.environ.get(key)
+            for key in ("DISPLAY", "WAYLAND_DISPLAY")
+        }
+        for key in self._display_env:
+            os.environ.pop(key, None)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         os.environ["ORBIS_GFX_ROOT"] = str(self.root)
@@ -24,7 +30,11 @@ class Base(unittest.TestCase):
     def tearDown(self):
         os.environ.pop("ORBIS_GFX_ROOT", None)
         os.environ.pop("ORBIS_GFX_KMSG_FILE", None)
-        os.environ.pop("DISPLAY", None)
+        for key, value in self._display_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         self.tmp.cleanup()
 
     def tree(self, **kw):

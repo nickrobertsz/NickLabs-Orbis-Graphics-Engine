@@ -247,7 +247,18 @@ mod tests {
         std::fs::create_dir_all(root.join("run/orbis/games")).unwrap();
         std::fs::write(root.join("run/orbis/games/70.json"), r#"{"title":"Witcher 3","profile":"/etc/orbis/games.d/w3.json"}"#).unwrap();
         std::env::set_var("ORBIS_ROOT", &root);
-        let ps = vec![pr(70, 1, "orbis-run", &["orbis-run"]), pr(71, 70, "wine64-preload", &["witcher3.exe"]), pr(72, 71, "bash", &["bash"])];
+        let mut ps = vec![pr(70, 1, "orbis-run", &["orbis-run"]), pr(71, 70, "wine64-preload", &["witcher3.exe"]), pr(72, 71, "bash", &["bash"])];
+        // Match the synthetic processes to the marker's real owner.
+        // Preserve the production cross-user ownership protection.
+        use std::os::unix::fs::MetadataExt;
+        let marker_uid = std::fs::metadata(
+            root.join("run/orbis/games/70.json")
+        ).unwrap().uid();
+
+        for proc_ in &mut ps {
+            proc_.uid = marker_uid;
+        }
+
         let s = detect(&ps, &[], 1);
         std::env::remove_var("ORBIS_ROOT");
         let w = &s["orbis-run:70"];
