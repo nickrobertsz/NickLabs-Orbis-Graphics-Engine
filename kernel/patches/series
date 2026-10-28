@@ -20,3 +20,4 @@ ge-6.15/0015-drm-amdgpu-PS4-GTT-as-a-dmem-cgroup-region-Orbis-ge-.patch
 ge-6.15/0016-drm-amdgpu-PS4-GTT-reclaim-corrections-Orbis-ge-0016.patch
 ge-6.15/0017-drm-amdgpu-PS4-GTT-runtime-budget-as-its-own-value-t.patch
 toolchain/0001-libbpf-c23-const.patch
+toolchain/0002-liverpool-smu-6.15-register-api.patch

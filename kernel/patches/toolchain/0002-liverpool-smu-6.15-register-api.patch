@@ -1,0 +1,21 @@
+diff --git a/drivers/gpu/drm/amd/amdgpu/liverpool_smu.c b/drivers/gpu/drm/amd/amdgpu/liverpool_smu.c
+--- a/drivers/gpu/drm/amd/amdgpu/liverpool_smu.c
++++ b/drivers/gpu/drm/amd/amdgpu/liverpool_smu.c
+@@ -41,7 +41,7 @@
+ 
+ int liverpool_smu_read(struct amdgpu_device *adev, u32 reg, u32 *val)
+ {
+-	if (!adev->reg.smc.rreg)
++	if (!adev->smc_rreg)
+ 		return -EIO;
+ 
+ 	*val = RREG32_SMC(reg);
+@@ -50,7 +50,7 @@
+ 
+ int liverpool_smu_write(struct amdgpu_device *adev, u32 reg, u32 val)
+ {
+-	if (!adev->reg.smc.wreg)
++	if (!adev->smc_wreg)
+ 		return -EIO;
+ 
+ 	WREG32_SMC(reg, val);
