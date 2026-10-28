@@ -1,0 +1,4 @@
+# Orbis GE loader-only toolchain extension.
+# Preserves the frozen Orbis Core v0.2.0 build image.
+FROM localhost/orbis-build:0.2.0
+RUN pacman -S --noconfirm --needed yasm

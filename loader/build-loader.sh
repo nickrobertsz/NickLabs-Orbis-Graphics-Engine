@@ -25,7 +25,7 @@ patch="$(ls "$R"/loader/0001-*.patch)"
 if [ "$inside" = 0 ]; then
   SUDO=""; [ "$(id -u)" = 0 ] || SUDO="sudo"
   mkdir -p "$R/out"
-  exec $SUDO "$engine" run --rm -v "$R":/gfx:z -w /gfx orbis-build:0.2.0 \
+  exec $SUDO "$engine" run --rm -v "$R":/gfx:z -w /gfx orbis-loader-build:0.2.0 \
     bash -c "loader/build-loader.sh --in-container --out /gfx/out/loader-ge && chown -R $(id -u):$(id -g) /gfx/out/loader-ge /gfx/out/src"
 fi
 src="$R/out/src/ps4-linux-loader"
