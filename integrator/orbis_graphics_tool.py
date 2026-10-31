@@ -20,6 +20,8 @@ Guarantees:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import errno
 import hashlib
 import json
 import os
@@ -142,10 +144,57 @@ def fat_root_names(img: Path, offset: int) -> set[str]:
         return {e["name"] for e in fat32._parse_dir(d) if not e["attr"] & fat32.ATTR_VOLUME}
 
 
-def debugfs_cat(img: Path, offset: int, path: str) -> str | None:
+@contextlib.contextmanager
+def readonly_ext4_partition(img: Path, offset: int, length: int):
+    """Expose an exact partition to e2fsprogs without privilege or writing the image.
+
+    debugfs and e2fsck cannot interpret `disk.img?offset=N`.  The privileged
+    integration container instead uses bounded loop devices (image-op.sh).
+    Host-side inspection uses a temporary *sparse* ext4 partition file; it
+    copies allocated data extents, not the unused space of a whole-disk image.
+    """
+    size = img.stat().st_size
+    if offset < 512 or length <= 0 or offset % 512 or length % 512 or offset + length > size:
+        raise Refused(f"invalid ext4 partition bounds: offset={offset} length={length} image={size}")
+    with tempfile.TemporaryDirectory(prefix="orbis-ext4-readonly-") as td:
+        part = Path(td) / "root.ext4"
+        with open(img, "rb", buffering=0) as source, open(part, "wb", buffering=0) as target:
+            src_fd, dst_fd = source.fileno(), target.fileno()
+            os.ftruncate(dst_fd, length)
+            position, end = offset, offset + length
+            sparse_supported = True
+            while position < end:
+                if sparse_supported:
+                    try:
+                        data_pos = os.lseek(src_fd, position, os.SEEK_DATA)
+                        if data_pos >= end:
+                            break
+                        hole = min(end, os.lseek(src_fd, data_pos, os.SEEK_HOLE))
+                    except OSError as exc:
+                        if exc.errno == errno.ENXIO:
+                            break  # remaining image is a hole
+                        if exc.errno not in (errno.EINVAL, errno.ENOTSUP):
+                            raise
+                        sparse_supported = False
+                        data_pos, hole = position, end
+                else:
+                    data_pos, hole = position, end
+                position = data_pos
+                while position < hole:
+                    chunk = os.pread(src_fd, min(4 << 20, hole - position), position)
+                    if not chunk:
+                        raise Refused("short read while exposing ext4 partition")
+                    if chunk.strip(b"\0"):
+                        os.pwrite(dst_fd, chunk, position - offset)
+                    position += len(chunk)
+            target.flush()
+        yield part
+
+
+def debugfs_cat(part: Path, path: str) -> str | None:
     if not shutil.which("debugfs"):
-        return None
-    r = subprocess.run(["debugfs", "-R", f"cat {path}", f"{img}?offset={offset}"], capture_output=True, text=True)
+        raise Refused("debugfs is required for verified Orbis rootfs inspection (install e2fsprogs)")
+    r = subprocess.run(["debugfs", "-R", f"cat {path}", str(part)], capture_output=True, text=True)
     return r.stdout if r.returncode == 0 and r.stdout else None
 
 
@@ -170,13 +219,14 @@ def inspect_image(img: Path) -> dict:
     info["ge_kernel_staged"] = "bzImage.orbis-gfx-prev" in files
     info["ge_loader_payloads"] = "orbis-ge-loader" in fat_root_names(img, boff)
     if "root" in parts:
-        roff = parts["root"][0]
-        pk = debugfs_cat(img, roff, "/usr/share/orbis/packages.txt")
-        info["root_packages"] = dict(l.split() for l in pk.splitlines() if len(l.split()) == 2) if pk else None
-        rec = debugfs_cat(img, roff, "/var/lib/orbis-graphics/integration.json")
-        info["graphics_receipt"] = json.loads(rec) if rec else None
-        mr = debugfs_cat(img, roff, "/orbis-gfxdiag/MINIROOT")
-        info["miniroot"] = mr.strip() if mr else None
+        roff, rlen = parts["root"]
+        with readonly_ext4_partition(img, roff, rlen) as ext4:
+            pk = debugfs_cat(ext4, "/usr/share/orbis/packages.txt")
+            info["root_packages"] = dict(l.split() for l in pk.splitlines() if len(l.split()) == 2) if pk else None
+            rec = debugfs_cat(ext4, "/var/lib/orbis-graphics/integration.json")
+            info["graphics_receipt"] = json.loads(rec) if rec else None
+            mr = debugfs_cat(ext4, "/orbis-gfxdiag/MINIROOT")
+            info["miniroot"] = mr.strip() if mr else None
     return info
 
 
@@ -235,8 +285,10 @@ def fsck_host(img: Path) -> dict:
     parts = mbr_partitions(img)
     res = {}
     if shutil.which("e2fsck") and "root" in parts:
-        r = subprocess.run(["e2fsck", "-fn", f"{img}?offset={parts['root'][0]}"], capture_output=True, text=True)
-        res["ext4"] = "clean" if r.returncode == 0 else f"problems (rc {r.returncode})"
+        roff, rlen = parts["root"]
+        with readonly_ext4_partition(img, roff, rlen) as ext4:
+            r = subprocess.run(["e2fsck", "-fn", str(ext4)], capture_output=True, text=True)
+            res["ext4"] = "clean" if r.returncode == 0 else f"problems (rc {r.returncode}): {(r.stderr or r.stdout)[-300:]}"
     ff = shutil.which("fsck.fat")
     if ff:
         boff, blen = parts["boot"]

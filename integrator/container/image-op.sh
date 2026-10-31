@@ -57,11 +57,17 @@ case "$op" in
 esac
 cp "$target/var/lib/orbis-graphics/integration.json" "$(dirname "$image")/$(basename "$image").in-image-receipt.json" 2>/dev/null || true
 sync
+# The loop mappings must remain attached while checking the filesystems.
+# e2fsck/debugfs do not understand a filename suffixed with "?offset=N".
+# Unmount both filesystems first and check the exact bounded partition devices.
+umount "$target/boot/ps4"
+for m in dev/pts dev proc sys run; do
+  mountpoint -q "$target/$m" && umount "$target/$m" || true
+done
+umount "$target"
+echo "== filesystem checks"
+e2fsck -fn "$lroot" || { echo "e2fsck reports problems" >&2; exit 4; }
+fsck.fat -n "$lboot" || { echo "fsck.fat reports problems" >&2; exit 4; }
 cleanup
 trap - EXIT
-echo "== filesystem checks"
-e2fsck -fn "$image?offset=$root_off" || { echo "e2fsck reports problems" >&2; exit 4; }
-dd if="$image" of=/tmp/bootpart.img bs=1M iflag=skip_bytes,count_bytes skip="$boot_off" count="$boot_len" status=none
-fsck.fat -n /tmp/bootpart.img || { echo "fsck.fat reports problems" >&2; exit 4; }
-rm -f /tmp/bootpart.img
 echo "== $op complete"

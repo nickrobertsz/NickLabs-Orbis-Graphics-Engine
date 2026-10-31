@@ -53,6 +53,27 @@ prepare() {
 }
 
 build() {
+  # ORBIS_DAYTIME_ANDROID_LIBBACKTRACE
+  # Linux target: skip Mesa's Android-only libbacktrace option.
+  python3 - "$srcdir" <<'ORBIS_ANDROID_MESON'
+from pathlib import Path
+import re
+import sys
+sources = list(Path(sys.argv[1]).glob('mesa-*/meson.build'))
+if len(sources) != 1:
+    raise SystemExit(f'Expected exactly one extracted Mesa meson.build: {sources}')
+p = sources[0]
+s = p.read_text()
+pattern = re.compile(
+    r"(?ms)^with_libbacktrace = get_option\('android-libbacktrace'\)"
+    r".*?^[ \t]*\.(?:allowed|enabled)\(\)[ \t]*$"
+)
+matches = list(pattern.finditer(s))
+if len(matches) != 1 or len(matches[0].group()) > 1200:
+    raise SystemExit('Android libbacktrace Meson check changed; stop this package for review')
+p.write_text(pattern.sub('with_libbacktrace = false', s, count=1))
+print('Disabled Android-only libbacktrace configuration on Linux')
+ORBIS_ANDROID_MESON
   # ORBIS_LINUX_MEDIAFOUNDATION_MESON_WORKAROUND
   # Windows-only frontend; Mesa 26.2.5 Meson require() can reject Linux here.
   python3 - "$srcdir" <<'ORBIS_MESA_MF'
@@ -81,7 +102,7 @@ ORBIS_MESA_MF
   export CFLAGS="${CFLAGS/-march=x86-64-v[234]/-march=x86-64} -mtune=btver2"
   export CXXFLAGS="${CXXFLAGS/-march=x86-64-v[234]/-march=x86-64} -mtune=btver2"
   export RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=x86-64"
-  arch-meson "mesa-${_mesaver}" build \
+  arch-meson --auto-features=auto "mesa-${_mesaver}" build \
     --wrap-mode=nodownload \
     -D b_ndebug=true \
     -D platforms=x11,wayland \

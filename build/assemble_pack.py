@@ -26,6 +26,7 @@ from pathlib import Path
 R = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(R / "build"))
 import make_overlay_cpio  # noqa: E402
+import source_snapshot  # noqa: E402
 
 RELEASE = json.loads((R / "manifest/release.json").read_text())
 NAME = RELEASE["name"]
@@ -53,20 +54,15 @@ ORBIS_BUILT = {"mesa-orbis-ps4", "opencl-mesa-orbis-ps4", "lib32-mesa-orbis-ps4"
 
 
 def git_source_archive(dest: Path, commit: str | None) -> Path:
+    """Archive the *built* source files, including uncommitted repairs.
+
+    `git archive HEAD` silently excludes an installed hotfix and can produce a
+    release containing source which cannot reproduce the shipped binaries.
+    """
     out = dest / f"{RELEASE['source_prefix']}-v{VERSION}.tar.gz"
-    rev = commit if commit and commit != "worktree" else "HEAD"
-    if (R / ".git").exists():
-        r = subprocess.run(["git", "-C", str(R), "archive", "--format=tar.gz", f"--prefix=nicklabs-orbis-graphics-{VERSION}/",
-                            "-o", str(out), rev], capture_output=True, text=True)
-        if r.returncode != 0:
-            raise SystemExit(f"git archive failed: {r.stderr}")
-        return out
-    # unpacked source archive (no .git): archive the tree itself, deterministically
-    r = subprocess.run(["tar", "--sort=name", "--numeric-owner", "--owner=0", "--group=0", "--mtime=@0",
-                        "--exclude=./out", "--exclude=__pycache__", "--transform", f"s,^\\.,nicklabs-orbis-graphics-{VERSION},",
-                        "-czf", str(out), "-C", str(R), "."], capture_output=True, text=True, env={"GZIP": "-n", "PATH": "/usr/bin:/bin"})
-    if r.returncode != 0:
-        raise SystemExit(f"tar of the source tree failed: {r.stderr}")
+    paths = source_snapshot.sources()
+    provenance = source_snapshot.manifest(paths)
+    source_snapshot.archive(out, paths, provenance)
     return out
 
 
@@ -116,6 +112,7 @@ def assemble(staging: Path, outdir: Path, exp_state: str, exp_reason: str | None
         shutil.copy2(d, top / "docs" / d.name)
     (top / "source").mkdir()
     src = git_source_archive(top / "source", commit)
+    src_manifest = source_snapshot.manifest(source_snapshot.sources())
     (top / "LICENSES").mkdir()
     shutil.copy2(R / "LICENSE", top / "LICENSES/LICENSE.orbis-graphics")
     shutil.copy2(R / "mesa/stable/LICENSE.ps4-mesa", top / "LICENSES/LICENSE.ps4-mesa")
@@ -146,7 +143,9 @@ def assemble(staging: Path, outdir: Path, exp_state: str, exp_reason: str | None
         "miniroot": json.loads(mr_man.read_text()) if mr_man.exists() else None,
         "stage0_overlay": {"file": "stage0/orbis-gfx-overlay.cpio.gz", "sha256": hashlib.sha256(ov).hexdigest(),
                            "files": ["bin/orbis-gfx-stage0", "hooks/pre_newroot_mount/4-orbis-gfx-stage0"]},
-        "source_archive": {"file": f"source/{src.name}", "sha256": sha256(src)},
+        "source_archive": {"file": f"source/{src.name}", "sha256": sha256(src),
+                           "worktree_sha256": src_manifest["sha256"],
+                           "uncommitted_changes_included": True},
         "signed": (top / "keys/orbis-repo-key.asc").exists(),
         "firmware": "none: the pack contains no PS4 firmware; images keep the firmware of the Orbis initramfs they were built with",
         "integrator": {"entry": "orbis-graphics", "version": VERSION},

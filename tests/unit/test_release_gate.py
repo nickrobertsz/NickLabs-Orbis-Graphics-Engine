@@ -15,6 +15,20 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "build"))
 import fingerprint  # noqa: E402
 
+
+def release_test_copy_ignore(directory, names):
+    """Copy source inputs, never mutable makepkg build/output trees.
+
+    A global ``src`` exclusion would also discard legitimate source code.
+    Keep the exclusion scoped to the two Mesa package recipe directories.
+    """
+    ignored = set(shutil.ignore_patterns(".git", "out", "target", "__pycache__")(directory, names))
+    relative = Path(directory).relative_to(REPO)
+    if relative in (Path("mesa/stable"), Path("mesa/lib32")):
+        ignored.update(set(names).intersection({"src", "pkg"}))
+        ignored.update(name for name in names if name.startswith("mesa-") and name.endswith(".tar.xz"))
+    return ignored
+
 FAKE_TOOL = textwrap.dedent('''\
     #!/usr/bin/env python3
     # stand-in for ./orbis-graphics: inspect | integrate | stage0 | verify
@@ -48,7 +62,7 @@ class ReleaseGateTest(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         t = Path(cls.tmp.name)
         cls.w = t / "ge"
-        shutil.copytree(REPO, cls.w, ignore=shutil.ignore_patterns(".git", "out", "target", "__pycache__"))
+        shutil.copytree(REPO, cls.w, ignore=release_test_copy_ignore)
         cls.src = t / "orbis020"
         (cls.src / "kernel").mkdir(parents=True)
         (cls.src / "kernel/build-kernel.sh").write_text("#!/bin/sh\n")

@@ -10,7 +10,8 @@ url="https://www.mesa3d.org"
 license=('MIT' 'custom')
 depends=("mesa-orbis-ps4=${pkgver}-${pkgrel}" 'lib32-libdrm' 'lib32-libxshmfence' 'lib32-libelf' 'lib32-libglvnd'
          'lib32-wayland' 'lib32-zstd' 'lib32-expat' 'lib32-llvm-libs' 'lib32-libx11' 'lib32-libxext'
-         'lib32-libxfixes' 'lib32-libxxf86vm' 'lib32-libxcb' 'lib32-vulkan-icd-loader' 'lib32-lm_sensors'
+         'lib32-libxfixes' 'lib32-libxxf86vm' 'lib32-libxcb' 'lib32-libxrandr' 'lib32-libxrender'
+         'lib32-vulkan-icd-loader' 'lib32-lm_sensors'
          'lib32-systemd' 'lib32-spirv-tools')
 makedepends=('meson' 'ninja' 'python-mako' 'python-packaging' 'python-yaml' 'glslang' 'lib32-llvm'
              'xorgproto' 'wayland-protocols' 'byacc' 'flex')
@@ -44,6 +45,27 @@ CF
 }
 
 build() {
+  # ORBIS_DAYTIME_ANDROID_LIBBACKTRACE
+  # Linux target: skip Mesa's Android-only libbacktrace option.
+  python3 - "$srcdir" <<'ORBIS_ANDROID_MESON'
+from pathlib import Path
+import re
+import sys
+sources = list(Path(sys.argv[1]).glob('mesa-*/meson.build'))
+if len(sources) != 1:
+    raise SystemExit(f'Expected exactly one extracted Mesa meson.build: {sources}')
+p = sources[0]
+s = p.read_text()
+pattern = re.compile(
+    r"(?ms)^with_libbacktrace = get_option\('android-libbacktrace'\)"
+    r".*?^[ \t]*\.(?:allowed|enabled)\(\)[ \t]*$"
+)
+matches = list(pattern.finditer(s))
+if len(matches) != 1 or len(matches[0].group()) > 1200:
+    raise SystemExit('Android libbacktrace Meson check changed; stop this package for review')
+p.write_text(pattern.sub('with_libbacktrace = false', s, count=1))
+print('Disabled Android-only libbacktrace configuration on Linux')
+ORBIS_ANDROID_MESON
   # ORBIS_LINUX_MEDIAFOUNDATION_MESON_WORKAROUND
   # Windows-only frontend; Mesa 26.2.5 Meson require() can reject Linux here.
   python3 - "$srcdir" <<'ORBIS_MESA_MF'
@@ -71,7 +93,7 @@ ORBIS_MESA_MF
   export CC="gcc -m32" CXX="g++ -m32" PKG_CONFIG=i686-pc-linux-gnu-pkg-config
   export CFLAGS="${CFLAGS/-march=x86-64-v[234]/-march=x86-64} -mtune=btver2"
   export CXXFLAGS="${CXXFLAGS/-march=x86-64-v[234]/-march=x86-64} -mtune=btver2"
-  arch-meson "mesa-${_mesaver}" build --native-file "$srcdir/crossfile.ini" --libdir=/usr/lib32 \
+  arch-meson --auto-features=auto "mesa-${_mesaver}" build --native-file "$srcdir/crossfile.ini" --libdir=/usr/lib32 \
     -D b_ndebug=true -D platforms=x11,wayland -D gallium-drivers=radeonsi,llvmpipe \
     -D vulkan-drivers=amd -D vulkan-layers= -D video-codecs= -D gallium-va=disabled \
     -D gallium-rusticl=false -D llvm=enabled -D shared-llvm=enabled \

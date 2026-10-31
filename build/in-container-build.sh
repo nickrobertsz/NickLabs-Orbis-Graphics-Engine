@@ -26,7 +26,11 @@ step() { echo; echo "=== $*"; }
 # makepkg runs as the unprivileged 'builder' on a private copy of the tree, so the host checkout is
 # never chowned; packages land in /build/pkg and are copied into the staging repo.
 rm -rf /build && mkdir -p /build/pkg /build/src
-tar -C "$R" --exclude=./out --exclude=./.git -cf - . | tar -C /build/src -xf -
+tar -C "$R" --exclude=./out --exclude=./.git --exclude=./rust/target \
+  --exclude=./mesa/stable/src --exclude=./mesa/stable/pkg \
+  --exclude=./mesa/lib32/src --exclude=./mesa/lib32/pkg \
+  --exclude=./mesa/experimental/src --exclude=./mesa/experimental/pkg \
+  -cf - . | tar -C /build/src -xf -
 # GE-A06: only the selected artifacts, and only when their provenance matches (orbis-ge wrote
 # out/artifact-selection.json after checking each artifact's checksum and fingerprint)
 sel="$R/out/artifact-selection.json"
@@ -48,12 +52,23 @@ fi
 chown -R builder /build
 B=/build/src
 
+declare -a MK_OUTPUTS=()
 mk() {  # mk <recipe dir relative to the tree> <log name> [deps|nodeps]
   local mode=--syncdeps; [ "${3:-deps}" = nodeps ] && mode=--nodeps
   echo "    log: $staging/logs/$2.log"
-  if ( cd "$B/$1" && sudo -u builder makepkg $mode --noconfirm --cleanbuild --force PKGDEST=/build/pkg ) \
+  # /build is a disposable container-only staging tree. Never allow output
+  # from a previously failed recipe to masquerade as a newly built package.
+  local stale
+  for stale in /build/pkg/*.pkg.tar.zst; do [ ! -e "$stale" ] || rm -- "$stale"; done
+  if ( cd "$B/$1" && sudo -u builder env PKGDEST=/build/pkg makepkg $mode --noconfirm --cleanbuild --force ) \
        > "$staging/logs/$2.log" 2>&1; then
-    cp /build/pkg/*.pkg.tar.zst "$repo/" && rm -f /build/pkg/*.pkg.tar.zst
+    MK_OUTPUTS=(/build/pkg/*.pkg.tar.zst)
+    [[ -s "${MK_OUTPUTS[0]}" ]] || { echo "Missing package output for $1" >&2; return 1; }
+    local f
+    for f in "${MK_OUTPUTS[@]}"; do
+      [[ -s "$f" ]] && pacman -Qp -- "$f" || return 1
+      cp -- "$f" "$repo/"
+    done
   else
     tail -n 25 "$staging/logs/$2.log" >&2; return 1
   fi
@@ -61,20 +76,27 @@ mk() {  # mk <recipe dir relative to the tree> <log name> [deps|nodeps]
 
 # Per-package build cache in the host's out/pkgcache: a package is rebuilt only when its recipe,
 # its declared inputs or the toolchain in this container changed (Mesa alone takes 1-3 h).
-toolstamp="snapshot=$snapshot $(pacman -Q gcc clang llvm rust meson ninja python glslang shaderc 2>/dev/null | tr '\n' ' ')"
+toolstamp="fingerprint-v2 snapshot=$snapshot container=${ORBIS_CONTAINER_ID:-unrecorded} pkgs=$(pacman -Q | sha256sum | cut -d' ' -f1)"
 fp_paths() {
-  python3 - "$@" <<'PYFP'
+  python3 - "$R" "$@" <<'PYFP'
 import hashlib, os, sys
-h = hashlib.sha256()
-for root in sys.argv[1:]:
+h = hashlib.sha256(b'orbis-mkc-v2\0')
+repo_root = os.path.realpath(sys.argv[1])
+for root in sys.argv[2:]:
     files = [root] if os.path.isfile(root) else []
     if os.path.isdir(root):
         for d, dirs, fs in os.walk(root):
-            dirs[:] = sorted(x for x in dirs if x not in (".git", "__pycache__", "target", "out", "src", "pkg"))
+            rel = os.path.relpath(d, repo_root).replace(os.sep, '/')
+            dirs[:] = sorted(x for x in dirs if x not in (".git", "__pycache__", "target", "out")
+                and not (rel in ("mesa/stable", "mesa/lib32", "mesa/experimental") and x in ("src", "pkg")))
             files += [os.path.join(d, f) for f in fs if not f.endswith((".pkg.tar.zst", ".log"))]
     if not files:
         h.update(b"missing:" + root.encode())
     for f in sorted(files):
+        # Exclude only generated Mesa downloads; retain actual Rust source.
+        relf = os.path.relpath(f, repo_root).replace(os.sep, '/')
+        if relf in ("mesa/stable/mesa-26.2.5.tar.xz", "mesa/lib32/mesa-26.2.5.tar.xz"):
+            continue
         h.update(f.encode() + b"\0")
         with open(f, "rb") as fh:
             for c in iter(lambda: fh.read(1 << 20), b""):
@@ -84,19 +106,26 @@ PYFP
 }
 mkc() {  # mkc <recipe> <log name> <deps|nodeps> <input paths...>
   local recipe="$1" log="$2" mode="$3"; shift 3
-  local fp; fp="$( { fp_paths "$R/$recipe" "$@"; echo "$toolstamp"; } | sha256sum | cut -c1-24)"
+  local fp; fp="$( { fp_paths "$R/$recipe" "$@" "$R/build/in-container-build.sh" "$R/build/Containerfile.gfx"; echo "$toolstamp"; } | sha256sum | cut -c1-24)"
   local c="$R/out/pkgcache/$log/$fp"
-  if compgen -G "$c/*.pkg.tar.zst" >/dev/null; then
-    echo "    cached: $log ($fp) - recipe, inputs and toolchain unchanged"
-    cp "$c"/*.pkg.tar.zst "$repo/"
+  if [[ -s "$c/SHA256SUMS" && -s "$c/RECEIPT" ]] &&
+      grep -Fxq "fingerprint=$fp" "$c/RECEIPT" &&
+      (cd "$c" && sha256sum -c --status SHA256SUMS); then
+    echo "    verified cache: $log ($fp)"
+    cp -- "$c"/*.pkg.tar.zst "$repo/"
     return 0
   fi
-  local before; before="$(ls "$repo")"
   mk "$recipe" "$log" "$mode" || return 1
-  rm -rf "$c.tmp" && mkdir -p "$c.tmp"
-  for f in "$repo"/*.pkg.tar.zst; do grep -qxF "$(basename "$f")" <<<"$before" || cp "$f" "$c.tmp/"; done
-  find "$R/out/pkgcache/$log" -mindepth 1 -maxdepth 1 ! -name "$fp" ! -name "$fp.tmp" -exec rm -rf {} +
-  rm -rf "$c" && mv "$c.tmp" "$c"
+  local candidate="${c}.new.$$" f
+  mkdir -p "$candidate"
+  for f in "${MK_OUTPUTS[@]}"; do cp -- "$f" "$candidate/"; done
+  (cd "$candidate" && sha256sum *.pkg.tar.zst > SHA256SUMS)
+  printf 'fingerprint=%s\nsource=%s\ntoolstamp=%s\n' "$fp" "$recipe" "$toolstamp" > "$candidate/RECEIPT"
+  if [[ -d "$c" ]]; then
+    # Corrupt/obsolete receipts are recoverable. Never wipe old package caches.
+    mv -- "$c" "${c}.previous.$(date +%s).$$"
+  fi
+  mv -- "$candidate" "$c"
 }
 
 step "libdrm requirement (Mesa 26.2.5 needs libdrm_amdgpu >= 2.4.133)"
@@ -111,8 +140,12 @@ PY
 
 step "Mesa stable 26.2.5 (mesa-orbis-ps4 + opencl-mesa-orbis-ps4), ~1-2 h"
 mkc mesa/stable mesa-stable deps "$R/mesa"
-step "32-bit Mesa (build deps preinstalled by Containerfile.gfx; mesa-orbis-ps4 is a runtime dep only)"
-mkc mesa/lib32 mesa-lib32 nodeps "$R/mesa"
+
+source "$R/build/mesa-handoff.sh"
+step "Install and verify locally built GE Mesa in build container"
+orbis_mesa_handoff "$repo/mesa-orbis-ps4-26.2.5-201-x86_64.pkg.tar.zst" 'mesa-orbis-ps4 26.2.5-201'
+step "32-bit Mesa (requires the installed matching 64-bit Mesa package)"
+mkc mesa/lib32 mesa-lib32 deps "$R/mesa"
 step "orbis-graphics tools + meta package"
 # r3.1: each cache key is exactly the repository paths its PKGBUILD reads (tests/unit check this),
 # so documentation changes rebuild orbis-graphics-docs only, and no package can be reused stale
@@ -173,7 +206,7 @@ Server = https://archive.archlinux.org/repos/$snapshot/\$repo/os/\$arch
 [multilib]
 Server = https://archive.archlinux.org/repos/$snapshot/\$repo/os/\$arch
 CONF
-repo-add -q -n "$repo/orbis-graphics-build.db.tar.zst" "$repo"/*.pkg.tar.zst
+repo-add -q -R "$repo/orbis-graphics-build.db.tar.zst" "$repo"/*.pkg.tar.zst
 if [ -n "$orbis_repo" ] && [ -f "$orbis_repo/orbis.db.tar.zst" ]; then
   # the Orbis 0.2.0 repository: its packages are already on every Orbis image, so they are resolved
   # from here and left out of the pack
@@ -203,14 +236,25 @@ sign=()
 if [ -n "$keys" ] && [ -f "$keys/orbis-repo-key.fingerprint" ]; then
   export GNUPGHOME="$keys/gnupg"
   fpr="$(cat "$keys/orbis-repo-key.fingerprint")"
+  verify_own_sig() {
+    local f="$1"
+    gpg --batch --status-fd 1 --verify "$f.sig" "$f" 2>/dev/null |
+      awk -v key="$fpr" '$1=="[GNUPG:]" && $2=="VALIDSIG" && $3==key {ok=1} END {exit !ok}'
+  }
   for f in "$repo"/*.pkg.tar.zst; do
-    [ -f "$f.sig" ] || gpg --batch --yes --pinentry-mode loopback --passphrase '' -u "$fpr" --detach-sign --no-armor "$f"
+    if [[ -s "$f.sig" ]] && verify_own_sig "$f"; then
+      continue
+    fi
+    gpg --batch --yes --pinentry-mode loopback --passphrase '' -u "$fpr" --detach-sign --no-armor "$f"
+    verify_own_sig "$f"
   done
   sign=(-s -k "$fpr")
   mkdir -p "$staging/keys"; cp "$keys/orbis-repo-key.asc" "$keys/orbis-repo-key.fingerprint" "$staging/keys/"
 fi
 rm -f "$repo"/orbis-graphics.db* "$repo"/orbis-graphics.files*
-repo-add -q -n -R "${sign[@]}" "$repo/orbis-graphics.db.tar.zst" "$repo"/*.pkg.tar.zst
+repo-add -q -R "${sign[@]}" "$repo/orbis-graphics.db.tar.zst" "$repo"/*.pkg.tar.zst
+(cd "$repo" && sha256sum -- *.pkg.tar.zst orbis-graphics.db.tar.zst > SHA256SUMS)
+(cd "$repo" && sha256sum -c --status SHA256SUMS)
 
 step "stage-0 GPU diagnostic mini-root"
 "$R/diag/miniroot/build-miniroot.sh" --snapshot "$snapshot" --repo "$repo" --out "$staging/miniroot"
